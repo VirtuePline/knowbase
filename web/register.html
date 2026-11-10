@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#f4f7fa" />
+<title>创建普通账号 · 运维知识库</title>
+<link rel="stylesheet" href="/static/accounts.css" />
+<script src="/static/accounts.js" defer></script>
+</head>
+<body data-account-page="register">
+<main class="account-layout">
+  <section class="account-story" aria-label="运维知识库">
+    <div class="account-brand"><span class="account-brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M7 7h7a4 4 0 014 4v15a7 7 0 00-7-3H7V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M25 7h-3a4 4 0 00-4 4v15a7 7 0 017-3V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M11 12h3m-3 5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><strong>运维知识库</strong><span>工厂维保 · MES 运维</span></div></div>
+    <div class="story-content"><span class="story-eyebrow">让经验持续积累</span><h1>把现场经验，<br />变成下次的答案。</h1><p>记录每一次处理，追踪每一个问题，<br />让团队的运维经验有迹可循。</p>
+      <div class="story-workflow"><div><span>01</span><strong>记录现场</strong><small>保留现象、步骤与处理结果</small></div><div><span>02</span><strong>持续追踪</strong><small>关联后续进展，回顾处理过程</small></div><div><span>03</span><strong>经验复用</strong><small>从知识库中寻找有依据的方案</small></div></div>
+    </div>
+    <span class="story-footer">FACTORY MAINTENANCE · KNOWLEDGE WORKSPACE</span>
+  </section>
+  <section class="account-form-region" aria-labelledby="account-title">
+    <div class="account-form-wrap">
+      <a class="account-back" href="/">← 返回运维工作台</a>
+      <div class="account-heading"><span class="account-section-label">团队账号</span><h2 id="account-title">创建普通账号</h2><p>为团队成员创建账号，共同记录与追踪现场问题。</p></div>
+      <div class="register-context">当前管理员 <strong id="register-actor">正在确认账号…</strong><span>新账号可使用账号或用户名登录</span></div>
+      <form id="account-form" novalidate>
+        <fieldset id="account-fields" disabled>
+          <label class="account-field"><span>账号</span><input id="account-identifier" type="text" name="account" autocomplete="off" placeholder="例如：mes_zhang" minlength="1" maxlength="32" autocapitalize="none" spellcheck="false" required /><small>1–32 位，以英文字母开头，可含字母、数字、下划线、点或短横线；按小写保存。</small></label>
+          <label class="account-field"><span>用户名</span><input id="account-username" type="text" name="username" autocomplete="off" placeholder="例如：张工、MES运维01" minlength="1" maxlength="32" pattern="[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9][\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_.\-]{0,31}" autocapitalize="none" spellcheck="false" required /><small>1–32 位中文（含扩展汉字）、字母、数字、下划线、点或短横线；首位为中文、字母或数字。全角字母和数字会自动转换。</small></label>
+          <div class="initial-password-note"><strong>初始密码为空</strong><p>创建账号后，成员首次登录时将密码留空，再设置自己的密码。</p></div>
+          <div id="account-error" class="account-error" role="alert" hidden></div>
+          <div id="account-success" class="account-success" role="status" hidden></div>
+          <button class="account-submit" id="account-submit" type="submit">创建普通账号<span aria-hidden="true">↗</span></button>
+        </fieldset>
+      </form>
+      <p class="account-note">仅创建普通账号，不设置密码。创建成功后，您仍保持管理员登录。</p>
+      <div class="account-status" id="account-status" role="status">正在连接管理端…</div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

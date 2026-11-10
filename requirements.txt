@@ -1,0 +1,25 @@
+# Web 服务
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# 文档解析
+pypdf>=4.2
+python-docx>=1.1
+openpyxl>=3.1
+lxml>=4.9
+
+# 配置文件解析
+PyYAML>=6.0
+
+# 数据库（文档登记与向量存储）
+pymongo>=4.6
+
+# 语义向量检索（本地 ONNX 嵌入模型 + FAISS 内存索引，MongoDB 仅持久化向量）
+fastembed>=0.9
+numpy>=2.0
+faiss-cpu>=1.9
+
+# 重排序（bge-reranker-base int8 ONNX 本地推理，模型文件在 data/models/bge-reranker-base/）
+onnxruntime>=1.19
+tokenizers>=0.20

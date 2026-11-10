@@ -1,0 +1,30 @@
+# 构建运行：docker compose up -d --build
+# 离线导入镜像后：docker compose up -d --no-build
+# 代码随镜像发布；业务文件独立持久化，私有配置只读挂载。
+services:
+  ag-kb:
+    image: ${KB_IMAGE:-ag-kb:0.2.0}
+    build:
+      context: .
+    container_name: knowbase
+    ports:
+      - "${KB_SEARCH_PORT:-80}:8000"
+      - "127.0.0.1:${KB_ADMIN_PORT:-8001}:8001"  # 管理端仅允许宿主机访问
+    environment:
+      KB_HOST: 0.0.0.0        # 容器内必须监听所有网卡，端口才能映射到宿主机
+      KB_ADMIN_HOST: 0.0.0.0
+      KB_MONGO_URI: ${KB_MONGO_URI:-mongodb://host.docker.internal:27017}
+      KB_WEB_SEARCH_API_KEY: ${KB_WEB_SEARCH_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/raw:/app/data/raw
+      - ./data/index:/app/data/index
+      - ./data/images:/app/data/images
+      - type: bind
+        source: ./config.local.yaml
+        target: /app/config.local.yaml
+        read_only: true
+        bind:
+          create_host_path: false  # 缺少配置文件时直接报错，避免被创建成目录
+    restart: unless-stopped

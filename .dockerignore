@@ -1,0 +1,27 @@
+# 打包为 Docker 镜像时排除开发环境与本地缓存
+.venv
+.git
+.gitignore
+.claude
+.codebuddy
+.playwright-cli
+**/__pycache__
+*.pyc
+tests
+scripts
+start.bat
+README.md
+Dockerfile
+.dockerignore
+*.tar
+
+# 私有配置、业务文档与数据库备份不进入构建上下文。
+config.local.yaml
+.env
+.env.*
+knowledge_base
+data/*
+!data/models/
+data/models/*
+!data/models/bge-reranker-base/
+!data/models/fastembed/

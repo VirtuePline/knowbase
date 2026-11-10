@@ -1,0 +1,20 @@
+.venv/
+
+__pycache__/
+*.py[cod]
+.env
+# 私有配置（含 API 密钥 / 初始管理员密码），绝不提交
+config.local.yaml
+# 业务数据：原始文档、索引、现场图片、离线模型
+data/raw/*
+data/index/*
+!data/raw/.gitkeep
+!data/index/.gitkeep
+data/models/
+data/images/
+knowledge_base/
+.pytest_cache/
+.claude/
+.tmp_bak_*
+.DS_Store
+*.tar

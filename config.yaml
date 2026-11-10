@@ -1,0 +1,126 @@
+# 工厂维保 / MES 运维知识库助手 — 配置文件
+# 密钥等本机私有配置请写在 config.local.yaml（已被 .gitignore 排除），
+# 其内容会与本文件深度合并，同名项以 config.local.yaml 为准。
+
+# ---- 模型 ----
+llm:
+  # DeepSeek 当前可用名称：deepseek-flash、deepseek-v4-pro
+  # 填错时 checkllm 会直接打印服务端返回的可用名称
+  model: deepseek-flash
+  base_url: https://api.deepseek.com/v1
+  # 留空时仅返回检索到的原始记录摘录，不调用模型、不做任何推断
+  # 不要在此填写真实密钥，请写到 config.local.yaml
+  api_key: ""
+  max_tokens: 2000
+  timeout: 60
+
+# ---- 图片识别（可选）----
+# 问答输入框支持上传图片：视觉模型读出图里的故障现象 / 报错内容，转成文字问题后走原有问答检索。
+# 任何 OpenAI 兼容的视觉接口都可以，例如：
+#   通义 qwen-vl-plus   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#   智谱 glm-4v-flash   base_url: https://open.bigmodel.cn/api/paas/v4
+# api_key 留空时上传图片会提示「图片识别服务未配置」，其余功能不受影响。
+vision:
+  model: qwen-vl-plus
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: ""
+
+# ---- 联网参考（知识库无直接方案时）----
+# provider: deepseek 走 DeepSeek Search（POST /v1/tools/search，与对话共用 llm.api_key，
+#           5 元/千次成功请求）；tavily 走 Tavily Search（需单独的 tvly- 密钥）。
+# 只发送脱敏后的当前问题，不发送会话历史或知识库原文。
+# api_key 留空时：deepseek 复用 llm.api_key；也可用 config.local.yaml 或 KB_WEB_SEARCH_API_KEY 覆盖。
+web_search:
+  enabled: true
+  provider: deepseek
+  api_key: ""
+  base_url: https://api.deepseek.com
+  timeout: 15
+  max_results: 5
+
+# ---- 检索 ----
+retrieval:
+  top_k: 6
+  # 命中覆盖率门槛（0~1）。关键词覆盖率与语义相似度都低于门槛时走固定兜底话术
+  # 台账实有姓名约 0.53、故障现象类约 0.44~0.83，无关问题约 0.20，取 0.32 分离清晰；
+  # 台账里没有的人名（如姓名中一字与台账写法不同）覆盖率约 0.31，应当不命中
+  min_coverage: 0.32
+  # 向量余弦相似度门槛（0~1）：语义足够相近的记录即使关键词不重叠也可命中。
+  # bge-small-zh 实测：真正相关的问法约 0.65+，无关背景约 0.4~0.5，故默认 0.6
+  semantic_threshold: 0.6
+  # 语义下限（0~semantic_threshold）：仅靠关键词覆盖率过线、但语义低于此值的候选不放行——
+  # 防止只碰上「网页」「系统」等通用词的不相关记录被当答案返回。
+  # 实测：真相关 ≥0.63，碰词不相关约 0.42，完全无关约 0.33，取 0.45 分离清晰
+  semantic_floor: 0.45
+  max_context_chars: 14000
+  max_excerpt_chars: 900
+
+# ---- 向量嵌入（语义相似度检索）----
+# 分块摘要嵌入为向量后存入 MongoDB（database 段指定），查询时计算余弦相似度，
+# 与 BM25 关键词结果按 RRF 融合排序。
+embedding:
+  enabled: true
+  # local：fastembed 本地模型，ONNX 推理，首次使用自动下载模型（约 100MB），之后离线可用
+  # api：OpenAI 兼容 /embeddings 接口（注意 DeepSeek 官方没有该接口，需换其他服务）
+  provider: local
+  model: BAAI/bge-small-zh-v1.5
+  # 以下仅 provider = api 时使用；base_url / api_key 留空时复用 llm 段的配置
+  base_url: ""
+  api_key: ""
+  timeout: 60
+
+# ---- 重排序（rerank）----
+# 向量语义召回前 candidates 个分块后，用本地 Cross-Encoder 模型逐对打相关性概率，
+# 按概率降序把最相关的记录给用户；比单向量相似度更能识别「不同服务器同类故障」等场景。
+# 模型文件在 data/models/bge-reranker-base/（int8 ONNX 量化版，本地离线推理）。
+rerank:
+  enabled: true
+  # rerank 相关性概率门槛：bge-reranker 对口语化问法打分整体偏低，0.1 已能区分相关与无关
+  threshold: 0.1
+  # 送进 Cross-Encoder 的候选数：每条都要在 CPU 上跑一遍，条目越多越慢
+  # （实测 10 条约 4.4s，6 条约 2.6s），与 top_k 持平即可
+  candidates: 6
+
+# ---- 切块 ----
+chunking:
+  chunk_size: 600
+  chunk_overlap: 100
+  excel_rows_per_chunk: 12
+
+# ---- 文档分析 ----
+# 入库时先分析文档结构：剔除目录、封面、版权页、页眉页脚等非主要内容，
+# 再为每个主要章节生成摘要。检索只匹配摘要，原文作为元数据随命中返回。
+analysis:
+  # true 且配置了 llm.api_key 时由模型判定主要内容并写摘要（会把文档内容发送给模型服务）；
+  # 否则使用本地规则：抽取含设备编号 / 报错码 / 处理步骤的关键句
+  use_llm: true
+  # 单个章节超过该字数时先拆成多段再分别摘要
+  max_section_chars: 3000
+  # 每次调用模型送入的章节原文总字数上限
+  batch_chars: 12000
+
+# ---- 管理端账号 ----
+# 管理端始终要求登录；enabled 仅保留兼容，旧本机配置写 false 也不能跳过认证。
+# 请在 config.local.yaml 设置独立初始密码；未设置且首次建号时见 data/index/bootstrap-admin.txt。
+auth:
+  enabled: true
+  admin_user: admin
+  # 初始管理员密码（仅首次建号时使用；之后密码以数据库为准）
+  admin_password: ""
+
+# ---- 数据库 ----
+# 文档登记、字段定义、时间线状态与向量统一存 MongoDB，不再使用 SQLite。
+# 服务器部署时用环境变量 KB_MONGO_URI 覆盖连接地址（优先级高于本段）。
+database:
+  uri: mongodb://127.0.0.1:27017
+  name: knowbase
+
+# ---- 服务 ----
+# 查询端与管理端使用不同端口：查询端只能问答检索，上传 / 编辑 / 删除只在管理端提供。
+# 需要给车间终端开放查询时，把 host 改为 0.0.0.0，管理端保持 127.0.0.1 仅本机可用。
+server:
+  host: 0.0.0.0
+  port: 8000
+  admin_host: 127.0.0.1
+  admin_port: 8001
+  # 管理端登录密码已移至上方 auth 段（本项保留兼容，auth.admin_password 为空时仍会读取）
