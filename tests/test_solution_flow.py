@@ -374,22 +374,45 @@ class SolutionFlowTest(unittest.TestCase):
             # 点查/故障类问题：维持原有门槛，不放行
             self.assertEqual(service._top_hits("李明远的IP是多少"), [])
 
-    def test_weak_signal_penalty_blocks_marginal_rerank(self):
-        """弱信号惩罚：覆盖与语义都不达标时，压线 rerank 不单独放行，显著高分才通过。"""
-        marginal = ScoredChunk(Chunk("m1", "d2", "华智一线乱剔除.md", "md", "章节",
-                                     "一线剔废出现全部剔除现象 处理过程：检查硬件光电高度"),
-                               score=0.015, coverage=0.0, semantic=0.45, rerank=0.13)
-        fake_retrieval = SimpleNamespace(search=lambda *a, **k: [marginal])
-        with patch.object(service, "retrieval", fake_retrieval):
-            # 三路全部压线（语义 0.45 贴 floor、重排 0.13 贴 threshold）：惩罚淘汰
-            self.assertEqual(service._top_hits("网页打不开"), [])
-            # 重排达到 threshold × 2（0.2）：强证据，放行
-            marginal.rerank = 0.2
-            self.assertEqual([h.chunk.id for h in service._top_hits("网页打不开")], ["m1"])
-            # 覆盖率达标作佐证时，压线 rerank 仍可放行（与原双确认行为一致）
-            marginal.rerank = 0.13
-            marginal.coverage = 0.5
-            self.assertEqual([h.chunk.id for h in service._top_hits("网页打不开")], ["m1"])
+    def test_answer_passes_rejected_docs_to_top_hits(self):
+        """「重新回答」时否决的来源文档透传给检索门槛。"""
+        with patch.object(service, "_top_hits", return_value=[]) as top:
+            service.answer("网页打不开", rejected_doc_ids=["d2"])
+            self.assertEqual(top.call_args.kwargs.get("reject_docs"), ["d2"])
+
+    def test_rejected_sources_excluded_and_penalized(self):
+        """惩罚参数：显式拒绝的来源直接剔除；历史否决按次数衰减，压线候选掉出门槛。"""
+
+        def make_hits():
+            # 每次返回新对象：惩罚会原地衰减分数，避免用例之间互相污染
+            return [
+                ScoredChunk(Chunk("m1", "d2", "补号的操作步骤.docx", "docx", "章节",
+                                  "补号操作 制造资源中选择印刷文件生成后导出需求文件"),
+                            score=0.015, coverage=0.0, semantic=0.45, rerank=0.13),
+                ScoredChunk(Chunk("s1", "d3", "箱签记录.md", "md", "章节",
+                                  "设备 IP：10.10.0.117 箱签打印不出 处理过程：检查打印机地址"),
+                            score=0.09, coverage=1.0, semantic=0.7, rerank=0.9),
+            ]
+
+        fake_retrieval = SimpleNamespace(search=lambda *a, **k: make_hits())
+        with patch.object(service, "retrieval", fake_retrieval), \
+                patch.object(service, "answer_penalty_counts", return_value={}) as counts:
+            # 无惩罚记录：两个候选都按原门槛放行
+            hits = service._top_hits("网页打不开")
+            self.assertEqual([h.chunk.id for h in hits], ["m1", "s1"])
+            self.assertEqual(counts.call_count, 1)
+            # 「重新回答」显式拒绝 d2：直接剔除，不做衰减
+            hits = service._top_hits("网页打不开", reject_docs=["d2"])
+            self.assertEqual([h.chunk.id for h in hits], ["s1"])
+        with patch.object(service, "retrieval", fake_retrieval), \
+                patch.object(service, "answer_penalty_counts", return_value={"d2": 1}):
+            # 历史否决一次：压线候选（m1）rerank 0.13-0.2、语义 0.45-0.05 掉出门槛
+            self.assertEqual([h.chunk.id for h in service._top_hits("网页打不开")], ["s1"])
+        with patch.object(service, "retrieval", fake_retrieval), \
+                patch.object(service, "answer_penalty_counts", return_value={"d3": 1}):
+            # 惩罚只轻微影响强相关记录：rerank 0.9-0.2、语义 0.7-0.05 仍远高于门槛
+            hits = service._top_hits("网页打不开")
+            self.assertEqual([h.chunk.id for h in hits], ["m1", "s1"])
 
     def test_context_aware_rewrite_feeds_retrieval_only(self):
         """关闭快速模式且有历史：改写后的查询参与检索，回答仍用工程师原话+历史。"""
@@ -397,7 +420,7 @@ class SolutionFlowTest(unittest.TestCase):
         fake_retrieval = SimpleNamespace(index=SimpleNamespace(chunks=peers))
         captured = {}
 
-        def fake_top_hits(question, vendor="", fast=False):
+        def fake_top_hits(question, vendor="", fast=False, reject_docs=None):
             captured["query"] = question
             return [ledger_anchor(peers)]
 
@@ -434,7 +457,7 @@ class SolutionFlowTest(unittest.TestCase):
         fake_retrieval = SimpleNamespace(index=SimpleNamespace(chunks=peers))
         captured = {}
 
-        def fake_top_hits(question, vendor="", fast=False):
+        def fake_top_hits(question, vendor="", fast=False, reject_docs=None):
             captured["query"] = question
             return [ledger_anchor(peers)]
 

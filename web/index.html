@@ -746,6 +746,62 @@ log.addEventListener("click", (e) => {
   if (dl) downloadDoc(dl.dataset.srcDl);
 });
 
+// 渲染一条机器人回答气泡；rejected 为本次已累计排除的来源文档（「重新回答」链）
+function renderChatAnswer(bubble, data, question, started, rejected = []) {
+  const notice = data.notice ? `<div class="notice">${escapeHtml(data.notice)}</div>` : "";
+  const cat = data.category ? `<div class="muted" style="font-size:12px;margin-bottom:6px">已解析模块：${escapeHtml(data.category)}</div>` : "";
+  const seconds = (performance.now() - started) / 1000;
+  const elapsed = `<div class="answer-elapsed">耗时 ${seconds < 1 ? seconds.toFixed(2) : seconds.toFixed(1)} 秒</div>`;
+  const kbDocs = [...new Set((data.sources || []).map((s) => String(s.doc_id || "")).filter(Boolean))];
+  let reAsk = "";
+  if (kbDocs.length && data.status !== "guide") {
+    bubble.dataset.question = question;
+    bubble.dataset.reject = JSON.stringify(rejected);
+    bubble.dataset.kbdocs = JSON.stringify(kbDocs);
+    reAsk = `<div class="re-ask"><button class="ghost" type="button" data-reask title="把以上来源计入惩罚参数并重新检索：本次排除这些文档，后续提问也会降低它们的权重">答案不对？排除以上来源重新回答</button></div>`;
+  }
+  bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + renderMarkdown(data.answer) + renderSources(data.sources) + elapsed + reAsk;
+}
+
+// 「答案不对」：把当前回答的知识库来源计入惩罚参数，重新请求并原位替换回答
+log.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-reask]");
+  if (!btn) return;
+  const bubble = btn.closest(".bubble");
+  const question = bubble ? bubble.dataset.question : "";
+  if (!bubble || !question) return;
+  const prevRejected = JSON.parse(bubble.dataset.reject || "[]");
+  const kbDocs = JSON.parse(bubble.dataset.kbdocs || "[]");
+  const allRejected = [...new Set([...prevRejected, ...kbDocs])];
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = "正在重新检索…";
+  const started = performance.now();
+  const llmOn = !fmState.enabled && llmState.enabled;
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        history: [],
+        fast_mode: fmState.enabled,
+        llm_polish: llmOn,
+        web_search: llmOn && wsState.enabled,
+        reject_doc_ids: allRejected,
+      }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    renderChatAnswer(bubble, data, question, started, allRejected);
+    log.scrollTop = log.scrollHeight;
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = oldText;
+    toast(`重新回答失败：${String(err.message || err)}`);
+  }
+});
+
 let lastAnswered = false;   // 上一轮是否已成功回答（快速问答据此自动开启新对话）
 
 async function ask(question, userLabel) {
@@ -812,11 +868,7 @@ async function ask(question, userLabel) {
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
-    const notice = data.notice ? `<div class="notice">${escapeHtml(data.notice)}</div>` : "";
-    const cat = data.category ? `<div class="muted" style="font-size:12px;margin-bottom:6px">已解析模块：${escapeHtml(data.category)}</div>` : "";
-    const seconds = (performance.now() - started) / 1000;
-    const elapsed = `<div class="answer-elapsed">耗时 ${seconds < 1 ? seconds.toFixed(2) : seconds.toFixed(1)} 秒</div>`;
-    pending.innerHTML = renderAnswerOrigin(data) + cat + notice + renderMarkdown(data.answer) + renderSources(data.sources) + elapsed;
+    renderChatAnswer(pending, data, q, started);
     if (data.status !== "guide") {
       lastAnswered = true;
       saveHistoryItem({

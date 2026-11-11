@@ -620,6 +620,9 @@ button.tl-doc { background: transparent; border: 0; padding: 0; font: inherit; c
 .msg.bot .bubble { width: 100%; padding: 19px 23px; border-radius: 0 13px 13px; line-height: 1.9; box-shadow: var(--shadow); overflow-wrap: anywhere; overflow-x: auto; }
 .msg.bot .bubble > :first-child { margin-top: 0; }
 .answer-elapsed { margin-top: 16px; font-size: 12px; color: #8ba0ab; }
+.re-ask { margin-top: 8px; }
+.re-ask .ghost { font-size: 12px; padding: 3px 10px; border-radius: 7px; }
+.re-ask .ghost:disabled { opacity: .6; cursor: default; }
 .msg.bot .bubble > :last-child { margin-bottom: 0; }
 .msg.user .bubble { background: #e4efed; border: 1px solid #d8e7e3; color: #2f5c58; border-radius: 13px 0 13px 13px; max-width: 82%; padding: 12px 18px; }
 .sources { border-top-style: solid; margin-top: 20px; padding-top: 14px; }

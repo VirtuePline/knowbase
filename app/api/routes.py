@@ -32,15 +32,26 @@ class ChatRequest(BaseModel):
     fast_mode: bool | None = Field(default=None, description="本次是否快速问答；缺省用服务端全局设置")
     llm_polish: bool = Field(default=False, description="是否用大模型整理答案；默认只用精排与规则提取")
     web_search: bool | None = Field(default=None, description="本次是否允许联网搜索；缺省用服务端全局设置")
+    reject_doc_ids: list[str] = Field(default_factory=list, description="用户否决的答案来源文档：本次回答直接排除，并累计惩罚降权")
 
 
 @search_router.post("/chat")
 def chat(req: ChatRequest) -> dict:
     try:
-        return answer_service.answer(
+        result = answer_service.answer(
             req.question, req.history,
             fast_mode=req.fast_mode, llm_polish=req.llm_polish, web_search=req.web_search,
+            rejected_doc_ids=req.reject_doc_ids,
         ).to_dict()
+        if req.reject_doc_ids:
+            # 否决来源计入惩罚参数（持久化，后续提问持续降权）；记录失败不影响本次回答
+            try:
+                database.add_answer_penalties(req.reject_doc_ids, req.question)
+            except Exception:   # noqa: BLE001
+                pass
+            extra = f"已排除你标记的 {len(req.reject_doc_ids)} 个来源并计入惩罚参数"
+            result["notice"] = f"{result['notice']}；{extra}" if result.get("notice") else extra
+        return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"服务处理异常：{type(exc).__name__}") from exc
 

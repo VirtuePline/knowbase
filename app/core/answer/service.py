@@ -24,7 +24,7 @@ from app.domain.taxonomy import (
     is_management_request,
     vendor_hint,
 )
-from app.services.database import fast_mode_enabled, web_search_runtime_enabled
+from app.services.database import answer_penalty_counts, fast_mode_enabled, web_search_runtime_enabled
 from app.services.retrieval_service import retrieval
 
 
@@ -130,7 +130,40 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
     )
 
 
-def _top_hits(question: str, vendor: str = "", fast: bool = False) -> list[ScoredChunk]:
+# 惩罚参数强度：答案来源文档每被用户否决一次，rerank -0.2、语义 -0.05、RRF 排序 -0.01，
+# 最多累计 2 次。强相关记录（各路高分）几乎不受影响；压线候选（如语义 0.45、重排 0.13）
+# 会因此掉出相关性门槛——惩罚由用户在问答页点「重新回答」触发，存 MongoDB 累计。
+_PENALTY_RERANK = 0.2
+_PENALTY_SEMANTIC = 0.05
+_PENALTY_SCORE = 0.01
+_PENALTY_MAX = 2
+
+
+def _apply_answer_penalties(hits: list[ScoredChunk], reject_docs: list[str]) -> list[ScoredChunk]:
+    """应用惩罚参数：本次显式拒绝（重新回答）的文档直接剔除，历史否决文档按次数衰减打分。"""
+    rejected = {d for d in reject_docs or [] if d}
+    counts: dict = {}
+    try:
+        counts = answer_penalty_counts({h.chunk.doc_id for h in hits} - rejected)
+    except Exception:   # noqa: BLE001  库不可用时不惩罚，回答不中断
+        counts = {}
+    if not rejected and not counts:
+        return hits
+    kept = []
+    for hit in hits:
+        if hit.chunk.doc_id in rejected:
+            continue
+        n = min(counts.get(hit.chunk.doc_id, 0), _PENALTY_MAX)
+        if n:
+            hit.rerank = max(0.0, hit.rerank - _PENALTY_RERANK * n)
+            hit.semantic = max(0.0, hit.semantic - _PENALTY_SEMANTIC * n)
+            hit.score = max(0.0, hit.score - _PENALTY_SCORE * n)
+        kept.append(hit)
+    return kept
+
+
+def _top_hits(question: str, vendor: str = "", fast: bool = False,
+              reject_docs: list[str] | None = None) -> list[ScoredChunk]:
     # vendor 非空时检索层已把该厂商的文档置顶，这里只做相关性门槛过滤
     # fast=True 跳过 Cross-Encoder 精排（省 2~3 秒），按 BM25 + 向量融合顺序给结果
     stats = is_stats_question(question)
@@ -138,6 +171,7 @@ def _top_hits(question: str, vendor: str = "", fast: bool = False) -> list[Score
     # 正文含"IP"等字样的故障记录占满，台账反而进不了候选
     top_k = max(settings.top_k, 12) if stats else settings.top_k
     hits = retrieval.search(question, top_k=top_k, vendor=vendor, use_rerank=not fast)
+    hits = _apply_answer_penalties(hits, reject_docs or [])
     if not hits:
         return []
     # 相关性门槛：rerank / 语义相似度单路强信号即可放行；仅关键词覆盖达标时
@@ -160,21 +194,10 @@ def _top_hits(question: str, vendor: str = "", fast: bool = False) -> list[Score
             if tables:
                 return tables[:1]
         return []
-    # 弱信号惩罚：语义与关键词覆盖都不达标时，压线的 rerank 不再单独放行——
-    # 需要 rerank 达到 threshold × weak_signal_rerank_factor（默认 2 倍）才算强证据。
-    # 挡住三路全部压线（如语义 0.45、重排 0.13）的不相关候选，宁可回答「没有找到」。
     kept = [h for h in hits
-            if h.semantic >= settings.semantic_threshold
-            or (h.coverage >= settings.min_coverage and h.semantic >= settings.semantic_floor)
-            or h.rerank >= settings.rerank_threshold * settings.weak_signal_rerank_factor
-            or (h.rerank >= settings.rerank_threshold and h.coverage >= settings.min_coverage)]
-    if not kept:
-        # 惩罚后无候选：统计类问题仍放行最高的表格块，模型逐行核对时自然回答没有
-        if stats:
-            tables = [h for h in hits if h.chunk.table]
-            if tables:
-                return tables[:1]
-        return []
+            if h.rerank >= settings.rerank_threshold
+            or h.semantic >= settings.semantic_threshold
+            or (h.coverage >= settings.min_coverage and h.semantic >= settings.semantic_floor)]
     if stats:
         # 门槛达标也不够：故障记录（正文提到"设备 IP：10.10.x.x"）分数天然比台账
         # 高，会把台账挤到kept之外，统计流程就只剩几条故障记录可看。把候选中分数
@@ -334,7 +357,8 @@ def _expand_table_hits(hits: list[ScoredChunk]) -> list[ScoredChunk]:
 
 def answer(question: str, history: list[dict] | None = None,
            *, fast_mode: bool | None = None, llm_polish: bool = False,
-           web_search: bool | None = None) -> AnswerResponse:
+           web_search: bool | None = None,
+           rejected_doc_ids: list[str] | None = None) -> AnswerResponse:
     text = (question or "").strip()
     if not text:
         return AnswerResponse(status="guide", answer="请输入要查询的设备故障现象、MES 报错代码或工单问题。", answer_origin="none")
@@ -371,7 +395,7 @@ def answer(question: str, history: list[dict] | None = None,
     def _notice(*parts: str) -> str:
         return "；".join(part for part in parts if part)
 
-    hits = _top_hits(search_query, vendor, fast=fast)
+    hits = _top_hits(search_query, vendor, fast=fast, reject_docs=rejected_doc_ids or [])
     # 排名高不代表同一种故障。所有作答、模型与摘录路径共用此门禁，
     # 也核对原始问题，避免历史改写把“电脑打不开”带回上一轮的音响故障。
     hits = filter_fault_hits(search_query, hits)

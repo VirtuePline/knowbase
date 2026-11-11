@@ -144,6 +144,31 @@ def fast_mode_enabled() -> bool:
     return get_runtime_setting("fast_mode", "on") != "off"
 
 
+# ---------- 答案否决惩罚（问答页「重新回答」时计入） ----------
+
+def add_answer_penalties(doc_ids, question: str = "") -> int:
+    """记录被否决的答案来源文档：按文档累计惩罚次数，后续检索对其降权。"""
+    added = 0
+    for doc_id in {str(d).strip() for d in doc_ids or [] if str(d).strip()}:
+        mongo.db().answer_penalties.update_one(
+            {"_id": doc_id},
+            {"$inc": {"count": 1},
+             "$set": {"last_question": (question or "")[:200], "updated_at": now_iso()}},
+            upsert=True,
+        )
+        added += 1
+    return added
+
+
+def answer_penalty_counts(doc_ids) -> dict:
+    """查询文档累计的惩罚次数；仅返回有记录的文档。"""
+    ids = [str(d).strip() for d in doc_ids or [] if str(d).strip()]
+    if not ids:
+        return {}
+    return {d["_id"]: int(d.get("count", 0))
+            for d in mongo.db().answer_penalties.find({"_id": {"$in": ids}}, {"count": 1})}
+
+
 # ---------- 厂商清单 ----------
 
 def list_vendors() -> list[str]:
