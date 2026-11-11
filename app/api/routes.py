@@ -298,11 +298,19 @@ def update_markdown(doc_id: str, req: MarkdownRequest, identity: dict = Depends(
     try:
         return kb.save_markdown(req.content, doc_id, req.filename, req.category, req.vendor, req.resolved,
                                 categories=req.categories,
-                                uploaded_by=identity["username"], parent_id=req.parent_id)
+                                uploaded_by=identity["username"], parent_id=req.parent_id,
+                                edited_by=identity["username"],
+                                edited_by_name=identity.get("display_name", ""))
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="文档不存在") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.get("/documents/{doc_id}/edits")
+def list_edits(doc_id: str, identity: dict = Depends(require_login)) -> dict:
+    """记录的编辑溯源日志：谁在何时新建 / 修改（新在前）。"""
+    return {"edits": database.list_edit_logs(doc_id)}
 
 
 class CategoryRequest(BaseModel):

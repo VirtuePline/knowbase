@@ -185,6 +185,24 @@ class DocTypeTest(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertRegex(resp.json()["doc"]["uploaded_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
+    def test_edit_log_records_editor(self):
+        """在线编辑记录修改人并写入溯源日志（创建 / 修改各一条，新在前）。"""
+        with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
+            api = self.api
+            created = api.post("/api/documents/markdown",
+                               json={"content": "# 记录\n\n处理：重启工控机。", "filename": "溯源测试"})
+            self.assertEqual(created.status_code, 200)
+            doc_id = created.json()["doc"]["id"]
+            updated = api.put(f"/api/documents/{doc_id}",
+                              json={"content": "# 记录\n\n处理：重启并检查网线。", "filename": "溯源测试"})
+            self.assertEqual(updated.status_code, 200)
+            doc = updated.json()["doc"]
+            self.assertEqual(doc["last_edited_by"], "knowledge-test")
+            self.assertTrue(doc["last_edited_at"])
+            edits = api.get(f"/api/documents/{doc_id}/edits").json()["edits"]
+            self.assertEqual([e["action"] for e in edits], ["修改", "创建"])
+            self.assertTrue(all(e["edited_at"] for e in edits))
+
     def test_list_documents_filter_by_doc_type(self):
         with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
             api = self.api

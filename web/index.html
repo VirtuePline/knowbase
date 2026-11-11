@@ -252,6 +252,9 @@
         <button type="button" class="md-tool" data-md="image" title="插入图片" aria-label="插入图片">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><circle cx="7" cy="8" r="1.3"/><path d="M3 14l4.2-4.2 2.8 2.8 2-2 5 5"/></svg>
         </button>
+        <button type="button" class="md-tool" data-md="doc-ref" title="引用文档库文档（插入参考引用，点击可预览）" aria-label="引用文档">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3.5h8.5L16 7v9.5H4z"/><path d="M12 3.5V7h4M7 10.5h6M7 13.5h6"/></svg>
+        </button>
         <span class="md-sep" aria-hidden="true"></span>
         <span class="md-table-wrap">
           <button type="button" class="md-tool" data-md="table" title="插入表格（选择行列）" aria-label="插入表格">
@@ -274,6 +277,21 @@
       </div>
       <div class="editor-tip">
         默认在预览模式直接书写，排版所见即所得；切到「源码」可编辑 Markdown 原文。图片支持 Ctrl+V 粘贴或通过工具栏选择本地文件上传，表格通过工具栏选择行列插入。保存后自动重新切块并重建检索索引，文件名未写扩展名时默认保存为 <code>.md</code>。
+      </div>
+      <!-- 引用文档库文档：选择浮层 -->
+      <div class="doc-pop" id="doc-ref-pop" hidden>
+        <div class="doc-pop-card">
+          <div class="doc-pop-head">引用文档库文档<button type="button" class="doc-pop-close" id="doc-ref-close" aria-label="关闭">✕</button></div>
+          <input id="doc-ref-search" class="doc-pop-search" placeholder="搜索文档名…" />
+          <div class="doc-pop-list" id="doc-ref-list"></div>
+        </div>
+      </div>
+      <!-- 修改历史：溯源浮层 -->
+      <div class="doc-pop" id="edits-pop" hidden>
+        <div class="doc-pop-card">
+          <div class="doc-pop-head">修改历史<button type="button" class="doc-pop-close" id="edits-close" aria-label="关闭">✕</button></div>
+          <div class="doc-pop-list" id="edits-list"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -557,6 +575,9 @@ function inline(s) {
 
   // 先保护代码、图片和链接，避免其中的符号被后续强调规则改写
   text = text.replace(/`([^`\n]+)`/g, (_, code) => keep(`<code>${code}</code>`));
+  // 文档库引用：[《名称》](doc://文档ID) 渲染为可点击预览的引用标签
+  text = text.replace(/\[([^\]]+)\]\(doc:\/\/([^)\s]+)\)/g, (match, label, id) =>
+    keep(`<span class="doc-ref" data-doc-pv="${escapeAttr(id)}" role="button" title="点击预览文档">${label}</span>`));
   text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, url) => {
     const href = safeUrl(url, true);
     return href ? keep(`<img src="${href}" alt="${escapeAttr(alt)}" loading="lazy" />`) : match;
@@ -1119,7 +1140,10 @@ function docRowHtml(d) {
         <td><span class="doc-link" data-pv="${id}" title="点击预览">${escapeHtml(d.name)}</span>
           ${d.summary ? `<div class="doc-summary" title="${escapeHtml(d.summary)}">${escapeHtml(d.summary)}</div>` : ""}
           ${d.vendor ? `<div class="net-tags"><span class="net-tag" title="厂商">厂商：${escapeHtml(d.vendor)}</span></div>` : ""}
-          <div class="record-provenance"><span>运维人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>${recordRelationsHtml(d, "pv")}</div>
+          <div class="record-provenance"><span>运维人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
+            `${(d.last_edited_name || d.last_edited_by) ? `<span>最后修改：${escapeHtml(String(d.last_edited_name || d.last_edited_by))}${d.last_edited_at ? " · " + escapeHtml(String(d.last_edited_at)) : ""}</span>` : ""}` +
+            `<button type="button" class="edits-link" data-edits="${id}" title="查看谁在何时新建 / 修改过这份记录">修改历史</button>` +
+            `${recordRelationsHtml(d, "pv")}</div>
           ${skipped}${d.error ? `<div class="muted" style="font-size:12px">${escapeHtml(d.error)}</div>` : ""}</td>
         <td>${category}</td>
         <td class="muted">${escapeHtml(extTypeName(d.ext))}</td>
@@ -2718,10 +2742,94 @@ function runMdCommand(command) {
   else if (command === "ul" || command === "ol" || command === "quote") applyLineMarker(command);
   else if (command === "link") openMdInsert("link");
   else if (command === "image") openMdInsert("image");
+  else if (command === "doc-ref") openDocRef();
   else if (command === "codeblock") insertCodeBlock();
   else if (command === "table") toggleTablePop();
   else if (command === "hr") insertBlock("---");
 }
+
+/* ---------- 引用文档库文档：选择浮层 + 修改历史 ---------- */
+
+function docRefPool() {
+  const seen = new Set();
+  return [...recDocs, ...docDocs].filter((d) => {
+    if (!d || !d.id || seen.has(d.id)) return false;
+    seen.add(d.id);
+    return true;
+  });
+}
+
+function openDocRef() {
+  syncEditorRange();
+  const pop = $("#doc-ref-pop");
+  const search = $("#doc-ref-search");
+  search.value = "";
+  renderDocRefList("");
+  pop.hidden = false;
+  search.focus();
+}
+
+function renderDocRefList(kw) {
+  const key = String(kw || "").trim().toLowerCase();
+  const items = docRefPool()
+    .filter((d) => !key || String(d.name || "").toLowerCase().includes(key))
+    .slice(0, 60);
+  $("#doc-ref-list").innerHTML = items.length
+    ? items.map((d) =>
+        `<button type="button" class="doc-pop-item" data-ref-id="${escapeAttr(d.id)}" data-ref-name="${escapeAttr(String(d.name || ""))}">` +
+        `<span>${escapeHtml(String(d.name || "未命名"))}</span>` +
+        `<span class="doc-pop-kind">${d.doc_type === "record" ? "运维记录" : escapeHtml(catName(d.category))}</span></button>`).join("")
+    : '<div class="doc-pop-empty">没有匹配的文档</div>';
+}
+
+$("#doc-ref-search").addEventListener("input", (e) => renderDocRefList(e.target.value));
+$("#doc-ref-close").addEventListener("click", () => { $("#doc-ref-pop").hidden = true; });
+$("#doc-ref-pop").addEventListener("click", (e) => {
+  const item = e.target.closest("[data-ref-id]");
+  if (!item) {
+    if (e.target === $("#doc-ref-pop")) $("#doc-ref-pop").hidden = true;
+    return;
+  }
+  const refId = item.dataset.refId;
+  const refName = item.dataset.refName || "文档";
+  $("#doc-ref-pop").hidden = true;
+  insertBlock(`> 参考：[${refName.includes("《") ? refName : `《${refName}》`}](doc://${refId})`);
+});
+
+async function openEditHistory(docId) {
+  const list = $("#edits-list");
+  list.innerHTML = '<div class="doc-pop-empty">读取中…</div>';
+  $("#edits-pop").hidden = false;
+  try {
+    const resp = await fetch("/api/documents/" + encodeURIComponent(docId) + "/edits");
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "读取失败");
+    const edits = data.edits || [];
+    list.innerHTML = edits.length
+      ? edits.map((it) => {
+          const who = it.editor_name || it.editor || "未知";
+          return `<div class="edits-row"><span class="edits-action">${escapeHtml(it.action || "修改")}</span>` +
+            `<span>${escapeHtml(who)}</span>` +
+            `<span class="doc-pop-kind">${escapeHtml(it.edited_at || "")}</span></div>`;
+        }).join("")
+      : '<div class="doc-pop-empty">暂无修改记录（创建前的历史记录不追溯）</div>';
+  } catch (err) {
+    list.innerHTML = `<div class="doc-pop-empty">${escapeHtml(String(err.message || err))}</div>`;
+  }
+}
+
+$("#edits-close").addEventListener("click", () => { $("#edits-pop").hidden = true; });
+$("#edits-pop").addEventListener("click", (e) => {
+  if (e.target === $("#edits-pop")) $("#edits-pop").hidden = true;
+});
+
+// 正文预览与来源列表里的文档引用：点击直接打开预览
+document.addEventListener("click", (e) => {
+  const ref = e.target.closest("[data-doc-pv]");
+  if (ref) { openPreview(ref.dataset.docPv); return; }
+  const hist = e.target.closest("[data-edits]");
+  if (hist) { openEditHistory(hist.dataset.edits); }
+});
 
 function normalizeMdFilename() {
   let name = mdName.value.trim();
@@ -2767,6 +2875,10 @@ function appendInline(node, st) {
     if (child.nodeType === 3) { st.md += child.data; continue; }
     if (child.nodeType !== 1) continue;
     const tag = child.tagName.toLowerCase();
+    if (tag === "span" && child.classList.contains("doc-ref")) {
+      const refId = child.getAttribute("data-doc-pv") || "";
+      if (refId) { st.md += `[${child.textContent}](doc://${refId})`; continue; }
+    }
     if (tag === "br") { st.md += "\n"; continue; }
     if (tag === "img") {
       const src = child.getAttribute("src") || "";

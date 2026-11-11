@@ -418,7 +418,7 @@ def read_source(doc_id: str) -> dict:
 def save_markdown(content: str, doc_id: str = "", filename: str = "",
                   category: str = "", vendor: str = "", resolved: str = "", *,
                   categories: str = "", uploaded_by: str = "", uploaded_by_name: str = "",
-                  parent_id: str = "") -> dict:
+                  parent_id: str = "", edited_by: str = "", edited_by_name: str = "") -> dict:
     """新建或更新 Markdown / 文本记录，并立即重建索引。
 
     doc_id 为空时新建；传入已有 doc_id 时覆盖原文件与分块。
@@ -486,6 +486,8 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
         new_record = replace_record(
             record, name=name, stored_name=stored, ext=ext, size=len(payload),
             sha256=digest, status="processing", resolved=_norm_resolved(resolved) or record.resolved,
+            last_edited_by=(edited_by or "").strip(), last_edited_name=(edited_by_name or "").strip(),
+            last_edited_at=database.now_iso(),
         )
     else:
         new_record = DocRecord(
@@ -494,8 +496,14 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
             doc_type="record", resolved=_norm_resolved(resolved),
             uploaded_by=uploaded_by, uploaded_by_name=uploaded_by_name,
             parent_id=parent_id, root_id=root_id,
+            last_edited_by=(edited_by or "").strip(), last_edited_name=(edited_by_name or "").strip(),
+            last_edited_at=database.now_iso(),
         )
     database.add(new_record)
+    # 编辑溯源日志：谁在何时新建 / 修改了这份记录（重复内容跳过时不记）
+    database.add_edit_log(doc_id, (edited_by or "").strip() or uploaded_by,
+                          (edited_by_name or "").strip() or uploaded_by_name,
+                          "修改" if record else "创建")
     doc = _ingest(new_record, target, category=primary or (record.category if record else ""))
     if cats:   # 人工选择的分类标签优先于自动判定
         database.set_categories(doc.id, cats)

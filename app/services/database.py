@@ -22,6 +22,7 @@ _DOC_FIELDS = (
     "id", "name", "stored_name", "ext", "size", "sha256", "chunks",
     "uploaded_at", "status", "error", "summary", "skipped", "category", "categories", "vendor", "doc_type",
     "resolved", "uploaded_by", "uploaded_by_name", "parent_id", "root_id",
+    "last_edited_by", "last_edited_name", "last_edited_at",
 )
 
 
@@ -167,6 +168,22 @@ def answer_penalty_counts(doc_ids) -> dict:
         return {}
     return {d["_id"]: int(d.get("count", 0))
             for d in mongo.db().answer_penalties.find({"_id": {"$in": ids}}, {"count": 1})}
+
+
+# ---------- 文档编辑日志（溯源：谁在何时新建 / 修改过记录） ----------
+
+def add_edit_log(doc_id: str, editor: str, editor_name: str = "", action: str = "修改") -> None:
+    mongo.db().edit_logs.insert_one({
+        "doc_id": doc_id, "editor": editor, "editor_name": editor_name,
+        "action": action, "edited_at": now_iso(),
+    })
+
+
+def list_edit_logs(doc_id: str, limit: int = 20) -> list[dict]:
+    rows = (mongo.db().edit_logs.find({"doc_id": doc_id}, {"_id": 0})
+            .sort("edited_at", DESCENDING).limit(limit))
+    return [{"editor": r.get("editor", ""), "editor_name": r.get("editor_name", ""),
+             "action": r.get("action", ""), "edited_at": r.get("edited_at", "")} for r in rows]
 
 
 # ---------- 厂商清单 ----------

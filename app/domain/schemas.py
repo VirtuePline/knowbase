@@ -165,6 +165,9 @@ class DocRecord:
     uploaded_by_name: str = ""  # 运维人用户名（默认当前登录用户名，可改）；旧数据为空时展示回退账号
     parent_id: str = ""         # 所跟踪的上一条运维记录，创建后不变
     root_id: str = ""           # 跟踪链的根记录；旧数据为空时按自身 ID 处理
+    last_edited_by: str = ""    # 最近一次在线编辑的登录账号；溯源用
+    last_edited_name: str = ""  # 最近一次在线编辑的显示名
+    last_edited_at: str = ""    # 最近一次在线编辑时间
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -187,4 +190,7 @@ class DocRecord:
             "uploaded_by_name": self.uploaded_by_name,
             "parent_id": self.parent_id,
             "root_id": self.root_id,
+            "last_edited_by": self.last_edited_by,
+            "last_edited_name": self.last_edited_name,
+            "last_edited_at": self.last_edited_at,
         }
