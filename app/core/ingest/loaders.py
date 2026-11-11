@@ -232,19 +232,32 @@ _LOADERS = {
 
 # 「仅说明」引用行：记录里指向文档库的参考说明，勾选后不参与问答检索（正文仍保留展示）
 _NO_REF_LINE = re.compile(r"^>\s*参考[（(]仅说明[)）]", re.MULTILINE)
+_INLINE_REF = re.compile(r"\[[^\]\n]*\]\(doc-ref://([A-Za-z0-9_-]+)\)")
+
+
+def reference_ids(path: Path) -> list[str]:
+    """引用关系与索引正文分离；兼容早期的「仅说明」引用。"""
+    if path.suffix.lower() not in {".md", ".txt"}:
+        return []
+    text = _read_text(path)
+    ids = _INLINE_REF.findall(text)
+    for line in text.splitlines():
+        if _NO_REF_LINE.match(line.strip()):
+            ids.extend(re.findall(r"\]\(doc://([A-Za-z0-9_-]+)\)", line))
+    return list(dict.fromkeys(ids))
 
 
 def _drop_no_ref_lines(blocks: list[Block]) -> list[Block]:
     """剔除标记为「仅说明」的引用行；剔除后为空的块整块丢弃。"""
     kept: list[Block] = []
     for block in blocks:
-        if block.table or not _NO_REF_LINE.search(block.text):
-            kept.append(block)
-            continue
         text = "\n".join(line for line in block.text.splitlines()
                          if not _NO_REF_LINE.match(line.strip())).strip()
-        if text:
-            kept.append(replace(block, text=text))
+        text = _INLINE_REF.sub("", text).strip()
+        heading = _INLINE_REF.sub("", block.heading).strip()
+        table = [[_INLINE_REF.sub("", cell) for cell in row] for row in block.table] if block.table else None
+        if text or table:
+            kept.append(replace(block, text=text, heading=heading, table=table))
     return kept
 
 

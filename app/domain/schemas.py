@@ -33,6 +33,7 @@ class Chunk:
     table: list[list[str]] | None = None
     summary: str = ""
     category: str = ""          # 所属文档分类，随分块保存，便于后续按分类过滤检索
+    references: list[str] = field(default_factory=list)  # 仅供命中后的模型分析，不参与评分
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +47,7 @@ class Chunk:
             "table": self.table,
             "summary": self.summary,
             "category": self.category,
+            "references": self.references,
         }
 
     @classmethod
@@ -61,6 +63,7 @@ class Chunk:
             table=data.get("table"),
             summary=data.get("summary", ""),
             category=data.get("category", ""),
+            references=data.get("references", []),
         )
 
 

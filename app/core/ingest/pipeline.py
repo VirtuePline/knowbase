@@ -13,7 +13,7 @@ from pathlib import Path
 from app.config import settings
 from app.core.ingest.analyzer import analyze
 from app.core.ingest.chunker import build_chunks
-from app.core.ingest.loaders import LoaderError, load_blocks
+from app.core.ingest.loaders import LoaderError, load_blocks, reference_ids
 from app.core.retrieval.bm25 import BM25Index
 from app.domain.schemas import Chunk
 from app.services import database
@@ -46,6 +46,7 @@ class Ingester:
                category: str = "") -> IngestResult:
         try:
             raw_blocks = load_blocks(path)
+            references = reference_ids(path)
         except LoaderError as exc:
             return IngestResult(ok=False, error=str(exc))
         except Exception as exc:
@@ -68,6 +69,8 @@ class Ingester:
         if not chunks:
             return IngestResult(ok=False, error="未能切分出有效内容")
 
+        for chunk in chunks:
+            chunk.references = [ref for ref in references if ref != doc_id]
         self._write(doc_id, chunks)
         return IngestResult(
             ok=True, chunks=len(chunks),

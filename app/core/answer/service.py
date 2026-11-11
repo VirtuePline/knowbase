@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.config import settings
 from app.core.answer.context import is_stats_question, render_excerpts, render_hits, source_snippet, table_to_markdown
 from app.core.answer.solutions import extract_solutions, render_solutions
+from app.core.answer.references import append_references
 from app.core.ingest.chunker import is_title_row
 from app.core.retrieval.relevance import filter_fault_hits
 from app.core.llm.client import (
@@ -94,6 +95,8 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
     scope = f"共 {total} 行记录" + (f"，此处列出前 {_STATS_MAX_ROWS} 行" if total > _STATS_MAX_ROWS else "")
     table_context = (f"【完整台账】《{anchor_chunk.doc_name}》{anchor_chunk.heading}（{scope}）\n"
                      + table_to_markdown(merged[:1 + _STATS_MAX_ROWS]))
+    if anchor_chunk.references:
+        table_context = append_references("【记录 1】" + table_context, [anchor])
     guided = (f"{text}\n\n"
               "（这是台账统计类问题：请基于上方完整表格逐行核对后给出数字或清单，并说明统计口径；"
               "目标单元格为空、或填的是「/」「-」「无」等占位符的记录，都视为未登记该字段，"
@@ -402,12 +405,15 @@ def answer(question: str, history: list[dict] | None = None,
     if search_query != text:
         hits = filter_fault_hits(text, hits)
     evidence = extract_solutions(hits, text)
+    evidence_response = None
     if evidence:
         selected = list({item.hit.chunk.id: item.hit for item in evidence}.values())
-        return AnswerResponse(
+        evidence_response = AnswerResponse(
             status="ok", answer=render_solutions(evidence), category=category,
             sources=_sources(selected, text), solution_found=True,
             notice=_notice(CONFLICT_NOTICE if conflict_risk(selected) else "", context_hint))
+        if not (use_llm and settings.llm_available and any(h.chunk.references for h in hits)):
+            return evidence_response
     if not fast and use_llm and hits and (is_stats_question(text) or is_stats_question(search_query)):
         # 统计类问题：无论走完整台账统计还是问答/摘录回退，上下文都需要完整工作表
         hits = _expand_table_hits(hits)
@@ -416,8 +422,9 @@ def answer(question: str, history: list[dict] | None = None,
             return stats
     model_failed = False
     if hits and settings.llm_available and use_llm:
+        model_context = append_references(render_hits(hits, question=text), hits)
         try:
-            plan = _draft(text, render_hits(hits, question=text), len(hits), history)
+            plan = _draft(text, model_context, len(hits), history)
         except LLMError:
             plan = None
             model_failed = True
@@ -434,7 +441,7 @@ def answer(question: str, history: list[dict] | None = None,
             # 问答模式基于同一批记录作答；记录不足时模型按协议输出 NO_ANSWER，
             # 此时维持原文摘录回退，不把"无答案"伪装成回答。
             try:
-                reply = llm_complete(text, render_hits(hits, question=text), history).strip()
+                reply = llm_complete(text, model_context, history).strip()
             except LLMError:
                 reply = ""
             if reply and "NO_ANSWER" not in reply.upper()[:200]:
@@ -444,6 +451,8 @@ def answer(question: str, history: list[dict] | None = None,
                     answer_origin="knowledge_base", solution_found=False,
                     notice=_notice("以下回答由模型基于知识库相关记录整理；"
                                    "模型无法确认的部分请以下方原文来源为准。", context_hint))
+    if evidence_response is not None:
+        return evidence_response
     if not fast and use_llm and web_search is True and hits:
         # 用户本次明确开启联网，且知识库有相关记录但未能给出可执行方案：
         # 先走联网参考，联网拿不到结果时回退展示知识库相关记录原文。

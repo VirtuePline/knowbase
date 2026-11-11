@@ -285,9 +285,7 @@
           <div class="doc-pop-head">引用文档库文档<button type="button" class="doc-pop-close" id="doc-ref-close" aria-label="关闭">✕</button></div>
           <input id="doc-ref-search" class="doc-pop-search" placeholder="搜索文档名…" />
           <div class="doc-pop-list" id="doc-ref-list"></div>
-          <label style="display:flex;align-items:center;gap:6px;padding:8px 14px 12px;font-size:12.5px;color:#64748b">
-            <input type="checkbox" id="doc-ref-noref" /> 仅作为引用说明（不参与问答检索）
-          </label>
+          <p class="doc-ref-tip">在正文光标处插入行内引用。引用内容不参与本记录检索；检索命中后，开启「大模型整理」可一起分析。</p>
         </div>
       </div>
     </div>
@@ -609,8 +607,8 @@ function inline(s) {
   // 先保护代码、图片和链接，避免其中的符号被后续强调规则改写
   text = text.replace(/`([^`\n]+)`/g, (_, code) => keep(`<code>${code}</code>`));
   // 文档库引用：[《名称》](doc://文档ID) 渲染为可点击预览的引用标签
-  text = text.replace(/\[([^\]]+)\]\(doc:\/\/([^)\s]+)\)/g, (match, label, id) =>
-    keep(`<span class="doc-ref" data-doc-pv="${escapeAttr(id)}" role="button" title="点击预览文档">${label}</span>`));
+  text = text.replace(/\[([^\]]+)\]\((doc(?:-ref)?):\/\/([A-Za-z0-9_-]+)\)/g, (match, label, scheme, id) =>
+    keep(`<span class="doc-ref" data-doc-pv="${escapeAttr(id)}" data-ref-scheme="${scheme}" contenteditable="false" role="button" tabindex="0" title="点击预览文档">${label}</span>`));
   text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, url) => {
     const href = safeUrl(url, true);
     return href ? keep(`<img src="${href}" alt="${escapeAttr(alt)}" loading="lazy" />`) : match;
@@ -2895,23 +2893,35 @@ function runMdCommand(command) {
 
 /* ---------- 引用文档库文档：选择浮层 + 修改历史 ---------- */
 
+let docRefDocuments = [];
 function docRefPool() {
   const seen = new Set();
-  return [...recDocs, ...docDocs].filter((d) => {
-    if (!d || !d.id || seen.has(d.id)) return false;
+  return docRefDocuments.filter((d) => {
+    if (!d || !d.id || d.id === editingId || d.status !== "ready" || seen.has(d.id)) return false;
     seen.add(d.id);
     return true;
   });
 }
 
-function openDocRef() {
-  syncEditorRange();
+let docRefRange = { start: 0, end: 0 };
+async function openDocRef() {
+  docRefRange = currentEditorRange();
   const pop = $("#doc-ref-pop");
   const search = $("#doc-ref-search");
   search.value = "";
   renderDocRefList("");
   pop.hidden = false;
   search.focus();
+  $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">正在读取文档…</div>';
+  try {
+    const resp = await fetch("/api/documents");
+    if (!resp.ok) throw new Error("读取失败");
+    const data = await resp.json();
+    docRefDocuments = data.documents || [];
+    renderDocRefList(search.value);
+  } catch {
+    $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">文档读取失败，请关闭后重试</div>';
+  }
 }
 
 function renderDocRefList(kw) {
@@ -2928,6 +2938,9 @@ function renderDocRefList(kw) {
 }
 
 $("#doc-ref-search").addEventListener("input", (e) => renderDocRefList(e.target.value));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("#doc-ref-pop").hidden = true;
+});
 $("#doc-ref-close").addEventListener("click", () => { $("#doc-ref-pop").hidden = true; });
 $("#doc-ref-pop").addEventListener("click", (e) => {
   const item = e.target.closest("[data-ref-id]");
@@ -2937,10 +2950,27 @@ $("#doc-ref-pop").addEventListener("click", (e) => {
   }
   const refId = item.dataset.refId;
   const refName = item.dataset.refName || "文档";
-  const noRef = $("#doc-ref-noref").checked;
   $("#doc-ref-pop").hidden = true;
-  const label = refName.includes("《") ? refName : `《${refName}》`;
-  insertBlock(noRef ? `> 参考（仅说明）：[${label}](doc://${refId})` : `> 参考：[${label}](doc://${refId})`);
+  const name = refName.replace(/[\[\]\r\n]/g, " ");
+  const label = name.includes("《") ? name : `《${name}》`;
+  setEditorSpan(docRefRange.start, docRefRange.end, `[${label}](doc-ref://${refId})`);
+  if (editorMode === "preview") {
+    // 重渲染后恢复到新引用后方，继续输入仍在原段落中。
+    const target = mdSrc.selectionEnd;
+    const chip = Array.from(mdPreview.querySelectorAll(".doc-ref")).find((node) => {
+      const offset = Array.from(node.parentNode.childNodes).indexOf(node) + 1;
+      return serializePreview({ node: node.parentNode, offset }).caret === target;
+    });
+    if (chip) {
+      mdPreview.focus();
+      const range = document.createRange();
+      range.setStartAfter(chip);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
 });
 
 /* ---------- 修改记录页：全库编辑溯源 ---------- */
@@ -3024,7 +3054,7 @@ function appendInline(node, st) {
     const tag = child.tagName.toLowerCase();
     if (tag === "span" && child.classList.contains("doc-ref")) {
       const refId = child.getAttribute("data-doc-pv") || "";
-      if (refId) { st.md += `[${child.textContent}](doc://${refId})`; continue; }
+      if (refId) { st.md += `[${child.textContent}](${child.getAttribute("data-ref-scheme") || "doc"}://${refId})`; continue; }
     }
     if (tag === "br") { st.md += "\n"; continue; }
     if (tag === "img") {
