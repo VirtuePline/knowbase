@@ -374,6 +374,23 @@ class SolutionFlowTest(unittest.TestCase):
             # 点查/故障类问题：维持原有门槛，不放行
             self.assertEqual(service._top_hits("李明远的IP是多少"), [])
 
+    def test_weak_signal_penalty_blocks_marginal_rerank(self):
+        """弱信号惩罚：覆盖与语义都不达标时，压线 rerank 不单独放行，显著高分才通过。"""
+        marginal = ScoredChunk(Chunk("m1", "d2", "华智一线乱剔除.md", "md", "章节",
+                                     "一线剔废出现全部剔除现象 处理过程：检查硬件光电高度"),
+                               score=0.015, coverage=0.0, semantic=0.45, rerank=0.13)
+        fake_retrieval = SimpleNamespace(search=lambda *a, **k: [marginal])
+        with patch.object(service, "retrieval", fake_retrieval):
+            # 三路全部压线（语义 0.45 贴 floor、重排 0.13 贴 threshold）：惩罚淘汰
+            self.assertEqual(service._top_hits("网页打不开"), [])
+            # 重排达到 threshold × 2（0.2）：强证据，放行
+            marginal.rerank = 0.2
+            self.assertEqual([h.chunk.id for h in service._top_hits("网页打不开")], ["m1"])
+            # 覆盖率达标作佐证时，压线 rerank 仍可放行（与原双确认行为一致）
+            marginal.rerank = 0.13
+            marginal.coverage = 0.5
+            self.assertEqual([h.chunk.id for h in service._top_hits("网页打不开")], ["m1"])
+
     def test_context_aware_rewrite_feeds_retrieval_only(self):
         """关闭快速模式且有历史：改写后的查询参与检索，回答仍用工程师原话+历史。"""
         peers = ledger_peers()

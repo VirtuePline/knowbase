@@ -160,10 +160,21 @@ def _top_hits(question: str, vendor: str = "", fast: bool = False) -> list[Score
             if tables:
                 return tables[:1]
         return []
+    # 弱信号惩罚：语义与关键词覆盖都不达标时，压线的 rerank 不再单独放行——
+    # 需要 rerank 达到 threshold × weak_signal_rerank_factor（默认 2 倍）才算强证据。
+    # 挡住三路全部压线（如语义 0.45、重排 0.13）的不相关候选，宁可回答「没有找到」。
     kept = [h for h in hits
-            if h.rerank >= settings.rerank_threshold
-            or h.semantic >= settings.semantic_threshold
-            or (h.coverage >= settings.min_coverage and h.semantic >= settings.semantic_floor)]
+            if h.semantic >= settings.semantic_threshold
+            or (h.coverage >= settings.min_coverage and h.semantic >= settings.semantic_floor)
+            or h.rerank >= settings.rerank_threshold * settings.weak_signal_rerank_factor
+            or (h.rerank >= settings.rerank_threshold and h.coverage >= settings.min_coverage)]
+    if not kept:
+        # 惩罚后无候选：统计类问题仍放行最高的表格块，模型逐行核对时自然回答没有
+        if stats:
+            tables = [h for h in hits if h.chunk.table]
+            if tables:
+                return tables[:1]
+        return []
     if stats:
         # 门槛达标也不够：故障记录（正文提到"设备 IP：10.10.x.x"）分数天然比台账
         # 高，会把台账挤到kept之外，统计流程就只剩几条故障记录可看。把候选中分数

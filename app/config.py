@@ -98,6 +98,7 @@ class Settings:
     min_coverage: float
     semantic_threshold: float
     semantic_floor: float
+    weak_signal_rerank_factor: float
     max_excerpt_chars: int
     max_context_chars: int
 
@@ -171,7 +172,7 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
         data = _merge(data, _read_yaml(local_file))
 
     llm = _section(data, "llm", {"model", "base_url", "api_key", "max_tokens", "timeout"})
-    retrieval = _section(data, "retrieval", {"top_k", "min_coverage", "semantic_threshold", "semantic_floor", "max_context_chars", "max_excerpt_chars"})
+    retrieval = _section(data, "retrieval", {"top_k", "min_coverage", "semantic_threshold", "semantic_floor", "weak_signal_rerank_factor", "max_context_chars", "max_excerpt_chars"})
     chunking = _section(data, "chunking", {"chunk_size", "chunk_overlap", "excel_rows_per_chunk"})
     analysis = _section(data, "analysis", {"use_llm", "max_section_chars", "batch_chars"})
     server = _section(data, "server", {"host", "port", "admin_host", "admin_port", "admin_password"})
@@ -221,6 +222,10 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
     if not 0 <= semantic_floor <= semantic_threshold:
         raise ConfigError(f"retrieval.semantic_floor 必须在 0~semantic_threshold({semantic_threshold}) 之间，当前为 {semantic_floor}")
 
+    weak_signal_rerank_factor = _float(retrieval, "weak_signal_rerank_factor", 2.0)
+    if weak_signal_rerank_factor < 1:
+        raise ConfigError(f"retrieval.weak_signal_rerank_factor 不能小于 1，当前为 {weak_signal_rerank_factor}")
+
     embedding_provider = _str(embedding, "provider", "local").lower()
     if embedding_provider not in {"local", "api"}:
         raise ConfigError(f"embedding.provider 只能是 local / api，当前为 {embedding_provider}")
@@ -267,6 +272,7 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
         min_coverage=min_coverage,
         semantic_threshold=semantic_threshold,
         semantic_floor=semantic_floor,
+        weak_signal_rerank_factor=weak_signal_rerank_factor,
         embedding_enabled=_bool(embedding, "enabled", True),
         embedding_provider=embedding_provider,
         embedding_model=_str(embedding, "model", "BAAI/bge-small-zh-v1.5"),
