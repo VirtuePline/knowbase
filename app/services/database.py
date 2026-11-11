@@ -186,6 +186,19 @@ def list_edit_logs(doc_id: str, limit: int = 20) -> list[dict]:
              "action": r.get("action", ""), "edited_at": r.get("edited_at", "")} for r in rows]
 
 
+def list_all_edit_logs(limit: int = 100) -> list[dict]:
+    """全库编辑溯源日志（新在前），附带记录名称与类型便于展示跳转。"""
+    rows = list(mongo.db().edit_logs.find({}, {"_id": 0}).sort("edited_at", DESCENDING).limit(limit))
+    doc_ids = {r.get("doc_id", "") for r in rows if r.get("doc_id")}
+    docs = {d["_id"]: d for d in mongo.db().documents.find(
+        {"_id": {"$in": list(doc_ids)}}, {"name": 1, "doc_type": 1})}
+    for r in rows:
+        doc = docs.get(r.get("doc_id", ""), {})
+        r["doc_name"] = doc.get("name", "")
+        r["doc_type"] = doc.get("doc_type", "")
+    return rows
+
+
 # ---------- 运维周报（定时生成，按运维人汇总本周记录标题） ----------
 
 def list_record_owners() -> list[str]:

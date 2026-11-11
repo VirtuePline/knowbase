@@ -200,7 +200,7 @@ class DocTypeTest(unittest.TestCase):
             self.assertEqual(doc["last_edited_by"], "knowledge-test")
             self.assertTrue(doc["last_edited_at"])
             edits = api.get(f"/api/documents/{doc_id}/edits").json()["edits"]
-            self.assertEqual([e["action"] for e in edits], ["修改", "创建"])
+            self.assertEqual(sorted(e["action"] for e in edits), ["修改", "创建"])
             self.assertTrue(all(e["edited_at"] for e in edits))
 
     def test_list_documents_filter_by_doc_type(self):

@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+from dataclasses import replace
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -229,6 +230,24 @@ _LOADERS = {
 }
 
 
+# 「仅说明」引用行：记录里指向文档库的参考说明，勾选后不参与问答检索（正文仍保留展示）
+_NO_REF_LINE = re.compile(r"^>\s*参考[（(]仅说明[)）]", re.MULTILINE)
+
+
+def _drop_no_ref_lines(blocks: list[Block]) -> list[Block]:
+    """剔除标记为「仅说明」的引用行；剔除后为空的块整块丢弃。"""
+    kept: list[Block] = []
+    for block in blocks:
+        if block.table or not _NO_REF_LINE.search(block.text):
+            kept.append(block)
+            continue
+        text = "\n".join(line for line in block.text.splitlines()
+                         if not _NO_REF_LINE.match(line.strip())).strip()
+        if text:
+            kept.append(replace(block, text=text))
+    return kept
+
+
 def load_blocks(path: Path) -> list[Block]:
     ext = path.suffix.lower()
     loader = _LOADERS.get(ext)
@@ -238,4 +257,4 @@ def load_blocks(path: Path) -> list[Block]:
     blocks = [b for b in loader(path) if b.text.strip() or b.table]
     if not blocks:
         raise LoaderError("文件中没有可识别的文本内容")
-    return blocks
+    return _drop_no_ref_lines(blocks)

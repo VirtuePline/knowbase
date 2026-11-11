@@ -22,6 +22,7 @@
     <button class="tab-btn admin-tab" data-tab="editor">新增运维记录</button>
     <button class="tab-btn admin-tab" data-tab="records">运维记录管理</button>
     <button class="tab-btn admin-tab" data-tab="settings">模板与厂商设置</button>
+    <button class="tab-btn admin-tab" data-tab="edits">修改记录</button>
     <button class="tab-btn admin-tab" data-tab="accounts">账号管理</button>
     <button class="tab-btn admin-tab" data-tab="logs">操作日志</button>
   </nav>
@@ -284,13 +285,9 @@
           <div class="doc-pop-head">引用文档库文档<button type="button" class="doc-pop-close" id="doc-ref-close" aria-label="关闭">✕</button></div>
           <input id="doc-ref-search" class="doc-pop-search" placeholder="搜索文档名…" />
           <div class="doc-pop-list" id="doc-ref-list"></div>
-        </div>
-      </div>
-      <!-- 修改历史：溯源浮层 -->
-      <div class="doc-pop" id="edits-pop" hidden>
-        <div class="doc-pop-card">
-          <div class="doc-pop-head">修改历史<button type="button" class="doc-pop-close" id="edits-close" aria-label="关闭">✕</button></div>
-          <div class="doc-pop-list" id="edits-list"></div>
+          <label style="display:flex;align-items:center;gap:6px;padding:8px 14px 12px;font-size:12.5px;color:#64748b">
+            <input type="checkbox" id="doc-ref-noref" /> 仅作为引用说明（不参与问答检索）
+          </label>
         </div>
       </div>
     </div>
@@ -410,6 +407,19 @@
   </section>
 
   <!-- 操作日志（独立页，分页显示） -->
+  <!-- 修改记录：全库编辑溯源，谁在何时新建 / 修改 -->
+  <section class="tab" id="tab-edits">
+    <div class="page-heading"><h1>修改记录</h1><p>所有运维记录的编辑溯源，做到每一条都可追溯。</p></div>
+    <div class="panel-card admin-only">
+      <h2>修改记录</h2>
+      <div class="row" style="align-items:center;margin-bottom:8px">
+        <button class="ghost" type="button" id="edits-refresh">刷新</button>
+        <span class="muted" style="font-size:12px">在线新建 / 修改记录都会记录动作、操作人与时间（存 MongoDB edit_logs 集合）</span>
+      </div>
+      <div id="edits-log" style="font-size:13px"></div>
+    </div>
+  </section>
+
   <section class="tab" id="tab-logs">
     <div class="page-heading"><h1>操作日志</h1><p>查看知识库的管理操作与处理结果。</p></div>
     <div class="panel-card admin-only">
@@ -1165,7 +1175,6 @@ function docRowHtml(d) {
           ${d.vendor ? `<div class="net-tags"><span class="net-tag" title="厂商">厂商：${escapeHtml(d.vendor)}</span></div>` : ""}
           <div class="record-provenance"><span>运维人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
             `${(d.last_edited_name || d.last_edited_by) ? `<span>最后修改：${escapeHtml(String(d.last_edited_name || d.last_edited_by))}${d.last_edited_at ? " · " + escapeHtml(String(d.last_edited_at)) : ""}</span>` : ""}` +
-            `<button type="button" class="edits-link" data-edits="${id}" title="查看谁在何时新建 / 修改过这份记录">修改历史</button>` +
             `${recordRelationsHtml(d, "pv")}</div>
           ${skipped}${d.error ? `<div class="muted" style="font-size:12px">${escapeHtml(d.error)}</div>` : ""}</td>
         <td>${category}</td>
@@ -2473,6 +2482,7 @@ function switchTo(tab, { preserveEditor = false } = {}) {
   if (tab === "editor") { loadRecordList(); loadVendors(); }
   if (tab === "records") loadRecordList();
   if (tab === "settings") refreshSettings();
+  if (tab === "edits") loadEditsLog();
   if (tab === "accounts") loadUsers();
   if (tab === "logs") { auditPage = 1; loadAuditLogs(); }
   try { localStorage.setItem(LAST_TAB_KEY, tab); } catch { /* 隐私模式忽略 */ }
@@ -2927,43 +2937,45 @@ $("#doc-ref-pop").addEventListener("click", (e) => {
   }
   const refId = item.dataset.refId;
   const refName = item.dataset.refName || "文档";
+  const noRef = $("#doc-ref-noref").checked;
   $("#doc-ref-pop").hidden = true;
-  insertBlock(`> 参考：[${refName.includes("《") ? refName : `《${refName}》`}](doc://${refId})`);
+  const label = refName.includes("《") ? refName : `《${refName}》`;
+  insertBlock(noRef ? `> 参考（仅说明）：[${label}](doc://${refId})` : `> 参考：[${label}](doc://${refId})`);
 });
 
-async function openEditHistory(docId) {
-  const list = $("#edits-list");
-  list.innerHTML = '<div class="doc-pop-empty">读取中…</div>';
-  $("#edits-pop").hidden = false;
+/* ---------- 修改记录页：全库编辑溯源 ---------- */
+
+async function loadEditsLog() {
+  const box = $("#edits-log");
+  if (!box) return;
+  box.innerHTML = '<div class="muted">读取中…</div>';
   try {
-    const resp = await fetch("/api/documents/" + encodeURIComponent(docId) + "/edits");
+    const resp = await fetch("/api/edits");
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "读取失败");
     const edits = data.edits || [];
-    list.innerHTML = edits.length
+    box.innerHTML = edits.length
       ? edits.map((it) => {
           const who = it.editor_name || it.editor || "未知";
+          const name = it.doc_name || "（记录已删除）";
           return `<div class="edits-row"><span class="edits-action">${escapeHtml(it.action || "修改")}</span>` +
+            `<span class="doc-link" data-pv="${escapeAttr(it.doc_id || "")}" title="点击预览">${escapeHtml(name)}</span>` +
+            `<span class="doc-pop-kind">${it.doc_type === "record" ? "运维记录" : "基础文档"}</span>` +
             `<span>${escapeHtml(who)}</span>` +
             `<span class="doc-pop-kind">${escapeHtml(it.edited_at || "")}</span></div>`;
         }).join("")
-      : '<div class="doc-pop-empty">暂无修改记录（创建前的历史记录不追溯）</div>';
+      : '<div class="muted">暂无修改记录（功能上线后的编辑才会追溯）。</div>';
   } catch (err) {
-    list.innerHTML = `<div class="doc-pop-empty">${escapeHtml(String(err.message || err))}</div>`;
+    box.innerHTML = `<div class="muted">${escapeHtml(String(err.message || err))}</div>`;
   }
 }
 
-$("#edits-close").addEventListener("click", () => { $("#edits-pop").hidden = true; });
-$("#edits-pop").addEventListener("click", (e) => {
-  if (e.target === $("#edits-pop")) $("#edits-pop").hidden = true;
-});
+$("#edits-refresh").addEventListener("click", loadEditsLog);
 
 // 正文预览与来源列表里的文档引用：点击直接打开预览
 document.addEventListener("click", (e) => {
   const ref = e.target.closest("[data-doc-pv]");
-  if (ref) { openPreview(ref.dataset.docPv); return; }
-  const hist = e.target.closest("[data-edits]");
-  if (hist) { openEditHistory(hist.dataset.edits); }
+  if (ref) { openPreview(ref.dataset.docPv); }
 });
 
 function normalizeMdFilename() {

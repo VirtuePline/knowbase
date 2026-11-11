@@ -310,8 +310,14 @@ def update_markdown(doc_id: str, req: MarkdownRequest, identity: dict = Depends(
 
 @admin_router.get("/documents/{doc_id}/edits")
 def list_edits(doc_id: str, identity: dict = Depends(require_login)) -> dict:
-    """记录的编辑溯源日志：谁在何时新建 / 修改（新在前）。"""
+    """单条记录的编辑溯源日志（新在前）。"""
     return {"edits": database.list_edit_logs(doc_id)}
+
+
+@admin_router.get("/edits")
+def list_all_edits(limit: int = 100, identity: dict = Depends(require_login)) -> dict:
+    """全库修改记录（修改记录页）：谁在何时新建 / 修改了哪条记录。"""
+    return {"edits": database.list_all_edit_logs(max(1, min(limit, 300)))}
 
 
 class CategoryRequest(BaseModel):
