@@ -28,6 +28,9 @@ async def _lifespan(app: FastAPI):
     if app.state.portal == "admin":
         # 管理端强制认证，旧配置 auth.enabled=false 也不能跳过初始化与登录。
         auth.ensure_admin_user(settings.auth_admin_user, settings.auth_admin_password)
+        # 周报定时生成：守护线程每分钟检查计划时间（幂等，同一周重复到点不会重复生成）
+        from app.services import weekly
+        weekly.start_weekly_scheduler()
     retrieval.load()
     # 预热检索：把嵌入模型首次连接 / 首次推理的开销留在启动阶段，
     # 否则进程启动后的第一个提问要多等约 2 秒

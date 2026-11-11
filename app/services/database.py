@@ -186,6 +186,39 @@ def list_edit_logs(doc_id: str, limit: int = 20) -> list[dict]:
              "action": r.get("action", ""), "edited_at": r.get("edited_at", "")} for r in rows]
 
 
+# ---------- 运维周报（定时生成，按运维人汇总本周记录标题） ----------
+
+def list_record_owners() -> list[str]:
+    """有运维记录的运维人名单（去重），供周报设置勾选。"""
+    try:
+        names = mongo.db().documents.distinct(
+            "uploaded_by_name", {"doc_type": "record", "uploaded_by_name": {"$nin": ["", None]}})
+    except Exception:   # noqa: BLE001
+        return []
+    return sorted({str(n).strip() for n in names if str(n).strip()})
+
+
+def save_weekly_report(week_start: str, person: str, items: list[dict], generated_at: str) -> None:
+    """写入 / 覆盖某人本周的周报（_id = 周起始日:运维人，天然幂等）。"""
+    mongo.db().weekly_reports.replace_one(
+        {"_id": f"{week_start}:{person}"},
+        {"_id": f"{week_start}:{person}", "week_start": week_start, "person": person,
+         "items": items, "generated_at": generated_at},
+        upsert=True,
+    )
+
+
+def has_weekly_report(week_start: str, person: str) -> bool:
+    return mongo.db().weekly_reports.find_one({"_id": f"{week_start}:{person}"}) is not None
+
+
+def list_weekly_reports(limit: int = 12) -> list[dict]:
+    rows = (mongo.db().weekly_reports.find({}, {"_id": 0})
+            .sort("week_start", DESCENDING).limit(limit))
+    return [{"week_start": r.get("week_start", ""), "person": r.get("person", ""),
+             "items": r.get("items", []), "generated_at": r.get("generated_at", "")} for r in rows]
+
+
 # ---------- 厂商清单 ----------
 
 def list_vendors() -> list[str]:

@@ -342,6 +342,29 @@
         问题类型选「厂商系统」时必须选择厂商；删除厂商不影响已保存记录上已填的厂商。
       </div>
     </div>
+
+    <!-- 周报：定时按运维人汇总本周运维记录 -->
+    <div class="panel-card admin-only">
+      <h2>运维周报</h2>
+      <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px">
+        <label style="font-size:13px;display:flex;align-items:center;gap:5px">
+          <input type="checkbox" id="wr-enabled" /> 启用定时生成
+        </label>
+        <select id="wr-weekday" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px">
+          <option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option>
+          <option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="7">每周日</option>
+        </select>
+        <input type="time" id="wr-time" value="18:00" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
+        <button class="ghost" type="button" id="wr-save">保存设置</button>
+        <button class="ghost" type="button" id="wr-generate" title="按当前名单立即生成本周周报（会覆盖本周结果）">立即生成本周</button>
+        <span class="muted" id="wr-status" style="font-size:13px"></span>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">
+        勾选需要生成周报的运维人；到点自动汇总其本周（周一起 7 天）的运维记录标题，每件事不超过 20 字。
+      </div>
+      <div id="wr-owners" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>
+      <div id="wr-reports" style="margin-top:14px"></div>
+    </div>
   </section>
 
   <!-- 账号管理（独立页）：修改密码 / 创建普通账号 / 账号列表 -->
@@ -2187,6 +2210,118 @@ async function refreshSettings() {
   await loadTemplates();
   syncTplEditor();
   renderVendorList();
+  refreshWeeklyReport();
+}
+
+/* ---------- 运维周报：定时设置 + 运维人勾选 + 周报列表 ---------- */
+
+const WR_WEEKDAYS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+let wrOwners = [];        // 可勾选的运维人名单（历史记录去重）
+let wrSelected = new Set();  // 已勾选（需要生成周报）的运维人
+
+async function refreshWeeklyReport() {
+  try {
+    const resp = await fetch("/api/weekly-report/settings");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    wrOwners = data.owners || [];
+    wrSelected = new Set(data.operators || []);
+    $("#wr-enabled").checked = !!data.enabled;
+    $("#wr-weekday").value = String(data.weekday || 5);
+    $("#wr-time").value = data.time || "18:00";
+    renderWrOwners();
+    await loadWeeklyReports();
+  } catch { /* 设置页数据拉取失败不阻断 */ }
+}
+
+function renderWrOwners() {
+  const box = $("#wr-owners");
+  const names = [...new Set([...wrSelected, ...wrOwners])].sort();
+  box.innerHTML = names.length
+    ? names.map((name) => `
+      <label class="wr-owner" style="font-size:13px;display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer">
+        <input type="checkbox" data-wr-owner="${escapeAttr(name)}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(name)}
+      </label>`).join("")
+    : '<span class="muted" style="font-size:13px">暂无运维记录，先在记录里填写运维人后再来勾选。</span>';
+}
+
+$("#wr-owners").addEventListener("change", (e) => {
+  const name = e.target.dataset && e.target.dataset.wrOwner;
+  if (!name) return;
+  e.target.checked ? wrSelected.add(name) : wrSelected.delete(name);
+});
+
+$("#wr-save").addEventListener("click", async () => {
+  const btn = $("#wr-save");
+  btn.disabled = true;
+  $("#wr-status").textContent = "保存中…";
+  try {
+    const resp = await fetch("/api/weekly-report/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: $("#wr-enabled").checked,
+        weekday: Number($("#wr-weekday").value),
+        time: $("#wr-time").value,
+        operators: [...wrSelected],
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "保存失败");
+    $("#wr-status").textContent = "已保存，到点自动生成";
+    toast("周报设置已保存");
+  } catch (err) {
+    $("#wr-status").textContent = "";
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#wr-generate").addEventListener("click", async () => {
+  const btn = $("#wr-generate");
+  btn.disabled = true;
+  $("#wr-status").textContent = "生成中…";
+  try {
+    const resp = await fetch("/api/weekly-reports/generate", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "生成失败");
+    $("#wr-status").textContent = `已生成 ${data.reports.length} 人的本周周报`;
+    toast(`已生成 ${data.reports.length} 人的本周周报`);
+    await loadWeeklyReports();
+  } catch (err) {
+    $("#wr-status").textContent = "";
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function loadWeeklyReports() {
+  try {
+    const resp = await fetch("/api/weekly-reports");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const reports = data.reports || [];
+    const byWeek = new Map();
+    for (const r of reports) {
+      if (!byWeek.has(r.week_start)) byWeek.set(r.week_start, []);
+      byWeek.get(r.week_start).push(r);
+    }
+    $("#wr-reports").innerHTML = [...byWeek.entries()].map(([week, rows]) => `
+      <div style="margin-bottom:14px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px">周报（${escapeHtml(week)} 那周）</div>
+        ${rows.map((r) => `
+          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#fff">
+            <div style="font-size:13px;font-weight:600">${escapeHtml(r.person)}
+              <span class="muted" style="font-weight:400;font-size:12px">· ${r.items.length} 件事 · 生成于 ${escapeHtml(r.generated_at || "")}</span></div>
+            ${r.items.length
+              ? `<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.8">${r.items.map((it) =>
+                  `<li>${escapeHtml(it.date || "")} ${escapeHtml(it.text || "")}</li>`).join("")}</ul>`
+              : '<div class="muted" style="font-size:12px;margin-top:4px">本周没有运维记录</div>'}
+          </div>`).join("")}
+      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，保存设置后到点自动生成，或点「立即生成本周」。</div>';
+  } catch { /* 忽略 */ }
 }
 
 /* ---------- 账号管理：创建普通账号 / 账号列表（账号管理页） ---------- */

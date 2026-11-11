@@ -21,6 +21,7 @@ from app.config import settings
 from app.domain import taxonomy
 from app.services import audit, database, kb, recordmeta
 from app.services import timeline as timeline_service
+from app.services import weekly as weekly_service
 
 # ---------- Search（只读）----------
 search_router = APIRouter(prefix="/api", tags=["search"])
@@ -455,6 +456,39 @@ def save_template(req: TemplateRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class WeeklySettingsRequest(BaseModel):
+    enabled: bool = Field(description="是否启用周报定时生成")
+    weekday: int = Field(description="每周几生成（1=周一 … 7=周日）")
+    time: str = Field(description="生成时间点（HH:MM）")
+    operators: list[str] = Field(default_factory=list, description="需要生成周报的运维人名单")
+
+
+@admin_router.get("/weekly-report/settings")
+def weekly_report_settings() -> dict:
+    """周报定时生成设置 + 可勾选的运维人名单（来自历史运维记录）。"""
+    return {**weekly_service.get_settings(), "owners": database.list_record_owners()}
+
+
+@admin_router.put("/weekly-report/settings")
+def save_weekly_settings(req: WeeklySettingsRequest) -> dict:
+    try:
+        return weekly_service.save_settings(req.enabled, req.weekday, req.time, req.operators)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.get("/weekly-reports")
+def list_weekly_reports(limit: int = 12) -> dict:
+    """最近几周的周报（新在前），每条含运维人与本周事项列表。"""
+    return {"reports": database.list_weekly_reports(max(1, min(limit, 52)))}
+
+
+@admin_router.post("/weekly-reports/generate")
+def generate_weekly_reports() -> dict:
+    """按当前名单立即生成本周周报（重复生成会覆盖本周结果）。"""
+    return {"reports": weekly_service.generate_reports()}
 
 
 @admin_router.delete("/documents/{doc_id}")
