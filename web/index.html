@@ -778,10 +778,12 @@ function renderSources(sources) {
       return `<div class="source web-source">${title}<span class="source-kind">联网参考</span><div class="where web-source-host">${escapeHtml(location)}</div><div class="snip">${snippet}</div></div>`;
     }
     const id = escapeAttr(escapeHtml(String(s.doc_id || "")));
+    const uploadDay = String(s.uploaded_at || "").slice(0, 10);   // 年月日
     return `<div class="source">
       <button type="button" class="who source-name" data-src-pv="${id}" title="点击预览">${name}</button>
       <span class="source-kind">知识库</span>
       <span class="where">${escapeHtml(String(s.location || "全文"))}</span>
+      ${uploadDay ? `<span class="where" title="来源文档上传时间">${uploadDay}</span>` : ""}
       ${renderSourceMetrics(s)}
       ${s.summary ? `<div class="sum">摘要：${escapeHtml(String(s.summary).split("\n")[0])}</div>` : ""}
       <div class="snip">${snippet}</div>

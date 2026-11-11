@@ -25,7 +25,7 @@ from app.domain.taxonomy import (
     is_management_request,
     vendor_hint,
 )
-from app.services.database import answer_penalty_counts, fast_mode_enabled, web_search_runtime_enabled
+from app.services.database import answer_penalty_counts, fast_mode_enabled, uploaded_dates, web_search_runtime_enabled
 from app.services.retrieval_service import retrieval
 
 
@@ -40,6 +40,7 @@ def _source_metrics(hit: ScoredChunk | None) -> dict:
     }
 
 def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
+    uploads = uploaded_dates([hit.chunk.doc_id for hit in hits])
     return [
         SourceRef(
             doc_id=hit.chunk.doc_id,
@@ -49,6 +50,7 @@ def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
             snippet=source_snippet(hit, question=question),
             table=hit.chunk.table,
             summary=hit.chunk.summary,
+            uploaded_at=uploads.get(hit.chunk.doc_id, ""),
             **_source_metrics(hit),
         )
         for hit in hits

@@ -92,6 +92,7 @@ class SourceRef:
     kind: str = "knowledge_base"  # "knowledge_base" | "web"
     url: str = ""                # 联网参考的原始 HTTP(S) 地址
     scoring_method: str = ""       # rrf / web / context；空表示旧来源未注明
+    uploaded_at: str = ""          # 来源文档的上传时间（YYYY-MM-DD HH:MM:SS）；展示取年月日
     rrf_score: float | None = None
     keyword_coverage: float | None = None
     semantic_similarity: float | None = None
@@ -114,6 +115,7 @@ class SourceRef:
             "kind": self.kind,
             "url": self.url,
             "scoring_method": self.scoring_method,
+            "uploaded_at": self.uploaded_at,
             "rrf_score": metric(self.rrf_score),
             "keyword_coverage": metric(self.keyword_coverage),
             "semantic_similarity": metric(self.semantic_similarity),

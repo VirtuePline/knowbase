@@ -186,6 +186,16 @@ def list_edit_logs(doc_id: str, limit: int = 20) -> list[dict]:
              "action": r.get("action", ""), "edited_at": r.get("edited_at", "")} for r in rows]
 
 
+def uploaded_dates(doc_ids) -> dict[str, str]:
+    """批量查询文档上传时间（doc_id -> YYYY-MM-DD HH:MM:SS）；用于回答来源展示。"""
+    ids = [str(d).strip() for d in doc_ids or [] if str(d).strip()]
+    if not ids:
+        return {}
+    return {d["_id"]: str(d.get("uploaded_at", ""))
+            for d in mongo.db().documents.find({"_id": {"$in": list(set(ids))}}, {"uploaded_at": 1})
+            if d.get("uploaded_at")}
+
+
 def list_all_edit_logs(limit: int = 100) -> list[dict]:
     """全库编辑溯源日志（新在前），附带记录名称与类型便于展示跳转。"""
     rows = list(mongo.db().edit_logs.find({}, {"_id": 0}).sort("edited_at", DESCENDING).limit(limit))
