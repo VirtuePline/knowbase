@@ -505,8 +505,8 @@ def save_weekly_settings(req: WeeklySettingsRequest, identity: dict = Depends(re
 
 
 @admin_router.get("/weekly-reports")
-def list_weekly_reports(limit: int = 12) -> dict:
-    """最近几周的周报（新在前），每条含运维人与本周事项列表。"""
+def list_weekly_reports(limit: int = 12, identity: dict = Depends(require_super_admin)) -> dict:
+    """最近几周的周报（新在前），每条含运维人与本周事项列表；仅管理员可见。"""
     return {"reports": database.list_weekly_reports(max(1, min(limit, 52)))}
 
 

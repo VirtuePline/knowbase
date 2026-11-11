@@ -19,7 +19,7 @@
     <button class="tab-btn active" data-tab="chat" aria-current="page">智能问答</button>
     <button class="tab-btn" data-tab="docs" id="docs-tab-btn">文档管理</button>
     <button class="tab-btn" data-tab="timeline">问题时间线</button>
-    <button class="tab-btn" data-tab="weekly">运维周报</button>
+    <button class="tab-btn admin-tab" data-tab="weekly">运维周报</button>
     <button class="tab-btn admin-tab" data-tab="editor">新增运维记录</button>
     <button class="tab-btn admin-tab" data-tab="records">运维记录管理</button>
     <button class="tab-btn admin-tab" data-tab="settings">模板与厂商设置</button>
@@ -2505,7 +2505,7 @@ function updateNavigation(tab) {
 
 const LAST_TAB_KEY = "kb_last_tab";   // 记住最后停留的页签，刷新后原地恢复
 const PUBLIC_TABS = ["chat", "docs", "timeline"];
-const ADMIN_TABS = ["editor", "records", "settings", "accounts", "logs"];
+const ADMIN_TABS = ["editor", "records", "settings", "weekly", "accounts", "logs"];
 
 function lastTab() {
   try { return localStorage.getItem(LAST_TAB_KEY) || ""; } catch { return ""; }
