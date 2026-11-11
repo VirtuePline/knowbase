@@ -2549,9 +2549,9 @@ function mdRedo() {
 function replaceEditorText(next) {
   if (mdSrc.value === next) return;
   mdPushUndo(mdSnapshot());
-  mdSrc.focus();
-  mdSrc.setSelectionRange(0, mdSrc.value.length);
-  if (!document.execCommand("insertText", false, next)) mdSrc.value = next;   // 旧浏览器兜底
+  // 直接赋值，不用 execCommand + focus：预览模式下源码框是隐藏的，
+  // 抢焦点会打断正在标题框进行的输入法组合，把组合中的文本和替换内容交替重复写入
+  mdSrc.value = next;
 }
 
 function setEditorSpan(start, end, replacement, selectStart, selectEnd) {
@@ -3235,18 +3235,23 @@ mdSrc.addEventListener("beforeinput", (event) => {
   mdPushUndo(mdSnapshot(), typing);   // 打字合并为一条撤销记录，命令逐条记录
 });
 ["click", "keyup", "mouseup", "select", "blur"].forEach((event) => mdSrc.addEventListener(event, syncEditorRange));
-mdName.addEventListener("input", () => {
-  setEditorTitle();
+function syncTitleToBody() {
   // 正文仍是未编辑的模板时，标题跟随记录名称；一旦用户改过正文即不再同步
-  if (tplBase) {
-    const title = mdName.value.trim();
-    if (mdSrc.value === withTitle(tplBase, tplTitle)) {
-      replaceEditorText(withTitle(tplBase, title));
-      renderEditorPreview();
-    }
-    tplTitle = title;
+  if (!tplBase) return;
+  const title = mdName.value.trim();
+  if (mdSrc.value === withTitle(tplBase, tplTitle)) {
+    replaceEditorText(withTitle(tplBase, title));
+    renderEditorPreview();
   }
+  tplTitle = title;
+}
+
+mdName.addEventListener("input", (event) => {
+  setEditorTitle();
+  if (event.isComposing) return;   // 输入法组合中不同步，等 compositionend 一次性写入
+  syncTitleToBody();
 });
+mdName.addEventListener("compositionend", syncTitleToBody);
 mdName.addEventListener("blur", normalizeMdFilename);
 
 document.querySelectorAll("[data-md]").forEach((button) => {
