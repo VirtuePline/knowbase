@@ -16,7 +16,7 @@ import time
 from app.services import database
 
 _SETTINGS_KEY = "weekly_report"
-_RESOLVED_LABELS = {"resolved": "已解决", "improving": "处理中", "unresolved": "未解决"}
+_RESOLVED_LABELS = {"resolved": "已解决", "improving": "处理中", "temporary": "临时解决", "unresolved": "未解决"}
 
 
 def get_settings() -> dict:

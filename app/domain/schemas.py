@@ -165,7 +165,7 @@ class DocRecord:
     categories: list[str] = field(default_factory=list)  # 全部分类标签（一条记录可挂多个）；空时回退 [category]
     vendor: str = ""            # 厂商（厂商系统类记录按厂商归类）
     doc_type: str = ""          # doc=基础文档（手册 / 资料等）；record=运维问题记录；空为存量兼容（读取时按常识库→doc、其余→record 补齐）
-    resolved: str = ""          # 录入时选择的解决状态：unresolved=未解决 / improving=改善中 / resolved=已解决；空为未标记（默认未解决）
+    resolved: str = ""          # 录入时选择的解决状态：unresolved=未解决 / improving=处理中 / temporary=临时解决 / resolved=已解决决；空为未标记（默认未解决）
     uploaded_by: str = ""       # 创建记录时的登录账号；旧数据 / 命令行可为空
     uploaded_by_name: str = ""  # 运维人用户名（默认当前登录用户名，可改）；旧数据为空时展示回退账号
     parent_id: str = ""         # 所跟踪的上一条运维记录，创建后不变

@@ -181,6 +181,7 @@
           <select id="rec-resolved" class="cat-select" style="width:auto" title="记录当前的处理状态，时间线徽标按此显示">
             <option value="unresolved">未解决</option>
             <option value="improving">改善中</option>
+            <option value="temporary">临时解决</option>
             <option value="resolved">已解决</option>
           </select>
         </label>
@@ -199,6 +200,7 @@
         <select id="md-resolved" title="是否解决：时间线徽标按此显示；时间线上的人工标记优先于这里的选择">
           <option value="unresolved">未解决</option>
           <option value="improving">改善中</option>
+          <option value="temporary">临时解决</option>
           <option value="resolved">已解决</option>
         </select>
         <div class="md-mode" role="group" aria-label="编辑模式">
@@ -1488,6 +1490,7 @@ function tlDateLabel(date) {
 function tlBadge(resolved) {
   if (resolved === "yes") return '<span class="tl-badge yes">已解决</span>';
   if (resolved === "improving") return '<span class="tl-badge improving">改善中</span>';
+  if (resolved === "temporary") return '<span class="tl-badge temporary">临时解决</span>';
   return '<span class="tl-badge no">未解决</span>';   // 未标记 / 人工未解决 / 结果未知均显示未解决
 }
 
@@ -1495,16 +1498,18 @@ function tlBadge(resolved) {
 function tlEffective(event) {
   if (event.status === "resolved") return "yes";
   if (event.status === "improving") return "improving";
+  if (event.status === "temporary") return "temporary";
   return "no";   // 默认 / 人工未解决 / 结果未知（unknown）均视为未解决
 }
 
 function tlStatusControl(event) {
   const badge = tlBadge(tlEffective(event));
   if (!isAdmin) return badge;
-  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : "";   // 存量 unknown 显示为未解决
+  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "";   // 存量 unknown 显示为未解决
   const options = [
     ["", "未解决（默认）"],
     ["improving", "改善中"],
+    ["temporary", "临时解决"],
     ["resolved", "已解决"],
   ].map(([v, label]) => `<option value="${v}"${v === value ? " selected" : ""}>${label}</option>`).join("");
   return `<select class="tl-status" data-tl-status="${escapeAttr(event.chunk_id)}" data-tl-doc="${escapeAttr(event.doc_id)}" title="标记完成情况">${options}</select>`;
@@ -1604,6 +1609,7 @@ function renderTimelineFilter() {
       { name: "", label: "全部状态", count: issueEvents.length },
       { name: "yes", label: "已解决", count: issueEvents.filter((e) => tlEffective(e) === "yes").length },
       { name: "improving", label: "改善中", count: issueEvents.filter((e) => tlEffective(e) === "improving").length },
+      { name: "temporary", label: "临时解决", count: issueEvents.filter((e) => tlEffective(e) === "temporary").length },
       { name: "no", label: "未解决", count: issueEvents.filter((e) => tlEffective(e) === "no").length },
     ];
     html += statusChips.map((chip) => {

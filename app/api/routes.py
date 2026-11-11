@@ -199,7 +199,7 @@ class MarkdownRequest(BaseModel):
     category: str = Field(default="", description="人工指定的单一问题类型（兼容）；为空时按内容自动归类")
     categories: str = Field(default="", description="多分类标签，| 或逗号分隔；非空时优先于 category")
     vendor: str = Field(default="", description="厂商（厂商系统类记录必填）")
-    resolved: str = Field(default="", description="解决状态：resolved / improving / unresolved；空保留原值")
+    resolved: str = Field(default="", description="解决状态：resolved / improving / temporary / unresolved；空保留原值")
     uploaded_by_name: str = Field(default="", description="运维人用户名（默认当前登录用户名）；仅创建时写入")
     parent_id: str = Field(default="", description="追踪的父运维记录ID；仅创建时设置")
 
@@ -224,7 +224,7 @@ async def upload_document(
     date 为运维记录的问题发生日期（YYYY-MM-DD），入库后作为记录时间展示与时间线排序；
     未选日期时默认取 file_time 的日期部分（文件修改时间）；
     vendor 为厂商系统类记录的厂商（问题类型选「厂商系统」时必填）；
-    resolved 为录入时选择的解决状态（resolved / improving / unresolved），时间线按此显示；
+    resolved 为录入时选择的解决状态（resolved / improving / temporary / unresolved），时间线按此显示；
     operator_name 为运维人用户名，入库时与登录账号分开记录。
     """
     if doc_type not in {"doc", "record"}:
@@ -534,7 +534,7 @@ def rebuild_index() -> dict:
 class EventStatusRequest(BaseModel):
     chunk_id: str = Field(description="事件对应的时间线分块 ID")
     doc_id: str = Field(default="", description="所属文档 ID，便于文档删除时清理标记")
-    status: str = Field(default="", description="resolved / unresolved / unknown；空串清除标记，恢复按内容判定")
+    status: str = Field(default="", description="resolved / unresolved / unknown / improving / temporary；空串清除标记，恢复按内容判定")
 
 
 @admin_router.patch("/timeline/event-status")

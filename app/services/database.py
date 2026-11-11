@@ -105,7 +105,7 @@ def set_uploaded_at(doc_id: str, value: str) -> bool:
 
 
 def set_resolved(doc_id: str, value: str) -> bool:
-    """设置录入时的解决状态（unresolved / improving / resolved）；空串清除标记。"""
+    """设置录入时的解决状态（unresolved / improving / temporary / resolved）；空串清除标记。"""
     return _docs().update_one({"_id": doc_id}, {"$set": {"resolved": value}}).matched_count > 0
 
 
@@ -330,7 +330,7 @@ def delete(doc_id: str) -> bool:
 
 # ---------- 时间线事件的人工状态 ----------
 
-EVENT_STATUSES = ("resolved", "unresolved", "unknown", "improving")
+EVENT_STATUSES = ("resolved", "unresolved", "unknown", "improving", "temporary")
 
 
 def get_event_status_map() -> dict[str, str]:

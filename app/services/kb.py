@@ -32,7 +32,7 @@ _ENCODINGS = ("utf-8-sig", "gb18030", "utf-8")
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 # 录入时可选的解决状态（时间线徽标按此显示；时间线上的人工标记优先级更高）
-RESOLVED_VALUES = ("resolved", "improving", "unresolved")
+RESOLVED_VALUES = ("resolved", "improving", "temporary", "unresolved")
 
 # 上传多分类标签的分隔符（前端「|」连接，容错逗号）
 _CAT_SPLIT = re.compile(r"[|,，、]")

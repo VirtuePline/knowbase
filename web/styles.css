@@ -280,6 +280,7 @@
   .tl-badge.yes { background: #e6f6ec; color: #2e9e5b; }
   .tl-badge.no { background: #fdecea; color: var(--danger); }
   .tl-badge.improving { background: #fff6dd; color: #b7791f; }
+.tl-badge.temporary { background: #fff0e3; color: #c2661f; }
   .tl-badge.unknown { background: #f0f1f4; color: var(--muted); }
   .tl-status {
     border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
