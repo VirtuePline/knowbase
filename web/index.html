@@ -19,11 +19,12 @@
     <button class="tab-btn active" data-tab="chat" aria-current="page">智能问答</button>
     <button class="tab-btn" data-tab="docs" id="docs-tab-btn">文档管理</button>
     <button class="tab-btn" data-tab="timeline">问题时间线</button>
+    <button class="tab-btn" data-tab="weekly">运维周报</button>
     <button class="tab-btn admin-tab" data-tab="editor">新增运维记录</button>
     <button class="tab-btn admin-tab" data-tab="records">运维记录管理</button>
     <button class="tab-btn admin-tab" data-tab="settings">模板与厂商设置</button>
-    <button class="tab-btn admin-tab" data-tab="edits">修改记录</button>
-    <button class="tab-btn admin-tab" data-tab="accounts">账号管理</button>
+    <button class="tab-btn admin-tab super-admin-only" data-tab="edits">修改记录</button>
+    <button class="tab-btn admin-tab super-admin-only" data-tab="accounts">账号管理</button>
     <button class="tab-btn admin-tab" data-tab="logs">操作日志</button>
   </nav>
   <div class="sidebar-note"><span class="sidebar-note-icon" aria-hidden="true">↗</span><strong>让经验持续积累</strong><p>从历史记录中寻找答案，让现场处理更有依据。</p></div>
@@ -337,10 +338,13 @@
         问题类型选「厂商系统」时必须选择厂商；删除厂商不影响已保存记录上已填的厂商。
       </div>
     </div>
+  </section>
 
-    <!-- 周报：定时按运维人汇总本周运维记录 -->
+  <!-- 运维周报（独立导航页）：markdown 周报，记录引用可点击预览；生成设置仅管理员可见 -->
+  <section class="tab" id="tab-weekly">
+    <div class="page-heading"><h1>运维周报</h1><p>按运维人汇总每周的处理记录，每条标明是否解决了什么问题，点击记录名可打开预览。</p></div>
     <div class="panel-card admin-only">
-      <h2>运维周报</h2>
+      <h2>周报生成设置</h2>
       <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px">
         <label style="font-size:13px;display:flex;align-items:center;gap:5px">
           <input type="checkbox" id="wr-enabled" /> 启用定时生成
@@ -355,15 +359,21 @@
         <span class="muted" id="wr-status" style="font-size:13px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:8px">
-        勾选需要生成周报的运维人；到点自动汇总其本周（周一起 7 天）的运维记录标题，每件事不超过 20 字。
+        勾选需要生成周报的运维人；到点自动汇总其本周（周一起 7 天）的运维记录，markdown 格式存入数据库，每条标明解决状态。
       </div>
       <div id="wr-owners" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>
-      <div id="wr-reports" style="margin-top:14px"></div>
+    </div>
+    <div class="panel-card">
+      <div class="row" style="align-items:center;margin-bottom:8px">
+        <h2 style="margin:0">周报列表</h2>
+        <button class="ghost" type="button" id="wr-refresh">刷新</button>
+      </div>
+      <div id="wr-reports"></div>
     </div>
   </section>
 
   <!-- 账号管理（独立页）：修改密码 / 创建普通账号 / 账号列表 -->
-  <section class="tab" id="tab-accounts">
+  <section class="tab super-admin-only" id="tab-accounts">
     <div class="page-heading"><h1>账号管理</h1><p>管理员创建成员账号并维护账号列表；修改自己的密码请用侧边栏「修改密码」入口。</p></div>
     <div class="panel-card admin-only">
       <h2>账号管理</h2>
@@ -1023,6 +1033,14 @@ let docView = "date";          // "date" 按年月日分组 | "category" 按分�
 let docCatFilter = "";
 const collapsedMonths = new Set();   // 日期视图里被收起的月份，重渲染后保持状态
 let isAdmin = false;          // 兼容旧名：已登录并可写（包括普通账号）
+let isSuperAdmin = false;     // 管理员账号（role=admin）：独占账号管理与修改记录页
+
+// 按角色显隐管理员专属导航与页面（inline style 优先级高于样式表，避免 .active 覆盖 hidden）
+function applyRoleVisibility() {
+  document.querySelectorAll(".super-admin-only").forEach((el) => {
+    el.style.display = isSuperAdmin ? "" : "none";
+  });
+}
 let isAccountAdmin = false;   // 账号管理员：可创建普通账号
 let currentUser = "";          // 稳定英文账号，用于身份标识
 let currentDisplayName = "";   // 可包含中文，仅用于展示
@@ -2219,7 +2237,6 @@ async function refreshSettings() {
   await loadTemplates();
   syncTplEditor();
   renderVendorList();
-  refreshWeeklyReport();
 }
 
 /* ---------- 运维周报：定时设置 + 运维人勾选 + 周报列表 ---------- */
@@ -2306,6 +2323,16 @@ $("#wr-generate").addEventListener("click", async () => {
   }
 });
 
+function weeklyFallbackMarkdown(r) {
+  // 旧版周报（无 markdown 字段）用 items 现场拼一份兼容渲染
+  const lines = [`# ${r.person} 的运维周报`, ""];
+  for (const it of r.items || []) {
+    lines.push(`- [${it.doc_name || "未命名记录"}](doc://${it.doc_id || ""})（${it.date || ""}）`);
+  }
+  if (!(r.items || []).length) lines.push("本周没有运维记录。");
+  return lines.join("\n");
+}
+
 async function loadWeeklyReports() {
   try {
     const resp = await fetch("/api/weekly-reports");
@@ -2318,16 +2345,12 @@ async function loadWeeklyReports() {
       byWeek.get(r.week_start).push(r);
     }
     $("#wr-reports").innerHTML = [...byWeek.entries()].map(([week, rows]) => `
-      <div style="margin-bottom:14px">
+      <div style="margin-bottom:16px">
         <div style="font-size:13px;font-weight:600;margin-bottom:6px">周报（${escapeHtml(week)} 那周）</div>
         ${rows.map((r) => `
-          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#fff">
-            <div style="font-size:13px;font-weight:600">${escapeHtml(r.person)}
-              <span class="muted" style="font-weight:400;font-size:12px">· ${r.items.length} 件事 · 生成于 ${escapeHtml(r.generated_at || "")}</span></div>
-            ${r.items.length
-              ? `<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.8">${r.items.map((it) =>
-                  `<li>${escapeHtml(it.date || "")} ${escapeHtml(it.text || "")}</li>`).join("")}</ul>`
-              : '<div class="muted" style="font-size:12px;margin-top:4px">本周没有运维记录</div>'}
+          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:8px;background:#fff">
+            <div class="md" style="font-size:13.5px">${renderMarkdown(r.markdown || weeklyFallbackMarkdown(r))}</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">生成于 ${escapeHtml(r.generated_at || "")}</div>
           </div>`).join("")}
       </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，保存设置后到点自动生成，或点「立即生成本周」。</div>';
   } catch { /* 忽略 */ }
@@ -2482,6 +2505,7 @@ function switchTo(tab, { preserveEditor = false } = {}) {
   if (tab === "editor") { loadRecordList(); loadVendors(); }
   if (tab === "records") loadRecordList();
   if (tab === "settings") refreshSettings();
+  if (tab === "weekly") refreshWeeklyReport();
   if (tab === "edits") loadEditsLog();
   if (tab === "accounts") loadUsers();
   if (tab === "logs") { auditPage = 1; loadAuditLogs(); }
@@ -3787,6 +3811,7 @@ async function initPage() {
     authEnabled = data.auth === true;
     isAdmin = portal === "admin" && (data.authenticated === true || data.admin === true);
     isAccountAdmin = isAdmin && data.role === "admin" && data.can_register === true;
+    applyRoleVisibility();
     currentUser = isAdmin ? String(data.account || data.user || "") : "";
     currentDisplayName = isAdmin ? String(data.display_name || data.username || currentUser) : "";
     if (portal === "admin" && !isAdmin) { window.location.replace("/login"); return; }
@@ -3795,6 +3820,7 @@ async function initPage() {
     portal = "search";
     isAdmin = false;
     isAccountAdmin = false;
+    applyRoleVisibility();
     currentUser = "";
     currentDisplayName = "";
   }

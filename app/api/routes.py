@@ -162,6 +162,13 @@ def download_document(doc_id: str) -> FileResponse:
 require_admin = require_login
 
 
+def require_super_admin(identity: dict = Depends(require_login)) -> dict:
+    """仅管理员账号（role=admin）：账号管理、全库修改记录与周报生成设置。"""
+    if identity.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
+    return identity
+
+
 # ---------- Admin（读写，需先登录）----------
 admin_router = APIRouter(prefix="/api", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -315,7 +322,7 @@ def list_edits(doc_id: str, identity: dict = Depends(require_login)) -> dict:
 
 
 @admin_router.get("/edits")
-def list_all_edits(limit: int = 100, identity: dict = Depends(require_login)) -> dict:
+def list_all_edits(limit: int = 100, identity: dict = Depends(require_super_admin)) -> dict:
     """全库修改记录（修改记录页）：谁在何时新建 / 修改了哪条记录。"""
     return {"edits": database.list_all_edit_logs(max(1, min(limit, 300)))}
 
@@ -472,13 +479,13 @@ class WeeklySettingsRequest(BaseModel):
 
 
 @admin_router.get("/weekly-report/settings")
-def weekly_report_settings() -> dict:
+def weekly_report_settings(identity: dict = Depends(require_super_admin)) -> dict:
     """周报定时生成设置 + 可勾选的运维人名单（来自历史运维记录）。"""
     return {**weekly_service.get_settings(), "owners": database.list_record_owners()}
 
 
 @admin_router.put("/weekly-report/settings")
-def save_weekly_settings(req: WeeklySettingsRequest) -> dict:
+def save_weekly_settings(req: WeeklySettingsRequest, identity: dict = Depends(require_super_admin)) -> dict:
     try:
         return weekly_service.save_settings(req.enabled, req.weekday, req.time, req.operators)
     except ValueError as exc:
@@ -492,7 +499,7 @@ def list_weekly_reports(limit: int = 12) -> dict:
 
 
 @admin_router.post("/weekly-reports/generate")
-def generate_weekly_reports() -> dict:
+def generate_weekly_reports(identity: dict = Depends(require_super_admin)) -> dict:
     """按当前名单立即生成本周周报（重复生成会覆盖本周结果）。"""
     return {"reports": weekly_service.generate_reports()}
 

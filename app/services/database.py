@@ -221,12 +221,13 @@ def list_record_owners() -> list[str]:
     return sorted({str(n).strip() for n in names if str(n).strip()})
 
 
-def save_weekly_report(week_start: str, person: str, items: list[dict], generated_at: str) -> None:
+def save_weekly_report(week_start: str, person: str, items: list[dict], generated_at: str,
+                       markdown: str = "") -> None:
     """写入 / 覆盖某人本周的周报（_id = 周起始日:运维人，天然幂等）。"""
     mongo.db().weekly_reports.replace_one(
         {"_id": f"{week_start}:{person}"},
         {"_id": f"{week_start}:{person}", "week_start": week_start, "person": person,
-         "items": items, "generated_at": generated_at},
+         "items": items, "markdown": markdown, "generated_at": generated_at},
         upsert=True,
     )
 
@@ -239,7 +240,8 @@ def list_weekly_reports(limit: int = 12) -> list[dict]:
     rows = (mongo.db().weekly_reports.find({}, {"_id": 0})
             .sort("week_start", DESCENDING).limit(limit))
     return [{"week_start": r.get("week_start", ""), "person": r.get("person", ""),
-             "items": r.get("items", []), "generated_at": r.get("generated_at", "")} for r in rows]
+             "items": r.get("items", []), "markdown": r.get("markdown", ""),
+             "generated_at": r.get("generated_at", "")} for r in rows]
 
 
 # ---------- 厂商清单 ----------

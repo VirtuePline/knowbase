@@ -1,7 +1,9 @@
-"""运维周报：按运维人汇总本周运维记录，定时生成，每件事压缩到 20 字以内。
+"""运维周报：按运维人汇总本周运维记录，定时生成，markdown 格式。
 
 - 周报设置存 app_settings（weekly_report）：enabled / weekday(1=周一) / time / operators 名单。
-- 周报存 weekly_reports 集合（_id = 周起始日:运维人，重复生成幂等覆盖）。
+- 周报存 weekly_reports 集合（_id = 周起始日:运维人，重复生成幂等覆盖）：
+  items 为记录明细，markdown 为渲染好的周报正文（文档名带 doc:// 引用，web 端可点击预览）。
+- 每条记录以文档引用开头，文档名后跟日期与解决状态；以 20 字为简短目标但不硬截断，把话说完。
 - 调度：管理端启动一个守护线程，每分钟检查一次是否到达计划时间；到达且本周未生成时生成。
 """
 from __future__ import annotations
@@ -14,7 +16,7 @@ import time
 from app.services import database
 
 _SETTINGS_KEY = "weekly_report"
-_ITEM_MAX_CHARS = 20   # 每件事最多保留的字数
+_RESOLVED_LABELS = {"resolved": "已解决", "improving": "处理中", "unresolved": "未解决"}
 
 
 def get_settings() -> dict:
@@ -59,7 +61,7 @@ def week_start(day: datetime.date | None = None) -> str:
 
 
 def collect_records(week_start: str, person: str) -> list[dict]:
-    """某人本周（week_start 起 7 天内）的运维记录，按时间倒序。"""
+    """某人本周（week_start 起 7 天内）的运维记录，按时间倒序；标题完整保留。"""
     end = (datetime.date.fromisoformat(week_start) + datetime.timedelta(days=7)).isoformat()
     items = []
     for doc in database.list_all():
@@ -71,10 +73,25 @@ def collect_records(week_start: str, person: str) -> list[dict]:
         day = (doc.uploaded_at or "")[:10]
         if not (week_start <= day < end):
             continue
-        items.append({"date": day, "text": (doc.name or "").strip()[:_ITEM_MAX_CHARS],
-                      "doc_id": doc.id})
+        items.append({"doc_id": doc.id, "doc_name": (doc.name or "").strip(), "date": day,
+                      "resolved": _RESOLVED_LABELS.get(doc.resolved, "")})
     items.sort(key=lambda x: x["date"], reverse=True)
     return items
+
+
+def render_markdown(week: str, person: str, items: list[dict]) -> str:
+    """周报 markdown：每条记录用文档引用（web 端可点击预览），文档名后跟日期与解决状态。"""
+    end = (datetime.date.fromisoformat(week) + datetime.timedelta(days=6)).isoformat()
+    lines = [f"# {person} 的运维周报（{week} ~ {end}）", ""]
+    if items:
+        for it in items:
+            name = it.get("doc_name") or "未命名记录"
+            status = it.get("resolved") or ""
+            tail = f"（{it.get('date', '')}）{status}".strip()
+            lines.append(f"- [{name}](doc://{it.get('doc_id', '')}){tail}")
+    else:
+        lines.append("本周没有运维记录。")
+    return "\n".join(lines) + "\n"
 
 
 def generate_reports(week: str | None = None, operators: list[str] | None = None) -> list[dict]:
@@ -85,9 +102,10 @@ def generate_reports(week: str | None = None, operators: list[str] | None = None
     results = []
     for person in targets:
         items = collect_records(week, person)
-        database.save_weekly_report(week, person, items, generated_at)
+        markdown = render_markdown(week, person, items)
+        database.save_weekly_report(week, person, items, generated_at, markdown=markdown)
         results.append({"week_start": week, "person": person, "items": items,
-                        "generated_at": generated_at})
+                        "markdown": markdown, "generated_at": generated_at})
     return results
 
 
