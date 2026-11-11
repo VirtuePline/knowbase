@@ -92,9 +92,39 @@ class WeeklyScheduleTest(unittest.TestCase):
         items = [{"doc_id": "a1", "doc_name": "扫码枪扫不上", "date": "2026-11-11", "resolved": "未解决"}]
         md = weekly.render_markdown("2026-11-09", "张三", items)
         self.assertIn("[扫码枪扫不上](doc://a1)（2026-11-11）未解决", md)
+        self.assertIn("## 本周处理记录", md)
         self.assertTrue(md.startswith("# 张三 的运维周报"))
         empty = weekly.render_markdown("2026-11-09", "李四", [])
         self.assertIn("本周没有运维记录", empty)
+
+    def test_render_markdown_prefers_llm_summary(self):
+        items = [{"doc_id": "a1", "doc_name": "扫码枪扫不上", "date": "2026-11-11", "resolved": "已解决"}]
+        md = weekly.render_markdown("2026-11-09", "张三", items, summary="本周完成了扫码枪排查。")
+        self.assertIn("本周完成了扫码枪排查。", md)
+        self.assertNotIn("小结生成失败", md)
+        fallback = weekly.render_markdown("2026-11-09", "张三", items, summary="")
+        self.assertIn("小结生成失败", fallback)
+
+    def test_summarize_without_entries_skips_llm(self):
+        with patch.object(weekly, "_record_content", return_value=""), \
+                patch.object(weekly.llm_client, "chat") as chat_mock:
+            self.assertEqual(weekly.summarize("张三", "2026-11-09", [{"doc_id": "a1"}]), "")
+            chat_mock.assert_not_called()
+
+    def test_summarize_reads_records_and_returns_reply(self):
+        items = [{"doc_id": "a1", "doc_name": "扫码枪扫不上", "date": "2026-11-11", "resolved": "已解决"}]
+        with patch.object(weekly, "_record_content", return_value="检查扫码枪线缆。"), \
+                patch.object(weekly.llm_client, "chat", return_value="本周修复了扫码枪。") as chat_mock:
+            self.assertEqual(weekly.summarize("张三", "2026-11-09", items), "本周修复了扫码枪。")
+            user_arg = chat_mock.call_args.args[1]
+            self.assertIn("扫码枪扫不上", user_arg)
+            self.assertIn("检查扫码枪线缆。", user_arg)
+
+    def test_summarize_llm_failure_returns_empty(self):
+        items = [{"doc_id": "a1", "doc_name": "x", "date": "2026-11-11", "resolved": ""}]
+        with patch.object(weekly, "_record_content", return_value="正文"), \
+                patch.object(weekly.llm_client, "chat", side_effect=RuntimeError("boom")):
+            self.assertEqual(weekly.summarize("张三", "2026-11-09", items), "")
 
     def test_skips_before_planned_time_and_weekday(self):
         # 周五 17:00：未到计划时间点

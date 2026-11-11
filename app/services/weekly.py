@@ -1,9 +1,10 @@
 """运维周报：按运维人汇总本周运维记录，定时生成，markdown 格式。
 
 - 周报设置存 app_settings（weekly_report）：enabled / weekday(1=周一) / time / operators 名单。
-- 周报存 weekly_reports 集合（_id = 周起始日:运维人，重复生成幂等覆盖）：
-  items 为记录明细，markdown 为渲染好的周报正文（文档名带 doc:// 引用，web 端可点击预览）。
-- 每条记录以文档引用开头，文档名后跟日期与解决状态；以 20 字为简短目标但不硬截断，把话说完。
+- 周报存 weekly_reports 集合（_id = 周起始日:运维人，重复生成幂等覆盖）。
+- 正文以 LLM 小结为主：阅读本周全部记录原文后写总结，最后列出引用的文档（doc:// 可点击预览）；
+  LLM 未配置或调用失败时回退为记录清单。
+- 本人可生成自己的周报；管理员可生成名单内所有人。
 - 调度：管理端启动一个守护线程，每分钟检查一次是否到达计划时间；到达且本周未生成时生成。
 """
 from __future__ import annotations
@@ -13,10 +14,12 @@ import json
 import threading
 import time
 
-from app.services import database
+from app.core.llm import client as llm_client
+from app.services import database, kb
 
 _SETTINGS_KEY = "weekly_report"
 _RESOLVED_LABELS = {"resolved": "已解决", "improving": "处理中", "temporary": "临时解决", "unresolved": "未解决"}
+_CONTENT_LIMIT = 6000   # 单条记录正文截断长度，避免超出模型上下文
 
 
 def get_settings() -> dict:
@@ -79,18 +82,54 @@ def collect_records(week_start: str, person: str) -> list[dict]:
     return items
 
 
-def render_markdown(week: str, person: str, items: list[dict]) -> str:
-    """周报 markdown：每条记录用文档引用（web 端可点击预览），文档名后跟日期与解决状态。"""
+_WEEKLY_PROMPT = """你是工厂运维团队的周报撰写助手。请阅读某位运维人本周的全部处理记录原文，写一段周报小结。
+
+要求：
+1. 概括本周主要处理了什么、解决了哪些问题、还有什么遗留；按「问题 → 处理与结果」组织，不要逐条罗列标题。
+2. 只使用记录原文中的设备、故障、处理步骤与结果，不要推测或补充记录里没有的内容。
+3. 中文，250~400 字，直接输出小结正文；不要标题、不要客套话、不要列表。"""
+
+
+def _record_content(doc_id: str) -> str:
+    """读取记录原文（Markdown 存档）；读取失败返回空串。"""
+    try:
+        path, _name = kb.source_file(doc_id)
+        return path.read_text(encoding="utf-8", errors="replace").strip()[:_CONTENT_LIMIT]
+    except Exception:   # noqa: BLE001  记录缺失或为旧导入文件时不阻断周报生成
+        return ""
+
+
+def summarize(person: str, week: str, items: list[dict]) -> str:
+    """LLM 阅读本周全部记录正文后的小结；无记录或调用失败返回空串（由清单兜底）。"""
+    entries = []
+    for it in items:
+        content = _record_content(it.get("doc_id", ""))
+        if not content:
+            continue
+        label = it.get("doc_name") or "未命名"
+        status = it.get("resolved") or "未标记"
+        entries.append(f"【{label}】（{it.get('date', '')}，{status}）\n{content}")
+    if not entries:
+        return ""
+    user = f"运维人：{person}（{week} 那周，共 {len(entries)} 条记录）\n\n" + "\n\n".join(entries)
+    try:
+        return llm_client.chat(_WEEKLY_PROMPT, user).strip()
+    except Exception:   # noqa: BLE001  LLM 未配置或失败不阻断周报生成
+        return ""
+
+
+def render_markdown(week: str, person: str, items: list[dict], summary: str = "") -> str:
+    """周报 markdown：正文以 LLM 小结为主，最后列出引用文档（doc:// 可点击预览）。"""
     end = (datetime.date.fromisoformat(week) + datetime.timedelta(days=6)).isoformat()
     lines = [f"# {person} 的运维周报（{week} ~ {end}）", ""]
-    if items:
-        for it in items:
-            name = it.get("doc_name") or "未命名记录"
-            status = it.get("resolved") or ""
-            tail = f"（{it.get('date', '')}）{status}".strip()
-            lines.append(f"- [{name}](doc://{it.get('doc_id', '')}){tail}")
-    else:
-        lines.append("本周没有运维记录。")
+    if not items:
+        return "\n".join([*lines, "本周没有运维记录。", ""]) + "\n"
+    lines.append(summary.strip() or "（本周小结生成失败，以下为本周记录清单。）")
+    lines += ["", "## 本周处理记录"]
+    for it in items:
+        name = it.get("doc_name") or "未命名记录"
+        tail = f"（{it.get('date', '')}）{it.get('resolved') or ''}".strip()
+        lines.append(f"- [{name}](doc://{it.get('doc_id', '')}){tail}")
     return "\n".join(lines) + "\n"
 
 
@@ -102,10 +141,12 @@ def generate_reports(week: str | None = None, operators: list[str] | None = None
     results = []
     for person in targets:
         items = collect_records(week, person)
-        markdown = render_markdown(week, person, items)
+        summary = summarize(person, week, items)
+        markdown = render_markdown(week, person, items, summary)
         database.save_weekly_report(week, person, items, generated_at, markdown=markdown)
         results.append({"week_start": week, "person": person, "items": items,
-                        "markdown": markdown, "generated_at": generated_at})
+                        "markdown": markdown, "summary": summary or "",
+                        "generated_at": generated_at})
     return results
 
 

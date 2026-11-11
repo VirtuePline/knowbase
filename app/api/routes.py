@@ -505,14 +505,23 @@ def save_weekly_settings(req: WeeklySettingsRequest, identity: dict = Depends(re
 
 
 @admin_router.get("/weekly-reports")
-def list_weekly_reports(limit: int = 12, identity: dict = Depends(require_super_admin)) -> dict:
-    """最近几周的周报（新在前），每条含运维人与本周事项列表；仅管理员可见。"""
-    return {"reports": database.list_weekly_reports(max(1, min(limit, 52)))}
+def list_weekly_reports(limit: int = 12, identity: dict = Depends(require_login)) -> dict:
+    """周报列表（新在前）：管理员看全部，普通账号只看本人的。"""
+    reports = database.list_weekly_reports(max(1, min(limit, 52)))
+    if identity.get("role") != "admin":
+        mine = {identity.get("display_name") or "", identity.get("username") or ""}
+        reports = [r for r in reports if r.get("person") in mine]
+    return {"reports": reports}
 
 
 @admin_router.post("/weekly-reports/generate")
-def generate_weekly_reports(identity: dict = Depends(require_super_admin)) -> dict:
-    """按当前名单立即生成本周周报（重复生成会覆盖本周结果）。"""
+def generate_weekly_reports(identity: dict = Depends(require_login)) -> dict:
+    """生成本周周报：普通账号仅生成自己的，管理员生成名单内所有人。"""
+    if identity.get("role") != "admin":
+        me = (identity.get("display_name") or identity.get("username") or "").strip()
+        if not me:
+            raise HTTPException(status_code=400, detail="当前账号没有可用的用户名，无法定位本人记录")
+        return {"reports": weekly_service.generate_reports(operators=[me])}
     return {"reports": weekly_service.generate_reports()}
 
 

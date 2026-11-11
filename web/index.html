@@ -357,7 +357,6 @@
         </select>
         <input type="time" id="wr-time" value="18:00" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
         <button class="ghost" type="button" id="wr-save">保存设置</button>
-        <button class="ghost" type="button" id="wr-generate" title="按当前名单立即生成本周周报（会覆盖本周结果）">立即生成本周</button>
         <span class="muted" id="wr-status" style="font-size:13px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:8px">
@@ -368,7 +367,9 @@
     <div class="panel-card">
       <div class="row" style="align-items:center;margin-bottom:8px">
         <h2 style="margin:0">周报列表</h2>
+        <button class="ghost" type="button" id="wr-generate" title="生成本周周报（本人），管理员生成名单内所有人；重复生成会覆盖本周结果">生成本周周报</button>
         <button class="ghost" type="button" id="wr-refresh">刷新</button>
+        <span class="muted" style="font-size:12px">点「查看」阅读周报正文，正文由 AI 阅读本周记录后总结</span>
       </div>
       <div id="wr-reports"></div>
     </div>
@@ -2272,6 +2273,9 @@ let wrOwners = [];        // 可勾选的运维人名单（历史记录去重）
 let wrSelected = new Set();  // 已勾选（需要生成周报）的运维人
 
 async function refreshWeeklyReport() {
+  loadWeeklyReports();
+  $("#wr-generate").textContent = isSuperAdmin ? "立即生成全部" : "生成本周周报";
+  if (!isSuperAdmin) return;   // 定时设置与名单仅管理员可见
   try {
     const resp = await fetch("/api/weekly-report/settings");
     if (!resp.ok) return;
@@ -2282,8 +2286,7 @@ async function refreshWeeklyReport() {
     $("#wr-weekday").value = String(data.weekday || 5);
     $("#wr-time").value = data.time || "18:00";
     renderWrOwners();
-    await loadWeeklyReports();
-  } catch { /* 设置页数据拉取失败不阻断 */ }
+  } catch { /* 设置拉取失败不阻断列表 */ }
 }
 
 function renderWrOwners() {
@@ -2365,22 +2368,28 @@ async function loadWeeklyReports() {
     if (!resp.ok) return;
     const data = await resp.json();
     const reports = data.reports || [];
-    const byWeek = new Map();
-    for (const r of reports) {
-      if (!byWeek.has(r.week_start)) byWeek.set(r.week_start, []);
-      byWeek.get(r.week_start).push(r);
-    }
-    $("#wr-reports").innerHTML = [...byWeek.entries()].map(([week, rows]) => `
-      <div style="margin-bottom:16px">
-        <div style="font-size:13px;font-weight:600;margin-bottom:6px">周报（${escapeHtml(week)} 那周）</div>
-        ${rows.map((r) => `
-          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:8px;background:#fff">
-            <div class="md" style="font-size:13.5px">${renderMarkdown(r.markdown || weeklyFallbackMarkdown(r))}</div>
-            <div class="muted" style="font-size:12px;margin-top:6px">生成于 ${escapeHtml(r.generated_at || "")}</div>
-          </div>`).join("")}
-      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，保存设置后到点自动生成，或点「立即生成本周」。</div>';
+    $("#wr-reports").innerHTML = reports.map((r) => `
+      <div class="wr-card" style="border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:#fff;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 12px">
+          <span style="font-size:13.5px;font-weight:600">${escapeHtml(r.person)}</span>
+          <span class="muted" style="font-size:12px">${escapeHtml(r.week_start)} 那周 · ${(r.items || []).length} 条记录 · 生成于 ${escapeHtml(r.generated_at || "")}</span>
+          <button class="ghost" type="button" data-wr-toggle style="margin-left:auto;font-size:12px;padding:3px 10px">查看</button>
+        </div>
+        <div class="wr-detail" hidden style="border-top:1px solid var(--line);padding:10px 14px">
+          <div class="md" style="font-size:13.5px">${renderMarkdown(r.markdown || weeklyFallbackMarkdown(r))}</div>
+        </div>
+      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，到点自动生成，或点「生成本周周报」。</div>';
   } catch { /* 忽略 */ }
 }
+
+// 周报列表：点「查看」展开正文，再点收起
+$("#wr-reports").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-wr-toggle]");
+  if (!btn) return;
+  const detail = btn.closest(".wr-card").querySelector(".wr-detail");
+  detail.hidden = !detail.hidden;
+  btn.textContent = detail.hidden ? "查看" : "收起";
+});
 
 /* ---------- 账号管理：创建普通账号 / 账号列表（账号管理页） ---------- */
 const regAccountInput = $("#reg-account");
