@@ -969,12 +969,32 @@ questionBox.addEventListener("keydown", (e) => {
   // Enter 直接发送；Shift+Enter 换行
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(questionBox.value); }
 });
-document.querySelectorAll(".hint").forEach((el) => {
-  el.addEventListener("click", () => {
-    hintsBox.style.display = "none";
-    ask(el.textContent);
-  });
+// 快捷问题点击直接提问（事件委托，支持动态替换为热门问题）
+hintsBox.addEventListener("click", (e) => {
+  const el = e.target.closest(".hint");
+  if (!el) return;
+  hintsBox.style.display = "none";
+  ask(el.textContent);
 });
+
+// 首页快捷问题：展示最近 7 天提问最多的 4 个问题；无数据时保留默认
+async function loadTopQuestions() {
+  try {
+    const resp = await fetch("/api/questions/top");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const qs = (data.questions || []).filter((q) => q.question).slice(0, 4);
+    if (!qs.length) return;
+    hintsBox.querySelectorAll(".hint").forEach((b) => b.remove());
+    for (const q of qs) {
+      const btn = document.createElement("button");
+      btn.className = "hint";
+      btn.type = "button";
+      btn.textContent = q.question;
+      hintsBox.appendChild(btn);
+    }
+  } catch { /* 网络异常时保留默认快捷问题 */ }
+}
 
 /* ---------- 图片提问：图片先挂在输入框，用户可补描述，发送时才识别 ----------
    图片支持在聊天框 Ctrl+V 粘贴或直接拖进来，不再放单独的导入按钮 */
@@ -3812,6 +3832,7 @@ async function initPage() {
     isAdmin = portal === "admin" && (data.authenticated === true || data.admin === true);
     isAccountAdmin = isAdmin && data.role === "admin" && data.can_register === true;
     applyRoleVisibility();
+    loadTopQuestions();
     currentUser = isAdmin ? String(data.account || data.user || "") : "";
     currentDisplayName = isAdmin ? String(data.display_name || data.username || currentUser) : "";
     if (portal === "admin" && !isAdmin) { window.location.replace("/login"); return; }

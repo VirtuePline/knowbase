@@ -356,3 +356,25 @@ CN_TZ = timezone(timedelta(hours=8))
 
 def now_iso() -> str:
     return datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ---------- 提问频率统计（最近 N 天热门问题，驱动首页快捷问题） ----------
+
+def record_question(question: str) -> None:
+    """记录一次提问：按归一化文本累加计数并刷新最后提问时间。"""
+    q = "".join(str(question or "").split())[:40]
+    if not q:
+        return
+    mongo.db().question_stats.update_one(
+        {"question": q},
+        {"$inc": {"count": 1}, "$set": {"last_at": now_iso()}},
+        upsert=True,
+    )
+
+
+def top_questions(days: int = 7, limit: int = 4) -> list[dict]:
+    """最近 days 天内提问次数最多的问题（按计数倒序）。"""
+    since = (datetime.now(CN_TZ) - timedelta(days=max(1, days))).strftime("%Y-%m-%d %H:%M:%S")
+    rows = (mongo.db().question_stats.find({"last_at": {"$gte": since}}, {"_id": 0})
+            .sort("count", DESCENDING).limit(max(1, limit)))
+    return [{"question": r.get("question", ""), "count": r.get("count", 0)} for r in rows]

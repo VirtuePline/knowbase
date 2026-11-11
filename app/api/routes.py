@@ -44,6 +44,12 @@ def chat(req: ChatRequest) -> dict:
             fast_mode=req.fast_mode, llm_polish=req.llm_polish, web_search=req.web_search,
             rejected_doc_ids=req.reject_doc_ids,
         ).to_dict()
+        # 提问频率统计（用于首页「从一个问题开始」展示最近 7 天热门问题）
+        if result.get("status") != "error":
+            try:
+                database.record_question(req.question)
+            except Exception:   # noqa: BLE001
+                pass
         if req.reject_doc_ids:
             # 否决来源计入惩罚参数（持久化，后续提问持续降权）；记录失败不影响本次回答
             try:
@@ -86,6 +92,12 @@ async def chat_image(image: UploadFile = File(...)) -> dict:
     if not question:
         raise HTTPException(status_code=502, detail="图片识别结果为空，请换个角度拍摄或直接文字描述")
     return {"question": question}
+
+
+@search_router.get("/questions/top")
+def questions_top(limit: int = 4, days: int = 7) -> dict:
+    """最近 days 天提问最多的问题（首页快捷问题数据源）。"""
+    return {"questions": database.top_questions(max(1, min(days, 90)), max(1, min(limit, 8)))}
 
 
 @search_router.get("/health")
