@@ -48,6 +48,29 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self._load(BASE, "retrieval:\n  min_coverge: 0.5\n")
 
+    def test_retired_retrieval_key_in_base_is_ignored_with_warning(self):
+        legacy_base = BASE.replace("  top_k: 6", "  top_k: 6\n  weak_signal_rerank_factor: 2.0")
+        expected = self._load(BASE)
+        with self.assertLogs("app.config", level="WARNING") as logs:
+            actual = self._load(legacy_base)
+        self.assertEqual(actual, expected, "已退役参数不能恢复旧检索规则或改变当前设置")
+        self.assertIn("retrieval.weak_signal_rerank_factor", "\n".join(logs.output))
+
+    def test_retired_retrieval_key_in_local_is_ignored_with_warning(self):
+        with self.assertLogs("app.config", level="WARNING"):
+            actual = self._load(BASE, "retrieval:\n  weak_signal_rerank_factor: 2.0\n  top_k: 3\n")
+        expected = self._load(BASE, "retrieval:\n  top_k: 3\n")
+        self.assertEqual(actual, expected, "有效覆盖值仍然生效")
+
+    def test_retired_key_does_not_hide_unknown_keys(self):
+        with self.assertLogs("app.config", level="WARNING"):
+            with self.assertRaises(ConfigError):
+                self._load(BASE, "retrieval:\n  weak_signal_rerank_factor: 2.0\n  min_coverge: 0.5\n")
+
+    def test_misspelled_retired_key_is_still_rejected(self):
+        with self.assertRaises(ConfigError):
+            self._load(BASE, "retrieval:\n  weak_signal_rerank_fator: 2.0\n")
+
     def test_invalid_values_are_rejected(self):
         for local in ("retrieval:\n  min_coverage: 1.5\n",
                       "retrieval:\n  top_k: abc\n",

@@ -5,6 +5,7 @@ config.local.yaml 用于本机密钥等不应提交的内容；两层配置按�
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ import yaml
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE_DIR / "config.yaml"
 LOCAL_CONFIG_FILE = BASE_DIR / "config.local.yaml"
+logger = logging.getLogger(__name__)
 
 
 class ConfigError(Exception):
@@ -169,6 +171,16 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
     data = _read_yaml(config_file)
     if local_file.is_file():
         data = _merge(data, _read_yaml(local_file))
+
+    # 旧版弱信号惩罚已撤回；升级时保留的配置不应让服务无法启动。
+    # 只兼容这个已退役的键，其他未知项仍交给 _section 严格校验。
+    retrieval_data = data.get("retrieval")
+    if isinstance(retrieval_data, dict) and "weak_signal_rerank_factor" in retrieval_data:
+        retrieval_data.pop("weak_signal_rerank_factor")
+        logger.warning(
+            "retrieval.weak_signal_rerank_factor 已废弃并忽略，请从 %s 或 %s 中删除该项。",
+            config_file.name, local_file.name,
+        )
 
     llm = _section(data, "llm", {"model", "base_url", "api_key", "max_tokens", "timeout"})
     retrieval = _section(data, "retrieval", {"top_k", "min_coverage", "semantic_threshold", "semantic_floor", "max_context_chars", "max_excerpt_chars"})

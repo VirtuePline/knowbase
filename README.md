@@ -104,6 +104,8 @@ llm:
 
 拼错的配置项、超出范围的值（如 `min_coverage` 不在 0~1）会在启动时直接报错，不会被静默忽略。
 
+旧版 `retrieval.weak_signal_rerank_factor` 随弱信号惩罚规则撤回而废弃；新版兼容读取并输出警告，该值不再影响检索。升级后可从 `config.yaml` 和 `config.local.yaml` 删除该项。旧镜像若因私有配置残留此项而反复报「未知配置项」，删除 `config.local.yaml` 中该项后重启容器即可；应用代码或镜像内的共享配置更新则需重新构建镜像，离线部署时需导入新镜像并重新创建容器。
+
 管理端（8001）始终要求登录，旧的 `auth.enabled: false` 也不会放行管理端。可在 `config.local.yaml` 中设置初始管理员账号和独立密码：
 
 ```yaml
