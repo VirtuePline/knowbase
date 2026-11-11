@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from app.domain.taxonomy import (
     DOC_CATEGORY_ORDER,
     DOC_OTHER,
@@ -33,7 +35,6 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "- 系统 / 模块：",
         "- 现象（遇到什么问题）：",
         "- 处理过程（尝试了什么办法）：",
-        "- 结果（是否解决）：",
         "- 原因：",
         "",
     ]),
@@ -44,7 +45,6 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "- 系统 / 设备型号：",
         "- 现象（遇到什么问题）：",
         "- 处理过程（尝试了什么办法，是否联系厂商）：",
-        "- 结果（是否解决）：",
         "- 原因：",
         "",
     ]),
@@ -55,7 +55,6 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "- 报警代码：",
         "- 现象（遇到什么问题）：",
         "- 处理过程（尝试了什么办法，是否更换备件）：",
-        "- 结果（是否解决）：",
         "- 原因：",
         "",
     ]),
@@ -66,7 +65,6 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "- 设备 IP：",
         "- 现象（遇到什么问题）：",
         "- 处理过程（尝试了什么办法）：",
-        "- 结果（是否解决）：",
         "- 原因：",
         "",
     ]),
@@ -76,7 +74,6 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "- 线体 / 工位：",
         "- 现象（遇到什么问题）：",
         "- 处理过程（尝试了什么办法）：",
-        "- 结果（是否解决）：",
         "- 原因：",
         "",
     ]),
@@ -86,7 +83,6 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "- 涉及流程 / 环节：",
         "- 现象（遇到什么问题）：",
         "- 处理过程（尝试了什么办法）：",
-        "- 结果（是否解决）：",
         "- 原因：",
         "",
     ]),
@@ -152,10 +148,26 @@ def delete_category(name: str) -> list[str]:
 
 # ---------- 模板 ----------
 
+# 旧模板里的「是否解决」字段已移除（解决状态由记录卡片单独标记），读取历史自定义模板时一并过滤
+_SOLVE_LINE = re.compile(r"^\s*-\s*结果（是否解决）：.*$")
+
+
+def _strip_solved_line(text: str) -> str:
+    """去掉模板中的「结果（是否解决）」行并压缩多余空行。"""
+    lines = [ln for ln in str(text).replace("\r\n", "\n").split("\n") if not _SOLVE_LINE.match(ln)]
+    out: list[str] = []
+    for line in lines:
+        if not line.strip() and out and not out[-1].strip():
+            continue
+        out.append(line)
+    return "\n".join(out).lstrip("\n")
+
+
 def get_templates() -> dict[str, str]:
     """全部类型的模板；后台自定义优先，否则用默认模板。"""
     saved = database.list_templates()
-    return {name: saved.get(name) or DEFAULT_TEMPLATES.get(name, "") for name in TEMPLATE_CATEGORIES}
+    return {name: _strip_solved_line(saved.get(name) or DEFAULT_TEMPLATES.get(name, ""))
+            for name in TEMPLATE_CATEGORIES}
 
 
 def save_template(category: str, content: str) -> dict[str, str]:

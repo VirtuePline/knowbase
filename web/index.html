@@ -3300,9 +3300,21 @@ function renderTrackingParent() {
 }
 
 function clearTracking() {
+  const refLine = trackingRefLine();
   trackingParent = null;
+  // 用户尚未改动正文时，取消追踪顺带移除自动插入的引用行
+  if (refLine && mdSrc.value.startsWith(refLine)) {
+    mdSrc.value = mdSrc.value.slice(refLine.length).replace(/^\s*\n/, "");
+    renderEditorPreview();
+  }
   renderTrackingParent();
   setEditorTitle();
+}
+
+function trackingRefLine() {
+  if (!trackingParent) return "";
+  const name = trackingParent.name.includes("《") ? trackingParent.name : `《${trackingParent.name}》`;
+  return `> 参考：[${name}](doc://${trackingParent.id})`;
 }
 
 function startTracking(event) {
@@ -3320,6 +3332,15 @@ function startTracking(event) {
     recPicker.setSub("厂商系统", event.vendor);
   }
   maybeApplyTemplate();
+  // 追加记录：正文开头自动引用被追加的那份记录（点击可预览）
+  const refLine = trackingRefLine();
+  if (refLine) {
+    tplBase = tplBase ? `${refLine}\n\n${tplBase}` : tplBase;
+    mdPushUndo(mdSnapshot());
+    mdSrc.value = `${refLine}\n\n${mdSrc.value}`;
+    lastEditorRange = { start: 0, end: 0 };
+    renderEditorPreview();
+  }
   switchTo("editor", { preserveEditor: true });
   setEditorTitle();
   $("#tracking-parent-card").scrollIntoView({ block: "nearest" });
