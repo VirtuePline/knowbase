@@ -216,10 +216,25 @@ def set_document_time(doc_id: str, date: str) -> dict:
     return _doc_dict(_require(doc_id))
 
 
+_DT_FMT = re.compile(r"^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}:\d{2}))?$")
+
+
+def _norm_file_time(value: str) -> str:
+    """规整前端传来的本地文件修改时间（YYYY-MM-DD [HH:MM:SS]）；无效时返回空串。"""
+    m = _DT_FMT.match((value or "").strip())
+    if not m:
+        return ""
+    try:
+        datetime.date.fromisoformat(m.group(1))
+    except ValueError:
+        return ""
+    return f"{m.group(1)} {m.group(2) or '00:00:00'}"
+
+
 def upload(filename: str, content: bytes, category: str = "", doc_type: str = "doc",
            date: str = "", vendor: str = "", resolved: str = "", *,
            categories: str = "", uploaded_by: str = "", uploaded_by_name: str = "",
-           parent_id: str = "") -> dict:
+           parent_id: str = "", file_time: str = "") -> dict:
     """上传文档；category / categories 非空时入库后强制设置分类，优先于自动判定。
 
     doc_type：doc=基础文档（文档管理页上传），record=运维问题记录（运维问题上传页上传）。
@@ -232,6 +247,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     parent_id 非空时新建独立追踪，不覆盖或复用父记录。
     """
     original, ext = _check_upload(filename, content)
+    file_time = _norm_file_time(file_time)   # 文件修改时间：作为上传时间与记录时间默认值
     norm_resolved = _norm_resolved(resolved)
     cats = normalize_doc_categories(part for part in _CAT_SPLIT.split(categories or "") if part.strip())
     if not cats and (category or "").strip():
@@ -257,7 +273,8 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         if vendor:
             database.set_vendor(existing.id, vendor)
         if not date and existing.doc_type == "record":
-            date = datetime.date.today().isoformat()   # 运维记录未指定日期时默认当前日期
+            # 运维记录未指定日期时默认取文件修改日期，其次当前日期
+            date = file_time[:10] if file_time else datetime.date.today().isoformat()
         if date:
             set_document_time(existing.id, date)   # 重复文件也按本次选择修正记录时间
         if norm_resolved:
@@ -267,7 +284,9 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
 
     record = DocRecord(
         id=doc_id, name=original, stored_name=stored, ext=ext, size=len(content),
-        sha256=digest, chunks=0, uploaded_at=database.now_iso(), status="processing",
+        sha256=digest, chunks=0,
+        uploaded_at=file_time or database.now_iso(),   # 默认取文件修改时间，其次当前时间
+        status="processing",
         doc_type="record" if parent_id else (doc_type if doc_type in {"doc", "record"} else "doc"),
         resolved=norm_resolved,
         uploaded_by=uploaded_by, uploaded_by_name=uploaded_by_name,
@@ -282,7 +301,8 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         database.set_vendor(doc_id, vendor)
         result = _require(doc_id)
     if not date and record.doc_type == "record":
-        date = datetime.date.today().isoformat()   # 运维记录未指定日期时默认当前日期
+        # 运维记录未指定日期时默认取文件修改日期，其次当前日期
+        date = file_time[:10] if file_time else datetime.date.today().isoformat()
     if date:
         set_document_time(doc_id, date)
         result = _require(doc_id)

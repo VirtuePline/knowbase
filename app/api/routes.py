@@ -195,12 +195,14 @@ async def upload_document(
     resolved: str = Form(""),
     operator_name: str = Form("", description="运维人用户名；缺省为当前登录用户名"),
     parent_id: str = Form(""),
+    file_time: str = Form("", description="本地文件修改时间（YYYY-MM-DD HH:MM:SS）；作为上传时间与记录时间默认值"),
     identity: dict = Depends(require_login),
 ) -> dict:
     """上传文档：doc_type=doc 基础文档（默认）/ record 运维问题记录。
 
     category 非空时强制分类（运维问题上传时人工选择的问题类型，优先于自动判定）；
     date 为运维记录的问题发生日期（YYYY-MM-DD），入库后作为记录时间展示与时间线排序；
+    未选日期时默认取 file_time 的日期部分（文件修改时间）；
     vendor 为厂商系统类记录的厂商（问题类型选「厂商系统」时必填）；
     resolved 为录入时选择的解决状态（resolved / improving / unresolved），时间线按此显示；
     operator_name 为运维人用户名，入库时与登录账号分开记录。
@@ -214,7 +216,7 @@ async def upload_document(
                                        vendor=vendor, resolved=resolved,
                                        uploaded_by=identity["username"],
                                        uploaded_by_name=operator_name or identity.get("display_name", ""),
-                                       parent_id=parent_id)
+                                       parent_id=parent_id, file_time=file_time)
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="关联的父记录不存在") from exc
     except ValueError as exc:
@@ -222,12 +224,17 @@ async def upload_document(
 
 
 @admin_router.post("/knowledge")
-async def upload_knowledge(file: UploadFile = File(...), identity: dict = Depends(require_login)) -> dict:
+async def upload_knowledge(
+    file: UploadFile = File(...),
+    file_time: str = Form("", description="本地文件修改时间（YYYY-MM-DD HH:MM:SS）；作为上传时间默认值"),
+    identity: dict = Depends(require_login),
+) -> dict:
     """常识注入：上传 md / docx / xlsx / csv / txt，入库固定归类为「常识库」。"""
     try:
         content = await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
         return await run_in_threadpool(kb.upload, file.filename or "", content,
-                                       category=taxonomy.KNOWLEDGE_CATEGORY, uploaded_by=identity["username"])
+                                       category=taxonomy.KNOWLEDGE_CATEGORY, uploaded_by=identity["username"],
+                                       file_time=file_time)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

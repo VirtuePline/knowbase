@@ -3165,6 +3165,16 @@ recCatFilterBox.addEventListener("click", (event) => {
 const recRows = $("#rec-rows");
 bindDocTable(recRows, loadRecordList);
 
+// 本地文件的修改时间（File.lastModified），格式化为 YYYY-MM-DD HH:MM:SS 供后端作为上传时间
+function fileTimeValue(file) {
+  try {
+    const d = new Date(Number(file.lastModified || 0));
+    if (!Number(file.lastModified) || isNaN(d.getTime())) return "";
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  } catch { return ""; }
+}
+
 async function uploadRecordFiles(files) {
   files = Array.from(files || []);
   if (!isAdmin || !files.length) return;
@@ -3177,6 +3187,7 @@ async function uploadRecordFiles(files) {
     status.textContent = `分析并入库 ${i + 1}/${files.length}：${f.name}`;
     const form = new FormData();
     form.append("file", f);
+    form.append("file_time", fileTimeValue(f));
     form.append("doc_type", "record");
     const cats = recPicker.selected();
     const vendor = recPicker.subValue("厂商系统");
@@ -3378,6 +3389,7 @@ async function uploadFiles(files) {
     status.textContent = `分析并上传 ${i + 1}/${files.length}：${f.name}`;
     const form = new FormData();
     form.append("file", f);
+    form.append("file_time", fileTimeValue(f));
     try {
       // 文档即常识库：统一按「常识库」分类入库，文档管理页可预览 / 下载 / 删除
       const resp = await fetch("/api/knowledge", { method: "POST", body: form });

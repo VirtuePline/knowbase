@@ -149,6 +149,42 @@ class DocTypeTest(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json()["doc"]["doc_type"], "record")
 
+    def test_upload_uses_file_mtime_as_uploaded_at(self):
+        """上传时间默认取本地文件的修改时间（前端传 lastModified）。"""
+        with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
+            api = self.api
+            resp = api.post(
+                "/api/knowledge",
+                files={"file": ("设备手册.md", "# 设备手册\n\n参数说明".encode(), "text/markdown")},
+                data={"file_time": "2026-08-15 14:30:22"},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["doc"]["uploaded_at"], "2026-08-15 14:30:22")
+
+    def test_record_defaults_to_file_mtime_date(self):
+        """运维记录未选问题日期时，记录时间默认取文件修改日期。"""
+        with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
+            api = self.api
+            resp = api.post(
+                "/api/documents",
+                files={"file": ("闪退记录.md", "# 闪退\n\n处理：重启工控机。".encode(), "text/markdown")},
+                data={"doc_type": "record", "file_time": "2026-08-15 14:30:22"},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["doc"]["uploaded_at"], "2026-08-15 14:30:22")
+
+    def test_invalid_file_time_falls_back_to_now(self):
+        """无效的文件时间被忽略：回退服务器当前时间。"""
+        with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
+            api = self.api
+            resp = api.post(
+                "/api/knowledge",
+                files={"file": ("手册.md", "# 手册\n\n内容".encode(), "text/markdown")},
+                data={"file_time": "not-a-date"},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertRegex(resp.json()["doc"]["uploaded_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
     def test_list_documents_filter_by_doc_type(self):
         with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
             api = self.api
