@@ -12,6 +12,25 @@ class AnswerResponseTest(unittest.TestCase):
         self.assertEqual(result["sources"][0]["kind"], "knowledge_base")
         self.assertEqual(result["sources"][0]["url"], "")
         self.assertEqual(result["sources"][0]["score"], 0.988)
+        self.assertEqual(result["sources"][0]["references"], [])
+
+    def test_cited_document_is_serialized_under_its_parent_source(self):
+        reference = SourceRef(
+            "manual", "扫码枪手册.pdf", "", 0.0, "", scoring_method="reference",
+            uploaded_at="2026-11-11 10:30:00",
+        )
+        source = SourceRef("record", "扫码枪处理记录.md", "章节一", 0.9, "扫描底座二维码",
+                           references=[reference])
+        other = SourceRef("other", "另一条记录.md", "章节二", 0.8, "重新接线")
+        result = AnswerResponse("ok", "扫描底座二维码", sources=[source, other]).to_dict()
+        self.assertEqual([item["doc_id"] for item in result["sources"]], ["record", "other"])
+        nested = result["sources"][0]["references"]
+        self.assertEqual([item["doc_id"] for item in nested], ["manual"])
+        self.assertEqual(nested[0]["scoring_method"], "reference")
+        self.assertEqual(nested[0]["uploaded_at"], "2026-11-11 10:30:00")
+        self.assertEqual(nested[0]["references"], [])
+        self.assertIsNone(nested[0]["rrf_score"])
+        self.assertEqual(result["sources"][1]["references"], [])
 
     def test_web_reference_is_identifiable_in_serialized_response(self):
         source = SourceRef(

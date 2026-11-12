@@ -777,9 +777,31 @@ function renderSourceMetrics(source) {
   return metrics.length ? `<div class="source-metrics">${metrics.join("")}</div>` : "";
 }
 
+function renderSourceReferences(references, label = "引用文档") {
+  const seen = new Set();
+  const items = (references || []).filter((reference) => {
+    const key = String(reference.doc_id || reference.doc_name || "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((reference) => {
+    const id = escapeAttr(escapeHtml(String(reference.doc_id || "")));
+    const name = escapeHtml(String(reference.doc_name || "未命名文档"));
+    const uploadDay = escapeHtml(String(reference.uploaded_at || "").slice(0, 10));
+    const title = id
+      ? `<button type="button" class="source-name" data-src-pv="${id}" title="点击预览">${name}</button>`
+      : `<span>${name}</span>`;
+    return `<li>${title}${uploadDay ? `<span class="source-reference-date">${uploadDay}</span>` : ""}</li>`;
+  }).join("");
+  return items ? `<div class="source-references"><span class="source-references-label">${escapeHtml(label)}</span><ul>${items}</ul></div>` : "";
+}
+
 function renderSources(sources) {
   if (!sources || !sources.length) return "";
-  const items = sources.map((s) => {
+  const primary = sources.filter((source) => source.scoring_method !== "reference");
+  const legacyReferences = sources.filter((source) => source.scoring_method === "reference");
+  const matched = new Set();
+  const items = primary.map((s) => {
     const name = escapeHtml(String(s.doc_name || "未命名来源"));
     const snippet = escapeHtml(String(s.snippet || ""));
     if (s.kind === "web" || s.scoring_method === "web") {
@@ -790,19 +812,29 @@ function renderSources(sources) {
       const location = url ? new URL(url).hostname : "外部资料";
       return `<div class="source web-source">${title}<span class="source-kind">联网参考</span><div class="where web-source-host">${escapeHtml(location)}</div><div class="snip">${snippet}</div></div>`;
     }
+    // 兼容浏览器里已保存的扁平引用；新回答直接使用父来源的 references。
+    const references = [...(s.references || [])];
+    legacyReferences.forEach((reference) => {
+      if (String(reference.location || "").includes(`《${s.doc_name}》`)) {
+        references.push(reference);
+        matched.add(reference);
+      }
+    });
     const id = escapeAttr(escapeHtml(String(s.doc_id || "")));
     const uploadDay = String(s.uploaded_at || "").slice(0, 10);   // 年月日
     return `<div class="source">
       <button type="button" class="who source-name" data-src-pv="${id}" title="点击预览">${name}</button>
-      <span class="source-kind">${s.scoring_method === "reference" ? "引用文档" : "知识库"}</span>
+      <span class="source-kind">知识库</span>
       <span class="where">${escapeHtml(String(s.location || "全文"))}</span>
       ${uploadDay ? `<span class="where" title="来源文档上传时间">${uploadDay}</span>` : ""}
+      ${renderSourceReferences(references)}
       ${renderSourceMetrics(s)}
       ${s.summary ? `<div class="sum">摘要：${escapeHtml(String(s.summary).split("\n")[0])}</div>` : ""}
       ${snippet ? `<div class="snip">${snippet}</div>` : ""}
     </div>`;
   }).join("");
-  return `<details class="sources"><summary>查看参考来源（${sources.length}）</summary>${items}</details>`;
+  const unmatched = legacyReferences.filter((reference) => !matched.has(reference));
+  return `<details class="sources"><summary>查看参考来源（${primary.length}）</summary>${items}${renderSourceReferences(unmatched, "其他引用文档")}</details>`;
 }
 
 // 来源条目「预览 / 下载」：复用文档管理页的预览弹窗与下载逻辑

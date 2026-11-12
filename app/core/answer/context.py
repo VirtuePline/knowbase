@@ -110,5 +110,5 @@ def render_excerpts(hits: list[ScoredChunk], max_chars: int | None = None,
     parts = []
     for number, hit in enumerate(hits, start=1):
         parts.append(
-            f"【记录 {number}】{_source_label(hit)}\n{source_snippet(hit, max_chars, question)}")
+            f"【记录 {number}】\n{source_snippet(hit, max_chars, question)}")
     return "\n\n".join(parts)

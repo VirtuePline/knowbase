@@ -1,6 +1,8 @@
 import unittest
 
 from app.core.answer.context import render_excerpts, render_hits
+from app.core.answer.service import _render_plan
+from app.core.llm.client import SolutionDraft
 from app.domain.schemas import Chunk, ScoredChunk
 from app.domain.taxonomy import (
     FALLBACK_TEXT,
@@ -69,6 +71,25 @@ class ContextTest(unittest.TestCase):
         text = render_excerpts([hit("a", "docA", "记录一", 5), hit("b", "docB", "记录二", 4)])
         self.assertIn("记录 1", text)
         self.assertIn("记录 2", text)
+        self.assertNotIn("docA.xlsx", text)
+        self.assertNotIn("docB.xlsx", text)
+        self.assertNotIn("第2行", text)
+
+
+class RenderPlanTest(unittest.TestCase):
+    def test_plans_keep_steps_and_verification_without_source_footer(self):
+        plan = SolutionDraft(
+            ["核对信号来源：PLC，并打开 https://device.example/status 检查状态。"],
+            [1], "确认通信恢复。", "需核对设备型号。",
+        )
+        for web in (False, True):
+            with self.subTest(web=web):
+                answer = _render_plan(plan, web=web)
+                self.assertIn(plan.steps[0], answer)
+                self.assertIn(plan.verification, answer)
+                self.assertIn(plan.limitations, answer)
+                self.assertNotIn("**来源**", answer)
+                self.assertNotIn("来源见下方", answer)
 
 
 if __name__ == "__main__":

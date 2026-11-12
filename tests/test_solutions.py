@@ -174,12 +174,14 @@ class RenderSolutionsTest(unittest.TestCase):
     def test_empty_evidence_has_no_answer(self):
         self.assertEqual(render_solutions([]), "")
 
-    def test_solution_comes_first_with_verification_and_source(self):
+    def test_solution_comes_first_with_verification_without_inline_source(self):
         items = extract_solutions([hit("故障现象：网口不通\n处理方案：重新接线\n验证结果：通信恢复")])
         output = render_solutions(items)
         self.assertTrue(output.startswith("### 解决方案"))
         self.assertLess(output.index("重新接线"), output.index("通信恢复"))
-        self.assertIn("来源：《运维记录.md》 · 第 2 节", output)
+        self.assertNotIn("来源：", output)
+        self.assertNotIn("运维记录.md", output)
+        self.assertNotIn("第 2 节", output)
         self.assertIn("**原记录结果：** 通信恢复", output)
         self.assertNotIn("**验证：**", output)
         self.assertNotIn("故障现象", output)

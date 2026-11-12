@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.config import settings
 from app.core.answer.context import is_stats_question, render_excerpts, render_hits, source_snippet, table_to_markdown
 from app.core.answer.solutions import extract_solutions, render_solutions
-from app.core.answer.references import append_references, reference_sources
+from app.core.answer.references import append_references, attach_reference_sources
 from app.core.ingest.chunker import is_title_row
 from app.core.retrieval.relevance import filter_fault_hits
 from app.core.llm.client import (
@@ -55,7 +55,7 @@ def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
         )
         for hit in hits
     ]
-    return sources + reference_sources(hits, sources)
+    return attach_reference_sources(hits, sources)
 
 
 # 统计类问题单次交给模型的台账行数上限；超出截断并在提示与说明中注明
@@ -128,11 +128,11 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
         table=chunk.table, summary=chunk.summary,
         **_source_metrics(scored_by_id.get(chunk.id)),
     ) for chunk in peers]
-    sources.extend(reference_sources([anchor], sources))
+    sources = attach_reference_sources([anchor], sources)
     return AnswerResponse(
         status="ok", answer=reply, category=category, sources=sources,
         llm_used=True, answer_origin="knowledge_base", solution_found=False,
-        notice=(f"已按《{anchor_chunk.doc_name}》{anchor_chunk.heading}完整台账（{scope}）统计；"
+        notice=(f"已按{anchor_chunk.heading}完整台账（{scope}）统计；"
                 "「未登记」指台账中该字段为空，不代表设备实际状态。"),
     )
 
@@ -228,17 +228,13 @@ def _draft(question: str, context: str, count: int,
     return plan
 
 
-def _render_plan(plan: SolutionDraft, sources: list[SourceRef], *, web: bool = False) -> str:
+def _render_plan(plan: SolutionDraft, *, web: bool = False) -> str:
     parts = ["### 联网参考方案" if web else "### 解决方案"]
     parts.extend(f"{i}. {step}" for i, step in enumerate(plan.steps, start=1))
     if plan.verification:
         parts.append(f"\n**验证方法 / 记录结果**：{plan.verification}")
     if plan.limitations:
         parts.append(f"\n**适用条件与缺失信息**：{plan.limitations}")
-    if not web:
-        parts.append("\n**来源**：" + "；".join(f"《{s.doc_name}》" for s in sources))
-    else:
-        parts.append("\n来源见下方网页引用。")
     return "\n".join(parts)
 
 
@@ -324,7 +320,7 @@ def _web_fallback(question: str, category: str, hits: list[ScoredChunk],
         if plan:
             selected = [sources[ref - 1] for ref in plan.source_records]
             return AnswerResponse(
-                status="ok", answer=_render_plan(plan, selected, web=True), category=category,
+                status="ok", answer=_render_plan(plan, web=True), category=category,
                 sources=selected, notice="以下为联网参考，尚未在本知识库或现场验证；请核对型号、版本和适用条件。",
                 llm_used=True, answer_origin="web", solution_found=True)
     return AnswerResponse(
@@ -436,7 +432,7 @@ def answer(question: str, history: list[dict] | None = None,
             selected = [hits[ref - 1] for ref in plan.source_records]
             sources = _sources(selected, text)
             return AnswerResponse(
-                status="ok", answer=_render_plan(plan, sources), category=category,
+                status="ok", answer=_render_plan(plan), category=category,
                 sources=sources, llm_used=True, solution_found=True,
                 notice=CONFLICT_NOTICE if conflict_risk(selected) else "")
         if not model_failed:

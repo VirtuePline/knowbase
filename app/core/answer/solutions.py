@@ -259,7 +259,7 @@ def _needs_code_details(solution: str) -> bool:
 
 
 def render_solutions(evidence: list[SolutionEvidence]) -> str:
-    """先展示处理内容，再展示原记录验证与来源；不补写缺失步骤。"""
+    """展示处理内容与原记录验证；来源统一在参考来源区域展示。"""
     if not evidence:
         return ""
     parts = ["### 解决方案"]
@@ -271,7 +271,4 @@ def render_solutions(evidence: list[SolutionEvidence]) -> str:
             parts.append("原记录未注明具体修改位置、参数及代码内容，请向相关技术人员确认。")
         if item.result:
             parts.append(f"**原记录结果：** {item.result}")
-        chunk = item.hit.chunk
-        location = chunk.location or chunk.heading
-        parts.append(f"来源：《{chunk.doc_name}》" + (f" · {location}" if location else ""))
     return "\n\n".join(parts)

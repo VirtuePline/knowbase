@@ -97,6 +97,7 @@ class SourceRef:
     keyword_coverage: float | None = None
     semantic_similarity: float | None = None
     rerank_score: float | None = None
+    references: list[SourceRef] = field(default_factory=list)  # 当前来源直接引用的文档
 
     def to_dict(self) -> dict[str, Any]:
         def metric(value: float | None) -> float | None:
@@ -120,6 +121,7 @@ class SourceRef:
             "keyword_coverage": metric(self.keyword_coverage),
             "semantic_similarity": metric(self.semantic_similarity),
             "rerank_score": metric(self.rerank_score),
+            "references": [reference.to_dict() for reference in self.references],
         }
 
 
