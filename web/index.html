@@ -147,12 +147,12 @@
       <form class="tl-range" id="tl-range-form">
         <label>开始日期<span class="tl-date-wrap">
           <input type="date" id="tl-start-date" aria-label="时间线开始日期" />
-          <span class="tl-date-display" aria-hidden="true"></span>
+          <span class="tl-date-display" aria-hidden="true"><span class="tl-date-text">年 / 月 / 日</span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></span>
         </span></label>
         <span class="tl-range-separator" aria-hidden="true">至</span>
         <label>结束日期<span class="tl-date-wrap">
           <input type="date" id="tl-end-date" aria-label="时间线结束日期" />
-          <span class="tl-date-display" aria-hidden="true"></span>
+          <span class="tl-date-display" aria-hidden="true"><span class="tl-date-text">年 / 月 / 日</span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></span>
         </span></label>
         <button type="submit" class="ghost">查询</button>
         <button type="button" class="ghost" id="tl-clear-range">清除时间段</button>
@@ -1751,14 +1751,14 @@ function refreshTimelineIfVisible() {
   if ($("#tab-timeline").classList.contains("active")) loadTimeline();
 }
 
-// 日期选择控件：原生选择器不变，显示文字覆盖为中文（2026年11月5日）
+// 日期选择控件：原生选择器保留，显示文字覆盖为中文（2026年11月5日）
 function refreshTlDateDisplay() {
   document.querySelectorAll(".tl-date-wrap").forEach((wrap) => {
     const input = wrap.querySelector("input[type=date]");
-    const display = wrap.querySelector(".tl-date-display");
+    const text = wrap.querySelector(".tl-date-text");
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.value || "");
-    display.textContent = m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : "年 / 月 / 日";
-    display.classList.toggle("empty", !m);
+    text.textContent = m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : "年 / 月 / 日";
+    wrap.classList.toggle("empty", !m);
   });
 }
 refreshTlDateDisplay();
