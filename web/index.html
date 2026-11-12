@@ -24,8 +24,8 @@
     <button class="tab-btn admin-tab" data-tab="records">运维记录管理</button>
     <button class="tab-btn admin-tab" data-tab="settings">模板与厂商设置</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="edits">修改记录</button>
-    <button class="tab-btn admin-tab super-admin-only" data-tab="accounts">账号管理</button>
-    <button class="tab-btn admin-tab" data-tab="logs">操作日志</button>
+    <button class="tab-btn admin-tab super-admin-only" data-tab="accounts">用户管理</button>
+    <button class="tab-btn admin-tab super-admin-only" data-tab="logs">操作日志</button>
   </nav>
   <div class="sidebar-note"><span class="sidebar-note-icon" aria-hidden="true">↗</span><strong>让经验持续积累</strong><p>从历史记录中寻找答案，让现场处理更有依据。</p></div>
   <div class="sidebar-footer">
@@ -396,9 +396,9 @@
 
   <!-- 账号管理（独立页）：修改密码 / 创建普通账号 / 账号列表 -->
   <section class="tab super-admin-only" id="tab-accounts">
-    <div class="page-heading"><h1>账号管理</h1><p>管理员创建成员账号并维护账号列表；修改自己的密码请用侧边栏「修改密码」入口。</p></div>
+    <div class="page-heading"><h1>用户管理</h1><p>管理员创建成员账号并维护账号列表；修改自己的密码请用侧边栏「修改密码」入口。</p></div>
     <div class="panel-card admin-only">
-      <h2>账号管理</h2>
+      <h2>用户管理</h2>
       <div class="row account-admin-only" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <span class="muted" style="font-size:13px">创建普通账号</span>
         <input type="text" id="reg-account" placeholder="账号（如 zs）" autocapitalize="none" spellcheck="false" style="width:170px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
@@ -438,7 +438,7 @@
 
   <!-- 操作日志（独立页，分页显示） -->
   <!-- 修改记录：全库编辑溯源，谁在何时新建 / 修改 -->
-  <section class="tab" id="tab-edits">
+  <section class="tab super-admin-only" id="tab-edits">
     <div class="page-heading"><h1>修改记录</h1><p>所有运维记录的编辑溯源，做到每一条都可追溯。</p></div>
     <div class="panel-card admin-only">
       <h2>修改记录</h2>
@@ -450,7 +450,7 @@
     </div>
   </section>
 
-  <section class="tab" id="tab-logs">
+  <section class="tab super-admin-only" id="tab-logs">
     <div class="page-heading"><h1>操作日志</h1><p>查看知识库的管理操作与处理结果。</p></div>
     <div class="panel-card admin-only">
       <h2>操作日志</h2>
@@ -1109,13 +1109,11 @@ let docView = "date";          // "date" 按年月日分组 | "category" 按分�
 let docCatFilter = "";
 const collapsedMonths = new Set();   // 日期视图里被收起的月份，重渲染后保持状态
 let isAdmin = false;          // 兼容旧名：已登录并可写（包括普通账号）
-let isSuperAdmin = false;     // 管理员账号（role=admin）：独占账号管理与修改记录页
+let isSuperAdmin = false;     // 管理员账号（role=admin）：独占用户管理、修改记录与操作日志
 
-// 按角色显隐管理员专属导航与页面（inline style 优先级高于样式表，避免 .active 覆盖 hidden）
+// 管理员专属导航与页面默认隐藏，读取会话角色后统一显示。
 function applyRoleVisibility() {
-  document.querySelectorAll(".super-admin-only").forEach((el) => {
-    el.style.display = isSuperAdmin ? "" : "none";
-  });
+  document.body.classList.toggle("super-admin", isSuperAdmin);
 }
 let isAccountAdmin = false;   // 账号管理员：可创建普通账号
 let currentUser = "";          // 稳定英文账号，用于身份标识
@@ -2235,9 +2233,11 @@ let auditPage = 1;
 let auditTotal = 0;
 
 async function loadAuditLogs() {
+  if (!isSuperAdmin) return;
   const body = $("#audit-body");
   try {
     const resp = await fetch(`/api/audit-logs?limit=${AUDIT_PAGE_SIZE}&page=${auditPage}`);
+    if (!resp.ok) throw new Error("日志加载失败");
     const data = await resp.json();
     auditTotal = data.total || 0;
     const logs = data.logs || [];
@@ -2574,6 +2574,7 @@ async function postAccount(endpoint, payload, statusEl) {
 
 if ($("#reg-create")) {
   $("#reg-create").addEventListener("click", async () => {
+    if (!isAccountAdmin) return;
     if ($("#reg-create").disabled) return;
     regStatus.textContent = "";
     const account = regAccountInput.value.trim().toLowerCase();
@@ -2607,7 +2608,7 @@ const usersBody = $("#users-body");
 const usersStatus = $("#users-status");
 
 async function loadUsers() {
-  if (!usersBody) return;
+  if (!isSuperAdmin || !usersBody) return;
   usersStatus.textContent = "";
   try {
     const resp = await fetch("/api/admin/users");
@@ -2636,6 +2637,7 @@ async function loadUsers() {
 
 if (usersBody) {
   usersBody.addEventListener("click", async (event) => {
+    if (!isAccountAdmin) return;
     const button = event.target.closest("[data-del-user]");
     if (!button) return;
     const account = button.dataset.delUser;
@@ -2685,15 +2687,21 @@ function updateNavigation(tab) {
 
 const LAST_TAB_KEY = "kb_last_tab";   // 记住最后停留的页签，刷新后原地恢复
 const PUBLIC_TABS = ["chat", "docs", "timeline"];
-const ADMIN_TABS = ["editor", "records", "settings", "weekly", "accounts", "logs"];
+const SUPER_ADMIN_TABS = ["edits", "accounts", "logs"];
+const ADMIN_TABS = ["editor", "records", "settings", "weekly", ...SUPER_ADMIN_TABS];
+
+function canAccessTab(tab) {
+  return PUBLIC_TABS.includes(tab) || (isAdmin && ADMIN_TABS.includes(tab)
+    && (!SUPER_ADMIN_TABS.includes(tab) || isSuperAdmin));
+}
 
 function lastTab() {
   try { return localStorage.getItem(LAST_TAB_KEY) || ""; } catch { return ""; }
 }
 
 function switchTo(tab, { preserveEditor = false } = {}) {
-  if (ADMIN_TABS.includes(tab) && !isAdmin) {
-    if (portal === "admin") openLogin();
+  if (!canAccessTab(tab)) {
+    if (ADMIN_TABS.includes(tab) && !isAdmin && portal === "admin") openLogin();
     return;
   }
   if (tab === "editor" && !preserveEditor) resetEditor();
@@ -4010,7 +4018,8 @@ async function initPage() {
     portal = data.portal || (data.admin ? "admin" : "search");
     authEnabled = data.auth === true;
     isAdmin = portal === "admin" && (data.authenticated === true || data.admin === true);
-    isAccountAdmin = isAdmin && data.role === "admin" && data.can_register === true;
+    isSuperAdmin = isAdmin && data.role === "admin";
+    isAccountAdmin = isSuperAdmin && data.can_register === true;
     applyRoleVisibility();
     loadTopQuestions();
     currentUser = isAdmin ? String(data.account || data.user || "") : "";
@@ -4020,6 +4029,7 @@ async function initPage() {
   } catch {
     portal = "search";
     isAdmin = false;
+    isSuperAdmin = false;
     isAccountAdmin = false;
     applyRoleVisibility();
     currentUser = "";
@@ -4033,7 +4043,7 @@ async function initPage() {
   const readableUser = currentDisplayName && currentDisplayName !== currentUser ? `${currentDisplayName}（${currentUser}）` : currentUser;
   $("#current-user").textContent = readableUser;
   $("#current-user").title = readableUser;
-  $("#current-role").textContent = isAccountAdmin ? "管理员" : "普通账号";
+  $("#current-role").textContent = isSuperAdmin ? "管理员" : "普通账号";
   $("#upload-account").textContent = readableUser || "—";
   const operatorInput = $("#rec-operator");
   if (operatorInput && !operatorInput.value) operatorInput.value = currentDisplayName || currentUser || "";
@@ -4052,7 +4062,7 @@ async function initPage() {
     renderVendorList();
     const restored = lastTab();
     // 刷新/重进时回到上次停留的页签；首次进入（无记录）默认「新增运维记录」
-    switchTo([...PUBLIC_TABS, ...ADMIN_TABS].includes(restored) ? restored : "editor");
+    switchTo(canAccessTab(restored) ? restored : "editor");
   } else { switchTo(PUBLIC_TABS.includes(lastTab()) ? lastTab() : "chat"); }
 }
 

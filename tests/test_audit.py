@@ -12,12 +12,58 @@ from fastapi.testclient import TestClient
 from pymongo import MongoClient
 
 from app.config import settings
-from app.main import admin_app
+from app.main import admin_app, search_app
 from app.services import audit, auth, mongo
 from app.services import retrieval_service
 
 
 _MONGO_URI = os.environ.get("KB_TEST_MONGO", "mongodb://127.0.0.1:27017")
+
+
+class AuditPermissionTest(unittest.TestCase):
+    """走实际 Cookie 认证依赖与路由，权限回归不依赖 MongoDB。"""
+
+    def setUp(self):
+        identities = {
+            "admin-token": {"username": "admin", "role": "admin", "must_change_password": False},
+            "user-token": {"username": "operator", "role": "user", "must_change_password": False},
+        }
+        identity_patch = patch.object(auth, "session_identity", side_effect=identities.get)
+        identity_patch.start()
+        self.addCleanup(identity_patch.stop)
+        self.logs = [{"time": "2026-11-12 10:00:00", "user": "operator", "action": "保存运维记录"}]
+        logs_patch = patch.object(audit, "list_recent", return_value=(self.logs, 21))
+        self.list_recent = logs_patch.start()
+        self.addCleanup(logs_patch.stop)
+        self.api = TestClient(admin_app)
+        self.addCleanup(self.api.close)
+
+    def test_unauthenticated_and_expired_sessions_cannot_read_logs(self):
+        self.assertEqual(self.api.get("/api/audit-logs").status_code, 401)
+        self.api.cookies.set(auth.SESSION_COOKIE, "expired-token")
+        self.assertEqual(self.api.get("/api/audit-logs").status_code, 401)
+        self.list_recent.assert_not_called()
+
+    def test_normal_user_cannot_read_logs(self):
+        self.api.cookies.set(auth.SESSION_COOKIE, "user-token")
+        response = self.api.get("/api/audit-logs")
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("logs", response.json())
+        self.list_recent.assert_not_called()
+
+    def test_admin_can_read_paginated_logs(self):
+        self.api.cookies.set(auth.SESSION_COOKIE, "admin-token")
+        response = self.api.get("/api/audit-logs?limit=10&page=2")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"logs": self.logs, "total": 21, "page": 2, "page_size": 10})
+        self.list_recent.assert_called_once_with(10, 2)
+
+    def test_search_port_does_not_expose_logs_even_with_admin_cookie(self):
+        api = TestClient(search_app)
+        self.addCleanup(api.close)
+        api.cookies.set(auth.SESSION_COOKIE, "admin-token")
+        self.assertEqual(api.get("/api/audit-logs").status_code, 404)
+        self.list_recent.assert_not_called()
 
 
 class AuditActionNameTest(unittest.TestCase):
@@ -171,8 +217,15 @@ class AuditMiddlewareTest(unittest.TestCase):
         rows = list(mongo.db().audit_logs.find({}))
         self.assertEqual(len(rows), 2, "删除操作也记录")
         self.assertEqual(rows[-1]["action"], "删除文档")   # 插入序：删除在后
-        # 查询接口
-        logs = api.get("/api/audit-logs?limit=10").json()["logs"]
+        # 普通账号写操作仍被记录，但只有管理员可查询审计日志。
+        self.assertEqual(api.get("/api/audit-logs?limit=10").status_code, 403)
+        auth.create_user("audit-admin", "audit-admin-password", role="admin")
+        token = auth.create_session("audit-admin")
+        self.addCleanup(auth.revoke, token)
+        api.cookies.set(auth.SESSION_COOKIE, token)
+        response = api.get("/api/audit-logs?limit=10")
+        self.assertEqual(response.status_code, 200)
+        logs = response.json()["logs"]
         self.assertEqual(len(logs), 2)
         self.assertNotIn("_id", logs[0])
 

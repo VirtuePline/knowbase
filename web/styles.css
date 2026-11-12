@@ -511,6 +511,7 @@
   body.search-mode .admin-only, body.search-mode .admin-tab { display: none !important; }
   body.admin-portal:not(.admin-mode) .admin-only { display: none !important; }
   body:not(.account-admin) .account-admin-only { display: none !important; }
+  body:not(.super-admin) .super-admin-only { display: none !important; }
   #mode-badge { cursor: default; }
   body.admin-mode #mode-badge { cursor: pointer; }
   .find-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }

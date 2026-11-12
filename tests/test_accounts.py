@@ -200,11 +200,18 @@ class AccountsTest(unittest.TestCase):
             admin.post("/api/admin/login", json={"username": "operator", "password": "test-password"})
             self.assertEqual(admin.get("/").status_code, 200)
             self.assertEqual(admin.get("/register").status_code, 403)
-            self.assertEqual(admin.get("/api/mode").json()["role"], "user")
+            operator_mode = admin.get("/api/mode").json()
+            # admin 表示进入管理端；菜单权限必须读取单独的 role 字段。
+            self.assertTrue(operator_mode["admin"])
+            self.assertEqual(operator_mode["role"], "user")
+            self.assertFalse(operator_mode["can_register"])
             auth.create_user("admin", "admin-password", role="admin")
             admin.post("/api/admin/login", json={"username": "admin", "password": "admin-password"})
             self.assertEqual(admin.get("/register").status_code, 200)
-            self.assertTrue(admin.get("/api/mode").json()["can_register"])
+            admin_mode = admin.get("/api/mode").json()
+            self.assertTrue(admin_mode["admin"])
+            self.assertEqual(admin_mode["role"], "admin")
+            self.assertTrue(admin_mode["can_register"])
 
     def test_first_login_requires_password_setup_before_business_permissions(self):
         self.login()
@@ -371,6 +378,30 @@ class AccountsTest(unittest.TestCase):
         zhangsan = next(user for user in listed if user["username"] == "zhangsan")
         self.assertEqual(zhangsan["display_name"], "张三")
         self.assertEqual(zhangsan["role"], "user")
+
+    def test_user_management_permissions_refresh_with_the_existing_session(self):
+        self.login()
+        auth.create_user("operator", "operator-password", display_name="操作员")
+        token = self.api.cookies.get(auth.SESSION_COOKIE)
+        self.assertEqual(self.api.get("/api/admin/users").status_code, 200)
+
+        # 无需重新登录：已打开用户管理页的账号被降权后，全部接口立即拒绝。
+        self.rows["admin"]["role"] = "user"
+        self.assertTrue(self.api.get("/api/admin/session").json()["authenticated"])
+        self.assertFalse(self.api.get("/api/admin/session").json()["can_register"])
+        self.assertEqual(self.api.get("/api/admin/users").status_code, 403)
+        self.assertEqual(self.api.post("/api/admin/register", json={
+            "account": "newuser", "username": "新用户"}).status_code, 403)
+        self.assertEqual(self.api.delete("/api/admin/users/operator").status_code, 403)
+        self.assertEqual(set(self.rows), {"admin", "operator"})
+
+        self.rows["admin"]["role"] = "admin"
+        self.assertEqual(self.api.cookies.get(auth.SESSION_COOKIE), token)
+        self.assertEqual(self.api.get("/api/admin/users").status_code, 200)
+        self.assertEqual(self.api.post("/api/admin/register", json={
+            "account": "newuser", "username": "新用户"}).status_code, 201)
+        self.assertEqual(self.api.delete("/api/admin/users/operator").status_code, 200)
+        self.assertEqual(set(self.rows), {"admin", "newuser"})
 
     def test_delete_user_rules_and_session_invalidation(self):
         payload = {"account": "zhangsan", "username": "张三"}

@@ -190,7 +190,7 @@ require_admin = require_login
 
 
 def require_super_admin(identity: dict = Depends(require_login)) -> dict:
-    """仅管理员账号（role=admin）：账号管理、全库修改记录与周报生成设置。"""
+    """仅管理员账号（role=admin）：账号管理、操作日志、全库修改记录与周报生成设置。"""
     if identity.get("role") != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
     return identity
@@ -201,8 +201,8 @@ admin_router = APIRouter(prefix="/api", tags=["admin"], dependencies=[Depends(re
 
 
 @admin_router.get("/audit-logs")
-def audit_logs(limit: int = 20, page: int = 1) -> dict:
-    """操作审计日志分页（时间倒序）。"""
+def audit_logs(limit: int = 20, page: int = 1, identity: dict = Depends(require_super_admin)) -> dict:
+    """仅管理员可查看操作审计日志分页（时间倒序）。"""
     logs, total = audit.list_recent(limit, page)
     return {"logs": logs, "total": total, "page": page, "page_size": limit}
 

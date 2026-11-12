@@ -1,0 +1,192 @@
+// Run with: node --test tests/test_role_navigation.js
+// Execute the shipped role/navigation functions; stub only unrelated document services.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const vm = require("node:vm");
+
+const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+const css = fs.readFileSync(path.join(__dirname, "../web/styles.css"), "utf8");
+const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+
+function shippedFunction(name) {
+  const match = script.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"));
+  assert.ok(match, `Missing application function: ${name}`);
+  return match[0];
+}
+
+function shippedDeclaration(name) {
+  const match = script.match(new RegExp(`^(?:let|const) ${name} = [^;]+;`, "m"));
+  assert.ok(match, `Missing application state: ${name}`);
+  return match[0];
+}
+
+function element(attributes = {}) {
+  const classes = new Set((attributes.class || "").split(/\s+/).filter(Boolean));
+  return {
+    id: attributes.id,
+    dataset: { tab: attributes["data-tab"] },
+    textContent: "",
+    innerHTML: "",
+    value: "",
+    hidden: false,
+    classList: {
+      contains: (name) => classes.has(name),
+      toggle(name, force) {
+        const enabled = force === undefined ? !classes.has(name) : force;
+        if (enabled) classes.add(name); else classes.delete(name);
+        return enabled;
+      },
+    },
+    setAttribute: (name, value) => { attributes[name] = value; },
+    removeAttribute: (name) => { delete attributes[name]; },
+    getAttribute: (name) => attributes[name],
+  };
+}
+
+function createPage(mode, savedTab = "") {
+  // Preserve IDs and role classes from the real HTML rather than inventing a fixture menu.
+  const elements = Array.from(html.matchAll(/<(body|button|section|[a-z]+)\b([^>]+)>/g), (match) => {
+    const attributes = Object.fromEntries(Array.from(match[2].matchAll(/([\w-]+)="([^"]*)"/g),
+      (attribute) => [attribute[1], attribute[2]]));
+    return { tag: match[1], ...element(attributes) };
+  });
+  const find = (selector) => {
+    if (selector.startsWith("#")) return elements.find((el) => el.id === selector.slice(1));
+    const tab = selector.match(/^\.tab-btn\[data-tab="([^"]+)"\]$/);
+    if (tab) return elements.find((el) => el.dataset.tab === tab[1]);
+    throw new Error(`Unexpected selector: ${selector}`);
+  };
+  const requests = [];
+  const redirects = [];
+  const storage = new Map([["kb_last_tab", savedTab]]);
+  let currentMode = mode;
+  const document = {
+    body: elements.find((el) => el.tag === "body"),
+    querySelector: find,
+    querySelectorAll: (selector) => elements.filter((el) => el.classList.contains(selector.slice(1))),
+  };
+  const context = vm.createContext({
+    document,
+    $: find,
+    localStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
+    window: { location: { replace: (url) => redirects.push(url) } },
+    openLogin: () => redirects.push("/login"),
+    fetch: async (url) => {
+      requests.push(url);
+      if (url === "/api/mode") {
+        if (currentMode instanceof Error) throw currentMode;
+        return { ok: true, json: async () => currentMode };
+      }
+      if (url === "/api/admin/users") return { ok: true, json: async () => ({ users: [
+        { username: "admin", display_name: "管理员", role: "admin" },
+        { username: "operator", display_name: "运维员", role: "user" },
+      ] }) };
+      if (url.startsWith("/api/audit-logs?")) return { ok: true, json: async () => ({ total: 0, logs: [] }) };
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+  for (const name of ["loadTopQuestions", "loadCategories", "loadDocuments", "loadVendors", "loadTemplates",
+    "syncTplEditor", "renderVendorList", "resetEditor", "loadRecordList", "loadTimeline",
+    "refreshSettings", "refreshWeeklyReport", "loadEditsLog"]) {
+    context[name] = () => {};
+  }
+  const declarations = ["isAdmin", "isSuperAdmin", "isAccountAdmin", "currentUser", "currentDisplayName",
+    "portal", "authEnabled", "LAST_TAB_KEY", "PUBLIC_TABS", "SUPER_ADMIN_TABS", "ADMIN_TABS",
+    "AUDIT_PAGE_SIZE", "auditPage", "auditTotal", "usersBody", "usersStatus"];
+  const functions = ["escapeHtml", "escapeAttr", "applyRoleVisibility", "canAccessTab", "lastTab",
+    "updateNavigation", "switchTo", "loadUsers", "loadAuditLogs", "initPage"];
+  vm.runInContext([...declarations.map(shippedDeclaration), ...functions.map(shippedFunction)].join("\n"), context);
+  return {
+    document, find, requests, redirects,
+    setMode: (value) => { currentMode = value; },
+    run: (source) => vm.runInContext(source, context),
+    async init() {
+      await vm.runInContext("initPage()", context);
+      await new Promise(setImmediate); // Finish async tab loaders invoked by switchTo.
+    },
+    activeTab: () => elements.find((el) => el.tag === "section" && el.classList.contains("active"))?.id,
+  };
+}
+
+const admin = { portal: "admin", authenticated: true, role: "admin", can_register: true, account: "admin" };
+const operator = { portal: "admin", authenticated: true, role: "user", can_register: false, account: "operator" };
+
+test("the full shipped script has valid JavaScript syntax", () => {
+  assert.doesNotThrow(() => new vm.Script(script));
+});
+
+test("administrator-only navigation and panels stay hidden until role initialization", () => {
+  const page = createPage(admin);
+  assert.equal(page.document.body.classList.contains("super-admin"), false);
+  assert.match(css, /body:not\(\.super-admin\)\s+\.super-admin-only\s*\{[^}]*display:\s*none\s*!important/);
+  for (const tab of ["accounts", "logs", "edits"]) {
+    assert.ok(page.find(`.tab-btn[data-tab="${tab}"]`).classList.contains("super-admin-only"));
+    assert.ok(page.find(`#tab-${tab}`).classList.contains("super-admin-only"));
+  }
+});
+
+for (const tab of ["accounts", "logs"]) {
+  test(`admin initializes role and restores ${tab} with working data loading`, async () => {
+    const page = createPage(admin, tab);
+    await page.init();
+    assert.ok(page.document.body.classList.contains("super-admin"));
+    assert.ok(page.document.body.classList.contains("account-admin"));
+    assert.equal(page.find("#current-role").textContent, "管理员");
+    assert.equal(page.activeTab(), `tab-${tab}`);
+    if (tab === "accounts") {
+      assert.ok(page.requests.includes("/api/admin/users"));
+      assert.match(page.find("#users-body").innerHTML, /运维员/);
+      assert.match(page.find("#users-body").innerHTML, /data-del-user="operator"/);
+      assert.doesNotMatch(page.find("#users-body").innerHTML, /data-del-user="admin"/);
+    } else {
+      assert.ok(page.requests.some((url) => url.startsWith("/api/audit-logs?")));
+      assert.match(page.find("#audit-body").innerHTML, /暂无操作记录/);
+    }
+  });
+}
+
+for (const tab of ["accounts", "logs", "edits"]) {
+  test(`ordinary account rejects previously saved administrator tab ${tab}`, async () => {
+    const page = createPage(operator, tab);
+    await page.init();
+    assert.equal(page.activeTab(), "tab-editor");
+    assert.equal(page.document.body.classList.contains("super-admin"), false);
+    assert.equal(page.document.body.classList.contains("account-admin"), false);
+    assert.equal(page.find("#current-role").textContent, "普通账号");
+    page.run(`switchTo("${tab}")`);
+    assert.equal(page.activeTab(), "tab-editor");
+    await page.run("loadUsers(); loadAuditLogs()");
+    assert.deepEqual(page.requests, ["/api/mode"]);
+  });
+}
+
+test("search portal remains public even with an administrator role in a stale payload", async () => {
+  const page = createPage({ ...admin, portal: "search" }, "logs");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-chat");
+  assert.equal(page.document.body.classList.contains("super-admin"), false);
+  assert.equal(page.document.body.classList.contains("admin-mode"), false);
+  assert.equal(page.find("#account-summary").hidden, true);
+  page.run('switchTo("accounts"); switchTo("logs")');
+  assert.equal(page.activeTab(), "tab-chat");
+  assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
+test("failed session refresh clears administrator visibility and permissions", async () => {
+  const page = createPage(admin, "accounts");
+  await page.init();
+  assert.ok(page.document.body.classList.contains("super-admin"));
+  page.requests.length = 0;
+  page.setMode(new Error("session service unavailable"));
+  await page.init();
+  assert.equal(page.activeTab(), "tab-chat");
+  assert.equal(page.document.body.classList.contains("super-admin"), false);
+  assert.equal(page.document.body.classList.contains("account-admin"), false);
+  assert.equal(page.run('canAccessTab("accounts")'), false);
+  assert.equal(page.run('canAccessTab("logs")'), false);
+  assert.equal(page.find("#account-summary").hidden, true);
+  await page.run("loadUsers(); loadAuditLogs()");
+  assert.deepEqual(page.requests, ["/api/mode"]);
+});
