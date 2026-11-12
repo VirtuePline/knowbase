@@ -333,6 +333,23 @@ def delete(doc_id: str) -> bool:
     return _docs().delete_one({"_id": doc_id}).deleted_count > 0
 
 
+# ---------- 记录附件（只挂在记录上，不进文档库、不参与索引） ----------
+
+def add_attachments(doc_id: str, entries: list[dict]) -> None:
+    if not entries:
+        return
+    _docs().update_one({"_id": doc_id}, {"$push": {"attachments": {"$each": entries}}})
+
+
+def get_attachments(doc_id: str) -> list[dict]:
+    row = _docs().find_one({"_id": doc_id}, {"attachments": 1})
+    return [a for a in (row or {}).get("attachments") or [] if isinstance(a, dict)]
+
+
+def remove_attachment(doc_id: str, stored: str) -> None:
+    _docs().update_one({"_id": doc_id}, {"$pull": {"attachments": {"stored": stored}}})
+
+
 # ---------- 时间线事件的人工状态 ----------
 
 EVENT_STATUSES = ("resolved", "unresolved", "unknown", "improving", "temporary")

@@ -362,6 +362,7 @@ def delete(doc_id: str) -> bool:
     if database.count_children(doc_id):
         raise ValueError("该记录存在后续追踪，请先删除子追踪记录")
     _raw_path(record).unlink(missing_ok=True)
+    _remove_attachment_dir(doc_id)
     Ingester().remove(doc_id)
     database.delete(doc_id)
     retrieval.rebuild()
@@ -369,13 +370,98 @@ def delete(doc_id: str) -> bool:
 
 
 def get_document(doc_id: str) -> dict:
-    return _doc_dict(_require(doc_id))
+    data = _doc_dict(_require(doc_id))
+    data["attachments"] = database.get_attachments(doc_id)
+    return data
 
 
 def preview(doc_id: str) -> dict:
     record = _require(doc_id)
     chunks = Ingester().read_chunks(doc_id)
-    return {"doc": _doc_dict(record), "sections": merge_preview(chunks)}
+    doc = _doc_dict(record)
+    doc["attachments"] = database.get_attachments(doc_id)
+    return {"doc": doc, "sections": merge_preview(chunks)}
+
+
+# ---------- 记录附件：只随记录保存，不进文档库、不参与切分与向量索引 ----------
+
+ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
+ATTACHMENT_MAX_COUNT = 20
+_ATTACHMENT_BLOCKED = {".exe", ".bat", ".cmd", ".sh", ".ps1", ".msi", ".dll", ".js", ".vbs"}
+
+
+def _attachment_dir(doc_id: str) -> Path:
+    return settings.attachments_dir / doc_id
+
+
+def _remove_attachment_dir(doc_id: str) -> None:
+    folder = _attachment_dir(doc_id)
+    if folder.is_dir():
+        for item in folder.iterdir():
+            item.unlink(missing_ok=True)
+        folder.rmdir()
+
+
+def _attachment_ext(name: str) -> str:
+    ext = Path(Path(name).name).suffix.lower()
+    if ext in _ATTACHMENT_BLOCKED:
+        raise ValueError(f"{Path(name).name}：出于安全考虑不允许上传可执行文件")
+    return ext
+
+
+def add_attachments(doc_id: str, files: list[tuple[str, bytes]], uploaded_by: str = "") -> list[dict]:
+    """给已有记录挂附件：存 data/attachments/<doc_id>/，元数据写在文档上。
+
+    附件不进文档库、不切分、不参与向量检索，只在记录预览里可打开；
+    单文件上限 20MB，单条记录最多 20 个。
+    """
+    _require(doc_id)
+    existing = database.get_attachments(doc_id)
+    if len(existing) + len(files) > ATTACHMENT_MAX_COUNT:
+        raise ValueError(f"单条记录最多 {ATTACHMENT_MAX_COUNT} 个附件")
+    folder = _attachment_dir(doc_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    entries: list[dict] = []
+    for filename, content in files:
+        original = Path(str(filename or "")).name
+        if not original:
+            raise ValueError("附件文件名为空")
+        ext = _attachment_ext(original)
+        if not content:
+            raise ValueError(f"{original}：文件内容为空")
+        if len(content) > ATTACHMENT_MAX_BYTES:
+            raise ValueError(f"{original}：附件超过 20MB，请压缩后再上传")
+        stored = f"{uuid.uuid4().hex[:12]}{ext}"
+        (folder / stored).write_bytes(content)
+        entries.append({"stored": stored, "name": original, "size": len(content),
+                        "uploaded_at": database.now_iso(), "uploaded_by": uploaded_by})
+    database.add_attachments(doc_id, entries)
+    return database.get_attachments(doc_id)
+
+
+def attachment_path(doc_id: str, stored: str) -> tuple[Path, str, str]:
+    """附件的本地路径、下载名与媒体类型；只接受登记过的附件，防路径穿越。"""
+    entry = next((a for a in database.get_attachments(doc_id) if a.get("stored") == stored), None)
+    if entry is None:
+        raise DocumentNotFound("附件不存在")
+    path = _attachment_dir(doc_id) / entry["stored"]
+    if not path.is_file():
+        raise DocumentNotFound("附件文件已丢失，请重新上传")
+    ext = path.suffix.lower()
+    image_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                   ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
+    media = image_types.get(ext) or ("application/pdf" if ext == ".pdf" else "application/octet-stream")
+    return path, entry.get("name") or path.name, media
+
+
+def remove_attachment(doc_id: str, stored: str) -> list[dict]:
+    _require(doc_id)
+    entry = next((a for a in database.get_attachments(doc_id) if a.get("stored") == stored), None)
+    if entry is None:
+        raise DocumentNotFound("附件不存在")
+    (_attachment_dir(doc_id) / entry["stored"]).unlink(missing_ok=True)
+    database.remove_attachment(doc_id, stored)
+    return database.get_attachments(doc_id)
 
 
 def source_file(doc_id: str) -> tuple[Path, str]:

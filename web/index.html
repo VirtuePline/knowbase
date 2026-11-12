@@ -182,6 +182,7 @@
       <div id="rec-drop">点击选择文件，或把文件拖到这里<br />
         <span class="muted">支持 PDF、DOCX、XLSX、MD 等；故障工单、现场记录、报错截图文档等运维问题材料，与基础文档分开管理</span>
       </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">附件（可选）只随记录保存：不进文档库、不参与向量索引，只在记录预览里打开。</div>
       <input type="file" id="rec-file" multiple hidden />
       <div class="row" style="margin-top:12px">
         <label class="muted" style="font-size:13px">问题类型：
@@ -203,6 +204,9 @@
             <option value="temporary">临时解决</option>
             <option value="resolved">已解决</option>
           </select>
+        </label>
+        <label class="muted" style="font-size:13px" title="附件只随记录保存：不进文档库、不入向量索引、不参与检索；单文件 ≤ 20MB，单条记录最多 20 个">附件（可选）：
+          <input type="file" id="rec-attach" multiple style="max-width:210px" />
         </label>
         <span class="muted" id="rec-upload-status"></span>
       </div>
@@ -2794,7 +2798,11 @@ async function openPreview(id) {
     }
     const docSummary = doc.summary
       ? `<div class="summary-box"><span class="label">全文摘要</span>${escapeHtml(doc.summary)}</div>` : "";
-    body.innerHTML = docSummary + data.sections.map((s) => {
+    const attachHtml = (doc.attachments || []).length
+      ? `<div class="attach-box"><span class="label">附件（${doc.attachments.length}）</span><div class="attach-list">${doc.attachments.map((a) =>
+          `<a class="attach-item" href="/api/documents/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.stored)}" target="_blank" rel="noopener" title="打开附件（不参与检索）">${escapeHtml(a.name || "附件")}<span class="attach-size">${fmtSize(a.size)}</span></a>`).join("")}</div></div>`
+      : "";
+    body.innerHTML = attachHtml + docSummary + data.sections.map((s) => {
       if (s.kind === "notice") return `<div class="notice">${escapeHtml(s.text)}</div>`;
       const head = s.heading ? `<h3>${escapeHtml(s.heading)}</h3>` : "";
       const loc = s.location ? `<div class="loc">${escapeHtml(s.location)}</div>` : "";
@@ -3719,6 +3727,25 @@ function fileTimeValue(file) {
   } catch { return ""; }
 }
 
+// 附件：只挂到记录上（不进文档库、不索引）；返回提示文本
+async function uploadRecordAttachments(docId) {
+  const input = $("#rec-attach");
+  if (!docId || !input.files || !input.files.length) return "";
+  const form = new FormData();
+  for (const file of input.files) form.append("files", file);
+  const count = input.files.length;
+  try {
+    const resp = await fetch(`/api/documents/${encodeURIComponent(docId)}/attachments`, { method: "POST", body: form });
+    const data = await resp.json();
+    if (!resp.ok) { toast(data.detail || "附件上传失败"); return ""; }
+    input.value = "";
+    return `，附件 ${count} 个`;
+  } catch {
+    toast("附件上传失败：网络异常");
+    return "";
+  }
+}
+
 async function uploadRecordFiles(files) {
   files = Array.from(files || []);
   if (!isAdmin || !files.length) return;
@@ -3726,6 +3753,7 @@ async function uploadRecordFiles(files) {
   const parentId = trackingParent?.id || "";
   const requestVersion = editorRequest;
   let succeeded = 0;
+  let firstSavedId = "";
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     status.textContent = `分析并入库 ${i + 1}/${files.length}：${f.name}`;
@@ -3753,10 +3781,18 @@ async function uploadRecordFiles(files) {
       const data = await resp.json();
       if (!resp.ok) toast(`${f.name}：${data.detail || "上传失败"}`);
       else if (data.duplicated) toast(`${f.name}：内容重复，已跳过`);
-      else { succeeded += 1; toast(`运维记录已入库：${f.name}，${data.doc.chunks} 个检索单元`); }
+      else {
+        succeeded += 1;
+        firstSavedId = firstSavedId || data.doc.id;
+        toast(`运维记录已入库：${f.name}，${data.doc.chunks} 个检索单元`);
+      }
     } catch {
       toast(`${f.name}：网络异常`);
     }
+  }
+  if (succeeded) {
+    const attachNote = await uploadRecordAttachments(firstSavedId);
+    if (attachNote) toast(`附件已挂到本次上传的第一条记录${attachNote}`);
   }
   status.textContent = "上传完成";
   if (succeeded === files.length && parentId && trackingParent?.id === parentId && editorRequest === requestVersion) resetEditor();
@@ -3916,8 +3952,9 @@ $("#md-save").addEventListener("click", async () => {
     const category = catName(data.doc.category);
     const savedName = data.doc.name;
     const savedChunks = data.doc.chunks;
+    const attachNote = await uploadRecordAttachments(data.doc.id);
     resetEditor();   // 保存成功后自动进入新建状态（时间重置为当前）
-    mdStatus.textContent = `${action}：${savedChunks} 个分块，分类「${category}」，索引已重建`;
+    mdStatus.textContent = `${action}：${savedChunks} 个分块，分类「${category}」${attachNote}，索引已重建`;
     toast(`${action}《${savedName}》，${savedChunks} 个分块 · ${category}`);
     loadDocuments();
     loadRecordList();

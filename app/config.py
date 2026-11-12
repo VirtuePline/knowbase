@@ -92,6 +92,7 @@ class Settings:
     index_file: Path
     web_dir: Path
     images_dir: Path
+    attachments_dir: Path
 
     chunk_size: int
     chunk_overlap: int
@@ -261,7 +262,8 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
     raw_dir = BASE_DIR / "data" / "raw"
     index_dir = BASE_DIR / "data" / "index"
     images_dir = BASE_DIR / "data" / "images"
-    for d in (raw_dir, index_dir, index_dir / "chunks", images_dir):
+    attachments_dir = BASE_DIR / "data" / "attachments"   # 记录附件：只随记录保存，不进文档库与索引
+    for d in (raw_dir, index_dir, index_dir / "chunks", images_dir, attachments_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     return Settings(
@@ -272,6 +274,7 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
         index_file=index_dir / "bm25.json",
         web_dir=BASE_DIR / "web",
         images_dir=images_dir,
+        attachments_dir=attachments_dir,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         excel_rows_per_chunk=_int(chunking, "excel_rows_per_chunk", 12),

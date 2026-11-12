@@ -304,6 +304,45 @@ async def replace_document(doc_id: str, file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@admin_router.post("/documents/{doc_id}/attachments")
+async def upload_attachments(doc_id: str, files: list[UploadFile] = File(...),
+                             identity: dict = Depends(require_login)) -> dict:
+    """给记录挂附件：只存附件目录，不进文档库、不切分、不参与向量检索。"""
+    payload: list[tuple[str, bytes]] = []
+    for file in files:
+        content = await _read_upload(file, kb.ATTACHMENT_MAX_BYTES,
+                                     f"{file.filename or '附件'} 超过 20MB 上限")
+        payload.append((file.filename or "", content))
+    try:
+        attachments = await run_in_threadpool(kb.add_attachments, doc_id, payload, identity["username"])
+        return {"attachments": attachments}
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail="记录不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.get("/documents/{doc_id}/attachments/{stored}")
+def read_attachment(doc_id: str, stored: str) -> FileResponse:
+    """打开 / 下载记录附件；图片与 PDF 直接内嵌预览。"""
+    try:
+        path, name, media = kb.attachment_path(doc_id, stored)
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    fallback = f"attachment{Path(name).suffix.lower()}"
+    mode = "inline" if media != "application/octet-stream" else "attachment"
+    disposition = f"{mode}; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+    return FileResponse(str(path), headers={"Content-Disposition": disposition}, media_type=media)
+
+
+@admin_router.delete("/documents/{doc_id}/attachments/{stored}")
+def delete_attachment(doc_id: str, stored: str, identity: dict = Depends(require_login)) -> dict:
+    try:
+        return {"attachments": kb.remove_attachment(doc_id, stored)}
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @admin_router.get("/documents/{doc_id}/source")
 def read_source(doc_id: str) -> dict:
     try:
