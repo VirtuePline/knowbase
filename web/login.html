@@ -3,37 +3,37 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta name="theme-color" content="#f4f7fa" />
-<title>登录运维工作台 · 运维知识库</title>
+<meta name="theme-color" content="#102f2e" />
+<title>登录企业知识工作台 · 企业知识库</title>
 <link rel="stylesheet" href="/static/accounts.css" />
 <script src="/static/accounts.js" defer></script>
 </head>
 <body data-account-page="login">
 <main class="account-layout">
-  <section class="account-story" aria-label="运维知识库">
-    <div class="account-brand"><span class="account-brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M7 7h7a4 4 0 014 4v15a7 7 0 00-7-3H7V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M25 7h-3a4 4 0 00-4 4v15a7 7 0 017-3V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M11 12h3m-3 5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><strong>运维知识库</strong><span>工厂维保 · MES 运维</span></div></div>
-    <div class="story-content"><span class="story-eyebrow">让经验持续积累</span><h1>把现场经验，<br />变成下次的答案。</h1><p>记录每一次处理，追踪每一个问题，<br />让团队的运维经验有迹可循。</p>
-      <div class="story-workflow"><div><span>01</span><strong>记录现场</strong><small>保留现象、步骤与处理结果</small></div><div><span>02</span><strong>持续追踪</strong><small>关联后续进展，回顾处理过程</small></div><div><span>03</span><strong>经验复用</strong><small>从知识库中寻找有依据的方案</small></div></div>
+  <section class="account-story" aria-label="企业知识库">
+    <div class="account-brand"><span class="account-brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M7 7h7a4 4 0 014 4v15a7 7 0 00-7-3H7V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M25 7h-3a4 4 0 00-4 4v15a7 7 0 017-3V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M11 12h3m-3 5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><strong>企业知识库</strong><span>公共知识 · 部门协作</span></div></div>
+    <div class="story-content"><span class="story-eyebrow">让经验持续积累</span><h1>连接各部门，<br />让知识安全共享。</h1><p>汇集企业公共资料与部门知识，<br />在授权范围内查找可靠答案。</p>
+      <div class="story-workflow"><div><span>01</span><strong>汇集知识</strong><small>保存制度、资料与工作经验</small></div><div><span>02</span><strong>部门协作</strong><small>按所属部门与共享范围授权</small></div><div><span>03</span><strong>可靠问答</strong><small>从有权访问的文档中查找答案</small></div></div>
     </div>
-    <span class="story-footer">FACTORY MAINTENANCE · KNOWLEDGE WORKSPACE</span>
+    <span class="story-footer">ENTERPRISE KNOWLEDGE · SHARED WORKSPACE</span>
   </section>
   <section class="account-form-region" aria-labelledby="account-title">
     <div class="account-form-wrap">
-      <span class="account-access-note">管理端访问需要登录</span>
-      <div class="account-heading"><span class="account-section-label">欢迎回来</span><h2 id="account-title">登录运维工作台</h2><p>使用您的账号，开始记录、查询与追踪运维问题。</p></div>
+      <span class="account-access-note"><span class="access-dot" aria-hidden="true"></span>企业成员访问入口</span>
+      <div class="account-heading"><span class="account-section-label">欢迎回来</span><h2 id="account-title">登录企业知识工作台</h2><p>使用您的账号，在授权范围内查找企业公共知识与部门资料。</p></div>
       
       <form id="account-form" novalidate>
         <fieldset id="account-fields" disabled>
           <label class="account-field"><span>账号或用户名</span><input id="account-username" type="text" name="username" autocomplete="username" placeholder="输入英文账号或用户名（支持中文）" minlength="1" maxlength="128" autocapitalize="none" spellcheck="false" required /></label>
-          <label class="account-field"><span>密码</span><div class="password-shell"><input id="account-password" type="password" name="password" autocomplete="current-password" placeholder="输入密码；首次登录请留空" maxlength="128" /><button id="password-visibility" data-password-target="account-password" type="button" aria-label="显示密码" aria-pressed="false">显示</button></div></label>
+          <label class="account-field"><span>密码</span><div class="password-shell"><input id="account-password" type="password" name="password" autocomplete="current-password" placeholder="输入密码；首次登录请留空" maxlength="128" aria-describedby="account-login-note" /><button id="password-visibility" data-password-target="account-password" type="button" aria-label="显示密码" aria-pressed="false">显示</button></div></label>
           
           <div id="account-error" class="account-error" role="alert" hidden></div>
           <div id="account-success" class="account-success" role="status" hidden></div>
           <button class="account-submit" id="account-submit" type="submit">登录并进入工作台<span aria-hidden="true">↗</span></button>
         </fieldset>
       </form>
-      <p class="account-note">新账号初始密码为空，首次登录请留空，随后设置自己的密码。账号由管理员创建。</p>
-      <div class="account-status" id="account-status" role="status">正在连接管理端…</div>
+      <p class="account-note" id="account-login-note">新账号由管理员创建，初始密码为空。首次登录请将密码留空，随后设置自己的密码。</p>
+      <div class="account-status" id="account-status" role="status">正在连接企业知识库…</div>
     </div>
   </section>
 </main>

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from app.domain.taxonomy import all_doc_categories
-from app.services import database
+from app.services import access, database
 
 # 摘要中的日期写法 → 归一化为 YYYY-MM-DD；只写年月时归一化为 YYYY-MM
 _DATE_FULL = re.compile(r"(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?")
@@ -92,11 +92,13 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
               status: str, offset: int, limit: int) -> list[dict]:
     allowed_categories = all_doc_categories()
     stages = [
+        {"$match": access.read_filter()},
         {"$match": {"status": "ready", "summary": {"$type": "string"}}},
         {"$project": {"name": 1, "summary": {"$trim": {"input": "$summary"}}, "uploaded_at": 1,
                       "category": 1, "categories": 1, "resolved": 1, "vendor": 1,
                       "doc_type": 1, "parent_id": 1, "root_id": 1,
-                      "uploaded_by": 1, "uploaded_by_name": 1}},
+                      "uploaded_by": 1, "uploaded_by_name": 1, "department_id": 1,
+                      "visibility": 1, "shared_department_ids": 1}},
         {"$match": {"summary": {"$ne": ""}}},
         {"$set": {
             "_tl_full_date": {"$regexFind": {"input": "$summary", "regex": _DATE_FULL.pattern}},
@@ -144,15 +146,19 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
     # 先分页再补父名称与追踪数；失败/处理中的子记录也计入追踪数，与删除保护规则一致。
     page += [
         {"$lookup": {"from": "documents", "localField": "parent_id", "foreignField": "_id",
-                     "pipeline": [{"$project": {"name": 1}}], "as": "_tl_parent"}},
+                     "pipeline": [{"$match": access.read_filter()}, {"$project": {"name": 1}}], "as": "_tl_parent"}},
+        {"$lookup": {"from": "documents", "localField": "root_id", "foreignField": "_id",
+                     "pipeline": [{"$match": access.read_filter()}, {"$project": {"_id": 1}}], "as": "_tl_root"}},
         {"$lookup": {"from": "documents", "let": {"parent": "$_id"}, "pipeline": [
+            {"$match": access.read_filter()},
             {"$match": {"$expr": {"$eq": ["$parent_id", "$$parent"]}}}, {"$count": "count"},
         ], "as": "_tl_children"}},
         {"$set": {
             "_tl_parent_name": {"$ifNull": [{"$arrayElemAt": ["$_tl_parent.name", 0]}, ""]},
             "_tl_child_count": {"$ifNull": [{"$arrayElemAt": ["$_tl_children.count", 0]}, 0]},
+            "_tl_root_id": {"$ifNull": [{"$arrayElemAt": ["$_tl_root._id", 0]}, "$_id"]},
         }},
-        {"$unset": ["_tl_full_date", "_tl_month_date", "_tl_manual", "_tl_parent", "_tl_children",
+        {"$unset": ["_tl_full_date", "_tl_month_date", "_tl_manual", "_tl_parent", "_tl_root", "_tl_children",
                      "_tl_range_start", "_tl_range_end"]},
     ]
     stages.append({"$facet": {
@@ -191,11 +197,14 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
             "category": row["_tl_category"], "categories": row["_tl_categories"],
             "doc_id": record.id, "doc_name": record.name, "doc_type": record.doc_type,
             "vendor": record.vendor, "uploaded_by": record.uploaded_by,
-            "uploaded_by_name": record.uploaded_by_name, "parent_id": record.parent_id,
-            "root_id": record.root_id or record.id, "parent_name": row.get("_tl_parent_name", ""),
+            "uploaded_by_name": record.uploaded_by_name,
+            "parent_id": record.parent_id if row.get("_tl_parent_name") else "",
+            "root_id": row.get("_tl_root_id") or record.id, "parent_name": row.get("_tl_parent_name", ""),
             "child_count": row.get("_tl_child_count", 0), "brief": _brief(record.summary),
             "heading": "", "summary": record.summary,
             "resolved": "yes" if event_status == "resolved" else "no", "status": event_status,
+            "can_write": access.can_write(record), "department_id": record.department_id,
+            "visibility": record.visibility, "shared_department_ids": record.shared_department_ids,
         })
     counts = {row["_id"]: row["count"] for row in result.get("categories", []) if row.get("_id")}
     category_order = all_doc_categories() + sorted(set(counts) - set(all_doc_categories()))

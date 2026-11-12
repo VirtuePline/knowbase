@@ -114,7 +114,9 @@ class RequireAdminGateTest(unittest.TestCase):
         token = auth.create_session("admin")
         with patch.object(routes_mod, "settings", replace(self.tmp_settings, auth_enabled=True)):
             self.assertEqual(require_admin(token), {"username": "admin", "role": "user", "display_name": "admin",
-                                                    "must_change_password": False, "password_version": 0})
+                                                    "must_change_password": False, "password_version": 0,
+                                                    "department_ids": ["operations"],
+                                                    "department_roles": {"operations": "editor"}})
 
 
 if __name__ == "__main__":

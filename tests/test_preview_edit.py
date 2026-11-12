@@ -248,14 +248,16 @@ class ImageUploadTest(unittest.TestCase):
 
     def test_image_is_saved_under_images_dir(self):
         upload = UploadFile(file=io.BytesIO(b"\x89PNG\r\n\x1a\n"), filename="示意图.png")
-        result = asyncio.run(routes.upload_image(upload))
+        with patch.object(routes.mongo, "db") as get_db:
+            result = asyncio.run(routes.upload_image(upload, identity={"username": "engineer"}))
+            get_db.return_value.image_assets.insert_one.assert_called_once()
         self.assertEqual(result["url"], "/images/" + result["name"])
         self.assertTrue((self.tmp_settings.images_dir / result["name"]).is_file())
 
     def test_non_image_extension_is_rejected(self):
         upload = UploadFile(file=io.BytesIO(b"hello"), filename="记录.txt")
         with self.assertRaises(HTTPException):
-            asyncio.run(routes.upload_image(upload))
+            asyncio.run(routes.upload_image(upload, identity={"username": "engineer"}))
 
 
 if __name__ == "__main__":

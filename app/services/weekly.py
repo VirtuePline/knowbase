@@ -15,7 +15,8 @@ import threading
 import time
 
 from app.core.llm import client as llm_client
-from app.services import database, kb
+from fastapi import HTTPException
+from app.services import access, database, kb, mongo
 
 _SETTINGS_KEY = "weekly_report"
 _RESOLVED_LABELS = {"resolved": "已解决", "improving": "处理中", "temporary": "临时解决", "unresolved": "未解决"}
@@ -67,10 +68,10 @@ def collect_records(week_start: str, person: str) -> list[dict]:
     """某人本周（week_start 起 7 天内）的运维记录，按时间倒序；标题完整保留。"""
     end = (datetime.date.fromisoformat(week_start) + datetime.timedelta(days=7)).isoformat()
     items = []
-    for doc in database.list_all():
+    for doc in kb._visible_records():
         if doc.doc_type != "record":
             continue
-        owner = (doc.uploaded_by_name or doc.uploaded_by or "").strip()
+        owner = (doc.uploaded_by or "").strip()
         if owner != person:
             continue
         day = (doc.uploaded_at or "")[:10]
@@ -80,6 +81,44 @@ def collect_records(week_start: str, person: str) -> list[dict]:
                       "resolved": _RESOLVED_LABELS.get(doc.resolved, "")})
     items.sort(key=lambda x: x["date"], reverse=True)
     return items
+
+
+def record_owners(*, managed_only: bool = False) -> list[str]:
+    """选择周报对象使用不可变账号，显示名仅用于页面展示。"""
+    departments = access.managed_departments()
+    return sorted({doc.uploaded_by for doc in kb._visible_records()
+                   if doc.doc_type == "record" and doc.uploaded_by
+                   and (not managed_only or doc.department_id in departments)})
+
+
+def _can_generate_for(account: str) -> bool:
+    if access.is_platform_admin():
+        return True
+    actor = access.current_identity() or {}
+    if account == actor.get("username"):
+        return True
+    row = mongo.db().users.find_one({"_id": account})
+    return bool(row and access.managed_departments().intersection(row.get("department_ids", [])))
+
+
+def visible_reports(limit: int = 12) -> list[dict]:
+    """按稳定账号读取，并在返回缓存摘要前重新检查全部来源文档。"""
+    query = {} if access.is_platform_admin() else {"owner_account": {"$exists": True}}
+    result = []
+    for row in mongo.db().weekly_reports.find(query, {"_id": 0}).sort("week_start", -1):
+        account = row.get("owner_account", "")
+        if not access.is_platform_admin() and (not account or not _can_generate_for(account)):
+            continue
+        items = row.get("items", [])
+        if any((doc := database.get(item.get("doc_id", ""))) is None or not access.can_read(doc)
+               for item in items):
+            continue  # 摘要可能包含已撤权来源，不能只删除来源列表再继续返回摘要
+        if row.get("access_revision") != database.access_revision():
+            continue
+        result.append(row)
+        if len(result) >= limit:
+            break
+    return result
 
 
 _WEEKLY_PROMPT = """你是工厂运维团队的周报撰写助手。请阅读某位运维人本周的全部处理记录原文，写一段周报小结。
@@ -140,6 +179,8 @@ def generate_reports(week: str | None = None, operators: list[str] | None = None
     generated_at = database.now_iso()
     results = []
     for person in targets:
+        if not _can_generate_for(person):
+            raise HTTPException(status_code=403, detail="没有此账号的周报管理权限")
         items = collect_records(week, person)
         summary = summarize(person, week, items)
         markdown = render_markdown(week, person, items, summary)

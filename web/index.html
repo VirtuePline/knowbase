@@ -3,16 +3,17 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>工厂维保 / MES 运维知识库助手</title>
+<title>企业知识库</title>
 <meta name="theme-color" content="#f4f7fa" />
 <link rel="stylesheet" href="/static/styles.css" />
+<link rel="stylesheet" href="/static/record-attachments.css" />
 </head>
 <body class="search-mode">
 <a class="skip-link" href="#workspace">跳至主要内容</a>
 <header class="app-sidebar">
   <div class="brand">
     <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M7 7h7a4 4 0 014 4v15a7 7 0 00-7-3H7V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M25 7h-3a4 4 0 00-4 4v15a7 7 0 017-3V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M11 12h3m-3 5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
-    <div><h1>运维知识库</h1><span class="brand-sub">工厂维保 · MES 运维</span></div>
+    <div><h1>企业知识库</h1><span class="brand-sub">公共知识 · 部门协作</span></div>
   </div>
   <div class="nav-caption">工作空间</div>
   <nav aria-label="主要导航">
@@ -22,12 +23,12 @@
     <button class="tab-btn admin-tab" data-tab="weekly">运维周报</button>
     <button class="tab-btn admin-tab" data-tab="editor">新增运维记录</button>
     <button class="tab-btn admin-tab" data-tab="records">运维记录管理</button>
-    <button class="tab-btn admin-tab" data-tab="settings">模板与厂商设置</button>
+    <button class="tab-btn admin-tab super-admin-only" data-tab="settings">知识分类与模板</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="edits">修改记录</button>
-    <button class="tab-btn admin-tab super-admin-only" data-tab="accounts">用户管理</button>
+    <button class="tab-btn admin-tab account-admin-only" data-tab="accounts">用户管理</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="logs">操作日志</button>
   </nav>
-  <div class="sidebar-note"><span class="sidebar-note-icon" aria-hidden="true">↗</span><strong>让经验持续积累</strong><p>从历史记录中寻找答案，让现场处理更有依据。</p></div>
+  <div class="sidebar-note"><span class="sidebar-note-icon" aria-hidden="true">↗</span><strong>让经验持续积累</strong><p>汇集公共知识，连接各部门的经验与资料。</p></div>
   <div class="sidebar-footer">
     <div class="account-summary" id="account-summary" hidden><div><strong id="current-user"></strong><span id="current-role"></span></div></div>
     <a class="register-link" id="change-password-link" href="/change-password" hidden>修改密码 <span aria-hidden="true">↗</span></a>
@@ -37,14 +38,14 @@
 </header>
 
 <main id="workspace" tabindex="-1">
-  <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><span class="workspace-context">工厂维保与 MES 运维</span></div>
+  <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><span class="workspace-context">企业公共知识与部门知识</span></div>
   <!-- 问答 -->
   <section class="tab active" id="tab-chat">
     <button type="button" class="history-fab" id="history-btn" title="查看最近的问答记录（仅保存在本机浏览器）">历史记录</button>
     <div class="chat-hero">
-      <div class="hero-eyebrow"><span aria-hidden="true"></span> 现场经验，随时可查</div>
+      <div class="hero-eyebrow"><span aria-hidden="true"></span> 企业知识，授权共享</div>
       <h1>让每一次排障，<br class="mobile-break" />都有据可循。</h1>
-      <p>描述设备故障或 MES 异常，优先查找知识库中的解决方案；缺少方案时查询联网参考。</p>
+      <p>查找企业制度、业务流程、部门资料和处理经验，回答仅使用您有权访问的知识。</p>
       <div class="knowledge-overview" aria-label="知识库概览">
         <div class="overview-item"><span class="overview-icon" aria-hidden="true">▤</span><div><strong id="overview-documents">—</strong><span>已入库文档</span></div></div>
         <div class="overview-item"><span class="overview-icon blue" aria-hidden="true">⌕</span><div><strong id="overview-chunks">—</strong><span>可检索内容</span></div></div>
@@ -69,7 +70,7 @@
               <button class="chip-x" id="attach-remove" title="移除图片" type="button">×</button>
             </span>
           </div>
-          <textarea id="question" aria-label="描述故障现象或 MES 异常" placeholder="描述故障现象、报错代码或设备问题…"></textarea>
+          <textarea id="question" aria-label="输入企业知识问题" placeholder="查询制度、业务流程、部门资料或技术问题…"></textarea>
         </div>
         <button class="primary" id="send" type="button">发送<span aria-hidden="true">↗</span></button>
       </div>
@@ -81,7 +82,7 @@
         <button type="button" class="chat-toggle" id="websearch-toggle" aria-pressed="false" hidden>联网搜索</button>
       </div>
       <div class="composer-help"><span>支持粘贴或拖入故障截图，发送前可补充描述</span><span><kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行</span></div>
-      <div class="answer-note">优先使用知识库方案，缺少方案时查询联网参考。联网内容请结合现场情况核实。</div>
+      <div class="answer-note">回答优先依据授权知识，参考来源可点击预览。企业公共文档仅向已登录员工开放。</div>
     </div>
 
     <!-- 历史记录：最近 10 条问答，仅存浏览器 localStorage，不上传后端 -->
@@ -102,17 +103,18 @@
 
   <!-- 文档管理 -->
   <section class="tab" id="tab-docs">
-    <div class="page-heading"><h1>文档知识库</h1><p>集中管理设备资料、操作手册与基础台账，让现场经验随时可查。</p></div>
+    <div class="page-heading"><h1>文档知识库</h1><p>集中管理企业公共文档与部门资料，按归属和共享范围控制访问。</p></div>
     <div class="panel-card admin-only">
       <h2>上传文档</h2>
+      <div id="doc-scope-host"></div>
       <div id="drop">点击选择文件，或把文件拖到这里<br />
-        <span class="muted">上传文档统一入「常识库」：网段规划、设备 IP / 机器、电脑配置 / MAC / 使用人等台账，以及系统手册、操作规程等资料；支持 PDF、DOCX、XLSX、XLSM、CSV、TXT、MD（旧版 .doc / .xls 请先另存为新格式）</span><br />
+        <span class="muted">支持企业制度、部门流程、业务资料、操作手册与知识文档；支持 PDF、DOCX、XLSX、XLSM、CSV、TXT、MD（旧版 .doc / .xls 请先另存为新格式）</span><br />
         <span class="muted">入库后自动分析：剔除目录、封面、版权页等非主要内容，为每个主要章节生成摘要；检索按摘要匹配，原文随结果返回</span>
       </div>
       <input type="file" id="file" multiple hidden />
       <input type="file" id="replace-file" hidden />
       <div class="row" style="margin-top:12px">
-        <button class="ghost" id="rebuild">重建文档库</button>
+        <button class="ghost super-admin-only" id="rebuild">重建文档库</button>
         <span class="muted" id="upload-status"></span>
       </div>
     </div>
@@ -179,10 +181,11 @@
     </div>
     <div class="panel-card">
       <h2>上传运维记录文件</h2>
+      <div id="record-scope-host"></div>
       <div id="rec-drop">点击选择文件，或把文件拖到这里<br />
         <span class="muted">支持 PDF、DOCX、XLSX、MD 等；故障工单、现场记录、报错截图文档等运维问题材料，与基础文档分开管理</span>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:6px">附件（可选）只随记录保存：不进文档库、不参与向量索引，只在记录预览里打开。</div>
+      <p class="record-attachments-hint">需要附加照片或文件？<a href="#record-attachments">先添加附件</a>，再选择记录文件。多份记录的附件仅随第一条成功入库的记录保存。</p>
       <input type="file" id="rec-file" multiple hidden />
       <div class="row" style="margin-top:12px">
         <label class="muted" style="font-size:13px">问题类型：
@@ -204,9 +207,6 @@
             <option value="temporary">临时解决</option>
             <option value="resolved">已解决</option>
           </select>
-        </label>
-        <label class="muted" style="font-size:13px" title="附件只随记录保存：不进文档库、不入向量索引、不参与检索；单文件 ≤ 20MB，单条记录最多 20 个">附件（可选）：
-          <input type="file" id="rec-attach" multiple style="max-width:210px" />
         </label>
         <span class="muted" id="rec-upload-status"></span>
       </div>
@@ -232,6 +232,17 @@
         </div>
         <button class="ghost" id="md-save">保存并入知识库</button>
         <span class="muted" id="md-status"></span>
+      </div>
+      <div class="record-attachments" id="record-attachments" aria-label="记录附件">
+        <div class="record-attachments-heading"><h3>记录附件<span>可选</span></h3><span class="record-attachments-count" data-attachment-count>0 个待上传</span></div>
+        <div class="record-attachment-drop" data-attachment-drop tabindex="0" role="region" aria-label="附件粘贴与拖放区域" aria-describedby="record-attachment-help">
+          <span class="record-attachment-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m9 12 6-6a3 3 0 0 1 4 4L10 19a5 5 0 0 1-7-7l10-10M7 14l8-8"/></svg></span>
+          <div class="record-attachment-help"><strong>拖入多个文件，或点击此区域后按 Ctrl+V 粘贴</strong><small id="record-attachment-help">在这里粘贴截图会作为附件；在正文粘贴图片仍会插入正文。</small></div>
+          <div class="record-attachment-actions"><button type="button" class="ghost" data-attachment-choose>选择附件</button><button type="button" class="ghost" data-attachment-clipboard>从剪贴板添加</button></div>
+          <input type="file" id="rec-attach" multiple hidden aria-label="选择多个记录附件" />
+        </div>
+        <ul class="record-attachment-list" data-attachment-list hidden></ul>
+        <div class="record-attachments-footer"><p data-attachment-target></p><span class="record-attachment-status" data-attachment-status role="status" aria-live="polite"></span><button type="button" class="ghost" data-attachment-retry hidden>重试附件上传</button><button type="button" class="ghost" data-attachment-clear disabled>清空</button></div>
       </div>
       <div class="find-bar">
         <input type="text" id="find-text" placeholder="查找内容" />
@@ -337,9 +348,9 @@
 
   <!-- 后台设置：各问题类型的填写模板与厂商清单 -->
   <section class="tab" id="tab-settings">
-    <div class="page-heading"><h1>模板与厂商设置</h1><p>统一记录格式与厂商信息，让知识积累更加有序。</p></div>
+    <div class="page-heading"><h1>知识分类与模板</h1><p>维护企业知识分类与记录模板，运维资料可继续关联厂商。</p></div>
     <div class="panel-card admin-only">
-      <h2>模板与厂商设置</h2>
+      <h2>知识分类与模板</h2>
       <div class="row" style="align-items:center;margin-bottom:8px">
         <span class="muted" style="font-size:13px">问题类型</span>
         <select id="tpl-cat" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px"></select>
@@ -399,14 +410,20 @@
   </section>
 
   <!-- 账号管理（独立页）：修改密码 / 创建普通账号 / 账号列表 -->
-  <section class="tab super-admin-only" id="tab-accounts">
-    <div class="page-heading"><h1>用户管理</h1><p>管理员创建成员账号并维护账号列表；修改自己的密码请用侧边栏「修改密码」入口。</p></div>
+  <section class="tab account-admin-only" id="tab-accounts">
+    <div class="page-heading"><h1>用户管理</h1><p>维护部门目录、成员和部门角色；修改自己的密码请用侧边栏「修改密码」入口。</p></div>
     <div class="panel-card admin-only">
-      <h2>用户管理</h2>
+      <h2>部门目录</h2>
+      <div id="department-directory" class="department-directory"></div>
+      <div class="row super-admin-only department-create-row"><label>部门标识<input id="department-id" placeholder="例如 finance" maxlength="40" /></label><label>部门名称<input id="department-name" placeholder="例如 财务部" maxlength="60" /></label><button type="button" class="ghost" id="department-create">创建部门</button></div>
+    </div>
+    <div class="panel-card admin-only">
+      <h2>成员与部门角色</h2>
       <div class="row account-admin-only" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <span class="muted" style="font-size:13px">创建普通账号</span>
         <input type="text" id="reg-account" placeholder="账号（如 zs）" autocapitalize="none" spellcheck="false" style="width:170px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
         <input type="text" id="reg-username" placeholder="用户名（如 张三）" autocapitalize="none" spellcheck="false" style="width:150px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
+        <div id="reg-departments" class="department-roles"></div>
         <button class="ghost" type="button" id="reg-create">创建账号</button>
         <span class="muted" id="reg-status" style="font-size:13px"></span>
       </div>
@@ -443,7 +460,7 @@
   <!-- 操作日志（独立页，分页显示） -->
   <!-- 修改记录：全库编辑溯源，谁在何时新建 / 修改 -->
   <section class="tab super-admin-only" id="tab-edits">
-    <div class="page-heading"><h1>修改记录</h1><p>所有运维记录的编辑溯源，做到每一条都可追溯。</p></div>
+    <div class="page-heading"><h1>修改记录</h1><p>知识文档与业务记录的编辑溯源，做到每一条都可追溯。</p></div>
     <div class="panel-card admin-only">
       <h2>修改记录</h2>
       <div class="row" style="align-items:center;margin-bottom:8px">
@@ -602,6 +619,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="/static/enterprise.js"></script>
+<script src="/static/record-attachments.js"></script>
 <script>
 const $ = (sel) => document.querySelector(sel);
 const toastEl = $("#toast");
@@ -737,7 +756,9 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 const log = $("#chat-log");
 const questionBox = $("#question");
 const sendBtn = $("#send");
+sendBtn.disabled = true;
 const history = [];
+let historyConversationId = "";
 
 function addMessage(role, html, raw) {
   const wrap = document.createElement("div");
@@ -917,6 +938,7 @@ log.addEventListener("click", async (e) => {
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
+    historyConversationId = String(data.conversation_id || "");
     renderChatAnswer(bubble, data, question, started, allRejected);
     log.scrollTop = log.scrollHeight;
   } catch (err) {
@@ -985,6 +1007,7 @@ async function ask(question, userLabel) {
       body: JSON.stringify({
         question: q,
         history: ctxState.enabled && llmOn ? history : [],
+        conversation_id: ctxState.enabled && llmOn && history.length ? historyConversationId : "",
         fast_mode: fmState.enabled,
         llm_polish: llmOn,
         web_search: llmOn && wsState.enabled,
@@ -992,6 +1015,7 @@ async function ask(question, userLabel) {
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
+    historyConversationId = String(data.conversation_id || "");
     renderChatAnswer(pending, data, q, started);
     if (data.status !== "guide") {
       lastAnswered = true;
@@ -1112,7 +1136,7 @@ let docCategories = [];
 let docView = "date";          // "date" 按年月日分组 | "category" 按分类分组
 let docCatFilter = "";
 const collapsedMonths = new Set();   // 日期视图里被收起的月份，重渲染后保持状态
-let isAdmin = false;          // 兼容旧名：已登录并可写（包括普通账号）
+let isAdmin = false;          // 当前管理端会话有文档写权限
 let isSuperAdmin = false;     // 管理员账号（role=admin）：独占用户管理、修改记录与操作日志
 
 // 管理员专属导航与页面默认隐藏，读取会话角色后统一显示。
@@ -1140,7 +1164,7 @@ const DOC_CATEGORY_STYLE = {
 
 function catName(value) {
   const name = String(value || "").trim();
-  return DOC_CATEGORY_ORDER.includes(name) ? name : "其他";
+  return name || "其他";
 }
 
 function catBadge(value) {
@@ -1223,7 +1247,7 @@ function renderCategoryFilter() {
 // 记录时间列：只显示年月日；管理员点击可修改
 function timeCell(d) {
   const date = String(d.uploaded_at || "").slice(0, 10);
-  if (!isAdmin) return escapeHtml(date);
+  if (!enterpriseCanWrite(d)) return escapeHtml(date);
   return `<button type="button" class="ghost" data-time="${escapeHtml(d.id)}" title="点击修改记录时间（年月日）">${escapeHtml(date)}</button>`;
 }
 
@@ -1245,9 +1269,10 @@ function docRowHtml(d) {
   const btns = [
     `<button class="ghost" data-pv="${id}">预览</button>`,
     d.has_source ? `<button class="ghost" data-dl="${id}">下载</button>` : "",
-    isAdmin && d.editable ? `<button class="ghost" data-edit="${id}">编辑</button>` : "",
-    isAdmin ? `<button class="ghost" data-rep="${id}">替换</button>` : "",
-    isAdmin ? `<button class="ghost danger" data-del="${id}">删除</button>` : "",
+    enterpriseCanManageAccess(d) ? `<button class="ghost" data-document-access="${id}">管理权限</button>` : "",
+    enterpriseCanWrite(d) && d.editable ? `<button class="ghost" data-edit="${id}">编辑</button>` : "",
+    enterpriseCanWrite(d) ? `<button class="ghost" data-rep="${id}">替换</button>` : "",
+    enterpriseCanWrite(d) ? `<button class="ghost danger" data-del="${id}">删除</button>` : "",
   ].filter(Boolean).join("");
   const vendorOptions = ['<option value="">（选择厂商）</option>'];
   if (d.vendor && !vendorList.includes(d.vendor)) {
@@ -1256,7 +1281,7 @@ function docRowHtml(d) {
   vendorOptions.push(...vendorList.map((name) =>
     `<option value="${escapeAttr(name)}"${name === (d.vendor || "") ? " selected" : ""}>${escapeHtml(name)}</option>`));
   // 管理员：标签徽标 + 「改标签」按钮（点击打开问题类型选择窗体）；厂商仍是二级单选
-  const category = isAdmin
+  const category = enterpriseCanWrite(d)
     ? catBadges(d) + `
       <span class="multicat inline-cat">
         <button type="button" class="cat-select multicat-btn" data-inline-btn="${id}" title="打开选择窗体修改分类标签（可多选）">改标签</button>
@@ -1266,7 +1291,7 @@ function docRowHtml(d) {
         : "")
     : catBadges(d);
   return `<tr>
-        <td><span class="doc-link" data-pv="${id}" title="点击预览">${escapeHtml(d.name)}</span>
+        <td><span class="doc-link" data-pv="${id}" title="点击预览">${escapeHtml(d.name)}</span>${enterpriseDocumentLabel(d)}
           ${d.summary ? `<div class="doc-summary" title="${escapeHtml(d.summary)}">${escapeHtml(d.summary)}</div>` : ""}
           ${d.vendor ? `<div class="net-tags"><span class="net-tag" title="厂商">厂商：${escapeHtml(d.vendor)}</span></div>` : ""}
           <div class="record-provenance"><span>运维人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
@@ -1333,7 +1358,7 @@ function renderByCategory(docs) {
     }
   }
   let html = "";
-  for (const name of DOC_CATEGORY_ORDER) {
+  for (const name of [...DOC_CATEGORY_ORDER, ...[...groups.keys()].filter((name) => !DOC_CATEGORY_ORDER.includes(name))]) {
     const list = groups.get(name);
     if (!list || !list.length) continue;
     if (name === "厂商系统") {
@@ -1576,7 +1601,7 @@ function tlEffective(event) {
 
 function tlStatusControl(event) {
   const badge = tlBadge(tlEffective(event));
-  if (!isAdmin) return badge;
+  if (!enterpriseCanWrite(event)) return badge;
   const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "";   // 存量 unknown 显示为未解决
   const options = [
     ["", "未解决（默认）"],
@@ -1599,7 +1624,7 @@ function tlItemHtml(event) {
           <span class="tl-brief" title="${escapeAttr(event.summary)}">${escapeHtml(event.brief || event.summary)}</span>
           ${isKnowledge ? "" : tlStatusControl(event)}${catBadges(event)}${vendor}${heading}
         </div>
-        <div class="tl-source"><button type="button" class="tl-doc" data-tl-pv="${escapeAttr(event.doc_id)}" title="点击预览文档">${escapeHtml(event.doc_name)}</button><span class="tl-uploader">运维人：${escapeHtml(String(event.uploaded_by_name || event.uploaded_by || "历史记录"))}</span>${isAdmin && !isKnowledge && event.doc_type !== "doc" ? `<button type="button" class="ghost track-button" data-track="${escapeAttr(event.doc_id)}">追踪 <span aria-hidden="true">↗</span></button>` : ""}</div>
+        <div class="tl-source"><button type="button" class="tl-doc" data-tl-pv="${escapeAttr(event.doc_id)}" title="点击预览文档">${escapeHtml(event.doc_name)}</button><span class="tl-uploader">运维人：${escapeHtml(String(event.uploaded_by_name || event.uploaded_by || "历史记录"))}</span>${enterpriseCanWrite(event) && !isKnowledge && event.doc_type !== "doc" ? `<button type="button" class="ghost track-button" data-track="${escapeAttr(event.doc_id)}">追踪 <span aria-hidden="true">↗</span></button>` : ""}</div>
         <div class="timeline-relations">${recordRelationsHtml(event, "tl-pv")}</div>
       </div>
     </div>`;
@@ -2320,6 +2345,7 @@ function renderToggles() {
 
 function startNewChat() {
   history.length = 0;
+  historyConversationId = "";
   log.innerHTML = "";
 }
 
@@ -2339,7 +2365,7 @@ if (ctxToggle) ctxToggle.addEventListener("click", () => {
 if (newChatBtn) newChatBtn.addEventListener("click", startNewChat);
 
 /* ---------- 历史记录：最近 10 条问答，仅存浏览器 localStorage，不上传后端 ---------- */
-const HISTORY_KEY = "kb_chat_history";
+const HISTORY_KEY = "kb_chat_history"; // 旧键只在迁移时清除，新历史按账号与权限版本隔离
 const HISTORY_LIMIT = 10;
 const historyPanel = $("#history-panel");
 const historyList = $("#history-list");
@@ -2347,7 +2373,7 @@ let historyOpen = false;
 
 function loadHistory() {
   try {
-    const items = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    const items = JSON.parse(localStorage.getItem(enterpriseHistoryKey()) || "[]");
     return Array.isArray(items) ? items : [];
   } catch { return []; }
 }
@@ -2356,7 +2382,7 @@ function saveHistoryItem(item) {
   const items = loadHistory();
   items.unshift(item);
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_LIMIT)));
+    localStorage.setItem(enterpriseHistoryKey(), JSON.stringify(items.slice(0, HISTORY_LIMIT)));
   } catch { /* 存储满/隐私模式：历史记录不可用，不影响问答 */ }
 }
 
@@ -2421,7 +2447,7 @@ if (historyPanel) {
     document.body.classList.remove("history-open");
   });
   $("#history-clear").addEventListener("click", () => {
-    localStorage.removeItem(HISTORY_KEY);
+    localStorage.removeItem(enterpriseHistoryKey());
     renderHistory();
     toast("已清空历史记录");
   });
@@ -2443,7 +2469,7 @@ let wrSelected = new Set();  // 已勾选（需要生成周报）的运维人
 
 async function refreshWeeklyReport() {
   loadWeeklyReports();
-  $("#wr-generate").textContent = isSuperAdmin ? "立即生成全部" : "生成本周周报";
+  $("#wr-generate").textContent = isSuperAdmin ? "立即生成全部" : isAccountAdmin ? "生成本部门周报" : "生成本周周报";
   if (!isSuperAdmin) return;   // 定时设置与名单仅管理员可见
   try {
     const resp = await fetch("/api/weekly-report/settings");
@@ -2594,7 +2620,7 @@ if ($("#reg-create")) {
     $("#reg-create").disabled = true;
     regStatus.textContent = "正在创建…";
     try {
-      await postAccount("/api/admin/register", { account, username }, regStatus);
+      await postAccount("/api/admin/register", { account, username, ...enterpriseMembershipValue($("#reg-departments")) }, regStatus);
       regStatus.textContent = `已创建「${username}（${account}）」，初始密码为空`;
       toast(`普通账号「${username}」已创建`);
       regAccountInput.value = regUsernameInput.value = "";
@@ -2612,26 +2638,13 @@ const usersBody = $("#users-body");
 const usersStatus = $("#users-status");
 
 async function loadUsers() {
-  if (!isSuperAdmin || !usersBody) return;
+  if (!isAccountAdmin || !usersBody) return;
   usersStatus.textContent = "";
   try {
     const resp = await fetch("/api/admin/users");
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "账号列表加载失败");
-    usersBody.innerHTML = (data.users || []).map((user) => {
-      const admin = user.role === "admin";
-      const when = String(user.created_at || "").slice(0, 16).replace("T", " ");
-      const td = "padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle";
-      return `<tr>
-        <td style="${td}">${escapeHtml(user.username)}</td>
-        <td style="${td}">${escapeHtml(user.display_name || user.username)}</td>
-        <td style="${td}">${admin ? "管理员" : "普通账号"}</td>
-        <td style="${td}">${escapeHtml(when)}</td>
-        <td style="${td}">${admin
-          ? '<span style="color:#a8b6bd">—</span>'
-          : `<button class="ghost danger" type="button" data-del-user="${escapeHtml(user.username)}">删除</button>`}</td>
-      </tr>`;
-    }).join("");
+    usersBody.innerHTML = enterpriseUsersRows(data.users || []);
     if (!(data.users || []).length) usersStatus.textContent = "暂无账号";
   } catch (err) {
     usersBody.innerHTML = "";
@@ -2670,12 +2683,13 @@ function openLogin() { window.location.assign("/login"); }
 function closeLogin() { loginMask.classList.remove("show"); }
 
 $("#mode-badge").addEventListener("click", async () => {
-  if (!isAdmin) return;
+  if (!currentUser) return;
   const button = $("#mode-badge");
   button.disabled = true;
   try {
     const response = await fetch("/api/admin/logout", { method: "POST" });
     if (!response.ok) throw new Error("退出失败，请重试");
+    enterpriseClearSession();
     window.location.assign("/login");
   } catch (error) { toast(String(error.message || error)); button.disabled = false; }
 });
@@ -2691,12 +2705,11 @@ function updateNavigation(tab) {
 
 const LAST_TAB_KEY = "kb_last_tab";   // 记住最后停留的页签，刷新后原地恢复
 const PUBLIC_TABS = ["chat", "docs", "timeline"];
-const SUPER_ADMIN_TABS = ["edits", "accounts", "logs"];
-const ADMIN_TABS = ["editor", "records", "settings", "weekly", ...SUPER_ADMIN_TABS];
+const SUPER_ADMIN_TABS = ["edits", "logs", "settings"];
+const ADMIN_TABS = ["editor", "records", "accounts", "weekly", ...SUPER_ADMIN_TABS];
 
 function canAccessTab(tab) {
-  return PUBLIC_TABS.includes(tab) || (isAdmin && ADMIN_TABS.includes(tab)
-    && (!SUPER_ADMIN_TABS.includes(tab) || isSuperAdmin));
+  return PUBLIC_TABS.includes(tab) || (portal === "admin" && ((tab === "accounts" && isAccountAdmin) || (isAdmin && ADMIN_TABS.includes(tab) && tab !== "accounts" && (!SUPER_ADMIN_TABS.includes(tab) || isSuperAdmin))));
 }
 
 function lastTab() {
@@ -2708,7 +2721,7 @@ function switchTo(tab, { preserveEditor = false } = {}) {
     if (ADMIN_TABS.includes(tab) && !isAdmin && portal === "admin") openLogin();
     return;
   }
-  if (tab === "editor" && !preserveEditor) resetEditor();
+  if (tab === "editor" && !preserveEditor && resetEditor() === false) return;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + tab));
   updateNavigation(tab);
@@ -3476,6 +3489,12 @@ function insertImageMarkdown(url, alt) {
 }
 
 async function handleImagePaste(event) {
+  const files = RecordAttachments.clipboardFiles(event.clipboardData);
+  if (files.some((file) => !/^image\//.test(file.type))) {
+    event.preventDefault();
+    recordAttachmentQueue.add(files);
+    return;
+  }
   const items = Array.from((event.clipboardData && event.clipboardData.items) || []);
   const imageItem = items.find((it) => it.kind === "file" && /^image\//.test(it.type));
   if (!imageItem) return;   // 纯文本或富文本粘贴交给浏览器默认处理
@@ -3542,6 +3561,7 @@ function renderTrackingParent() {
 }
 
 function clearTracking() {
+  if (trackingParent && !recordAttachmentQueue.prepareContextChange()) return false;
   const refLine = trackingRefLine();
   trackingParent = null;
   // 用户尚未改动正文时，取消追踪顺带移除自动插入的引用行
@@ -3551,6 +3571,7 @@ function clearTracking() {
   }
   renderTrackingParent();
   setEditorTitle();
+  return true;
 }
 
 function trackingRefLine() {
@@ -3560,9 +3581,10 @@ function trackingRefLine() {
 }
 
 function startTracking(event) {
-  if (!isAdmin || !event.doc_id || event.category === "常识库" || event.doc_type === "doc") return;
-  resetEditor();
+  if (!enterpriseCanWrite(event) || !event.doc_id || event.category === "常识库" || event.doc_type === "doc") return;
+  if (resetEditor() === false) return;
   trackingParent = { id: event.doc_id, name: event.doc_name || event.brief || "未命名问题" };
+  enterpriseRenderScope("record", { ...event, visibility: "department", shared_department_ids: [] });
   renderTrackingParent();
   const category = DOC_CATEGORY_ORDER.includes(event.category) ? event.category : "";
   const tags = (event.categories || []).filter((t) => t !== "常识库");   // 追踪预填：多标签直接带入
@@ -3596,7 +3618,8 @@ function setEditorTitle() {
   $("#md-save").textContent = editingId ? "保存修改" : "保存并入知识库";
 }
 
-function resetEditor() {
+function resetEditor({ force = false } = {}) {
+  if (!recordAttachmentQueue.prepareContextChange({ force })) return false;
   trackingParent = null;
   renderTrackingParent();
   recPicker.set([]);
@@ -3616,17 +3639,22 @@ function resetEditor() {
   mdTime.value = todayValue();   // 新建默认当天日期
   mdResolved.value = "unresolved";
   mdStatus.textContent = "";
+  enterpriseRenderScope("record");
   $("#md-restored").style.display = "none";
   renderEditorPreview();
   setEditorTitle();
+  return true;
 }
 
 async function loadEditable(id) {
   if (!isAdmin) return;
   if (!id) { resetEditor(); return; }
+  if (!recordAttachmentQueue.prepareContextChange()) return;
   clearTracking();
   const requestId = ++editorRequest;
   const doc = recDocs.find((d) => d.id === id) || docDocs.find((d) => d.id === id);
+  if (doc && !enterpriseCanWrite(doc)) { toast("没有修改此文档的权限"); return; }
+  enterpriseRenderScope("record", doc, true);
   editingId = id;
   editingChunks = doc ? doc.chunks : 0;
   tplBase = "";   // 编辑已有记录，不参与模板标题同步
@@ -3652,6 +3680,7 @@ async function loadEditable(id) {
     mdTime.value = timeToInput(mdSrc.value) || todayValue();   // 回填记录里的时间
     lastEditorRange = { start: 0, end: 0 };
     mdName.value = data.name;
+    recordAttachmentQueue.bind({ id, name: data.name });
     mdStatus.textContent = "";
     $("#md-restored").style.display = data.restored ? "block" : "none";
     renderEditorPreview();
@@ -3684,7 +3713,7 @@ function renderRecCatFilter() {
     for (const name of docCats(d)) counts.set(name, (counts.get(name) || 0) + 1);   // 多标签逐个计数
   });
   const chips = [{ name: "", label: "全部", count: recDocs.length }].concat(
-    DOC_CATEGORY_ORDER.filter((n) => counts.get(n)).map((n) => ({ name: n, label: n, count: counts.get(n) }))
+    [...DOC_CATEGORY_ORDER, ...[...counts.keys()].filter((name) => !DOC_CATEGORY_ORDER.includes(name))].filter((n) => counts.get(n)).map((n) => ({ name: n, label: n, count: counts.get(n) }))
   );
   recCatFilterBox.innerHTML = chips.map((chip) => {
     const active = (chip.name || "") === recCatFilter;
@@ -3727,33 +3756,41 @@ function fileTimeValue(file) {
   } catch { return ""; }
 }
 
-// 附件：只挂到记录上（不进文档库、不索引）；返回提示文本
-async function uploadRecordAttachments(docId) {
-  const input = $("#rec-attach");
-  if (!docId || !input.files || !input.files.length) return "";
-  const form = new FormData();
-  for (const file of input.files) form.append("files", file);
-  const count = input.files.length;
-  try {
-    const resp = await fetch(`/api/documents/${encodeURIComponent(docId)}/attachments`, { method: "POST", body: form });
-    const data = await resp.json();
-    if (!resp.ok) { toast(data.detail || "附件上传失败"); return ""; }
-    input.value = "";
-    return `，附件 ${count} 个`;
-  } catch {
-    toast("附件上传失败：网络异常");
-    return "";
-  }
+const recordAttachmentQueue = RecordAttachments.mount({
+  root: $("#record-attachments"),
+  canAdd: () => isAdmin,
+  notify: toast,
+  onUploaded: (result, target) => {
+    if (result.count) toast(`已向《${target.name}》添加 ${result.count} 个附件`);
+    loadRecordList();
+  },
+});
+
+// 保存记录后才绑定附件；失败保留队列与目标记录，重试不会重新创建记录。
+async function uploadRecordAttachments(doc) {
+  if (!doc?.id || !recordAttachmentQueue.entries.length) return "";
+  recordAttachmentQueue.bind(doc);
+  const result = await recordAttachmentQueue.upload();
+  return result.count ? `，附件 ${result.count} 个` : "";
 }
 
 async function uploadRecordFiles(files) {
   files = Array.from(files || []);
   if (!isAdmin || !files.length) return;
+  if (recordAttachmentQueue.saving || recordAttachmentQueue.busy) { toast("正在保存记录或附件，请稍候"); return; }
+  if (recordAttachmentQueue.target && recordAttachmentQueue.entries.length) {
+    toast("当前附件已关联已保存的记录，请先上传或清空附件，再新建记录");
+    return;
+  }
+  if (editingId) { toast("当前正在编辑已有记录，请先进入新建记录再上传文件"); return; }
   const status = $("#rec-upload-status");
   const parentId = trackingParent?.id || "";
   const requestVersion = editorRequest;
   let succeeded = 0;
-  let firstSavedId = "";
+  let firstSavedDoc = null;
+  let attachmentFailed = false;
+  recordAttachmentQueue.saving = true;
+  try {
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     status.textContent = `分析并入库 ${i + 1}/${files.length}：${f.name}`;
@@ -3761,6 +3798,7 @@ async function uploadRecordFiles(files) {
     form.append("file", f);
     form.append("file_time", fileTimeValue(f));
     form.append("doc_type", "record");
+    try { enterpriseAppendScope(form, "record"); } catch (error) { toast(error.message); return; }
     const cats = recPicker.selected();
     const vendor = recPicker.subValue("厂商系统");
     const date = $("#rec-date").value;
@@ -3783,7 +3821,7 @@ async function uploadRecordFiles(files) {
       else if (data.duplicated) toast(`${f.name}：内容重复，已跳过`);
       else {
         succeeded += 1;
-        firstSavedId = firstSavedId || data.doc.id;
+        firstSavedDoc = firstSavedDoc || data.doc;
         toast(`运维记录已入库：${f.name}，${data.doc.chunks} 个检索单元`);
       }
     } catch {
@@ -3791,13 +3829,22 @@ async function uploadRecordFiles(files) {
     }
   }
   if (succeeded) {
-    const attachNote = await uploadRecordAttachments(firstSavedId);
-    if (attachNote) toast(`附件已挂到本次上传的第一条记录${attachNote}`);
+    try {
+      const attachNote = await uploadRecordAttachments(firstSavedDoc);
+      if (attachNote) toast(`附件已挂到第一条成功入库的记录《${firstSavedDoc.name}》${attachNote}`);
+    } catch (error) {
+      attachmentFailed = true;
+      toast("记录已保存，附件上传失败。请在附件区域直接重试");
+    }
   }
-  status.textContent = "上传完成";
-  if (succeeded === files.length && parentId && trackingParent?.id === parentId && editorRequest === requestVersion) resetEditor();
+  status.textContent = attachmentFailed ? "记录已入库，附件待重试" : "上传完成";
+  if (!attachmentFailed && !recordAttachmentQueue.entries.length && succeeded === files.length && parentId && trackingParent?.id === parentId && editorRequest === requestVersion) resetEditor({ force: true });
   loadRecordList();
   refreshTimelineIfVisible();
+  } finally {
+    recordAttachmentQueue.saving = false;
+    recordAttachmentQueue.changed();
+  }
 }
 
 const recDrop = $("#rec-drop");
@@ -3919,6 +3966,11 @@ document.addEventListener("keydown", (event) => {
 applyEditorMode();
 
 $("#md-save").addEventListener("click", async () => {
+  if (!isAdmin || recordAttachmentQueue.saving || recordAttachmentQueue.busy) return;
+  if (recordAttachmentQueue.target && recordAttachmentQueue.entries.length && recordAttachmentQueue.target.id !== editingId) {
+    toast("附件已关联已保存的记录，请在附件区域完成上传或清空后再新建记录");
+    return;
+  }
   if (editorMode === "preview") syncFromPreview();   // 预览模式下先取最新序列化结果
   const content = mdSrc.value;
   if (!content.trim()) { toast("内容为空，未保存"); return; }
@@ -3932,6 +3984,7 @@ $("#md-save").addEventListener("click", async () => {
   const filename = normalizeMdFilename();
   const btn = $("#md-save");
   btn.disabled = true;
+  recordAttachmentQueue.saving = true;
   mdStatus.textContent = "保存中…";
   try {
     const url = editingId ? "/api/documents/" + encodeURIComponent(editingId) : "/api/documents/markdown";
@@ -3939,7 +3992,7 @@ $("#md-save").addEventListener("click", async () => {
       method: editingId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content, filename, categories: mdCats.join("|"), vendor: mdVendorValue, resolved: mdResolved.value,
-        ...(editingId ? {} : { uploaded_by_name: $("#rec-operator").value.trim(), parent_id: trackingParent?.id || "" }) }),
+        ...(editingId ? {} : { ...enterpriseScope("record"), uploaded_by_name: $("#rec-operator").value.trim(), parent_id: trackingParent?.id || "" }) }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "保存失败");
@@ -3952,8 +4005,23 @@ $("#md-save").addEventListener("click", async () => {
     const category = catName(data.doc.category);
     const savedName = data.doc.name;
     const savedChunks = data.doc.chunks;
-    const attachNote = await uploadRecordAttachments(data.doc.id);
-    resetEditor();   // 保存成功后自动进入新建状态（时间重置为当前）
+    // 先记住已创建的记录。即使附件失败，再次保存也只更新该记录。
+    editingId = data.doc.id;
+    editingChunks = savedChunks;
+    trackingParent = null;
+    renderTrackingParent();
+    enterpriseRenderScope("record", data.doc, true);
+    setEditorTitle();
+    let attachNote = "";
+    try {
+      attachNote = await uploadRecordAttachments(data.doc);
+    } catch (error) {
+      mdStatus.textContent = "记录已保存；附件尚未上传，请在附件区域重试";
+      toast(`《${savedName}》已保存，附件上传失败，请直接重试附件`);
+      loadDocuments(); loadRecordList(); refreshTimelineIfVisible();
+      return;
+    }
+    if (!recordAttachmentQueue.entries.length) resetEditor({ force: true });
     mdStatus.textContent = `${action}：${savedChunks} 个分块，分类「${category}」${attachNote}，索引已重建`;
     toast(`${action}《${savedName}》，${savedChunks} 个分块 · ${category}`);
     loadDocuments();
@@ -3964,6 +4032,8 @@ $("#md-save").addEventListener("click", async () => {
     toast("保存失败：" + String(err.message || err));
   } finally {
     btn.disabled = false;
+    recordAttachmentQueue.saving = false;
+    recordAttachmentQueue.changed();
   }
 });
 
@@ -3977,6 +4047,7 @@ async function uploadFiles(files) {
     form.append("file", f);
     form.append("file_time", fileTimeValue(f));
     try {
+      enterpriseAppendScope(form, "doc");
       // 文档即常识库：统一按「常识库」分类入库，文档管理页可预览 / 下载 / 删除
       const resp = await fetch("/api/knowledge", { method: "POST", body: form });
       const data = await resp.json();
@@ -4034,7 +4105,7 @@ fileInput.addEventListener("change", () => { uploadFiles(fileInput.files); fileI
 drop.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files));
 
 $("#rebuild").addEventListener("click", async () => {
-  if (!isAdmin) return;
+  if (!isSuperAdmin) return;
   const btn = $("#rebuild");
   btn.disabled = true;
   try {
@@ -4054,52 +4125,55 @@ async function initPage() {
     const data = await resp.json();
     portal = data.portal || (data.admin ? "admin" : "search");
     authEnabled = data.auth === true;
-    isAdmin = portal === "admin" && (data.authenticated === true || data.admin === true);
-    isSuperAdmin = isAdmin && data.role === "admin";
-    isAccountAdmin = isSuperAdmin && data.can_register === true;
+    const authenticated = data.authenticated === true || data.admin === true;
+    if (!authenticated) { window.location.replace("/login"); return; }
+    isAdmin = portal === "admin" && data.can_write === true;
+    isSuperAdmin = portal === "admin" && data.role === "admin";
+    isAccountAdmin = portal === "admin" && (data.can_manage_users === true || data.role === "admin");
     applyRoleVisibility();
     loadTopQuestions();
-    currentUser = isAdmin ? String(data.account || data.user || "") : "";
-    currentDisplayName = isAdmin ? String(data.display_name || data.username || currentUser) : "";
-    if (portal === "admin" && !isAdmin) { window.location.replace("/login"); return; }
-    if (portal === "admin" && data.must_change_password === true) { window.location.replace("/change-password"); return; }
+    currentUser = String(data.account || data.user || "");
+    currentDisplayName = String(data.display_name || data.username || currentUser);
+    if (data.must_change_password === true) { window.location.replace("/change-password"); return; }
+    await enterpriseInitialize(data);
   } catch {
-    portal = "search";
-    isAdmin = false;
-    isSuperAdmin = false;
-    isAccountAdmin = false;
+    // 会话状态读取失败：清除角色可见性并回到公共页签，避免残留管理员界面
+    isAdmin = isSuperAdmin = isAccountAdmin = false;
     applyRoleVisibility();
-    currentUser = "";
-    currentDisplayName = "";
+    document.body.classList.remove("admin-mode", "account-admin");
+    switchTo("chat");
+    $("#stats").textContent = "无法读取企业权限信息，请刷新重试";
+    return;
   }
   document.body.classList.toggle("search-mode", portal === "search");
   document.body.classList.toggle("admin-portal", portal === "admin");
   document.body.classList.toggle("admin-mode", isAdmin);
   document.body.classList.toggle("account-admin", isAccountAdmin);
-  $("#account-summary").hidden = !isAdmin;
+  $("#account-summary").hidden = !currentUser;
   const readableUser = currentDisplayName && currentDisplayName !== currentUser ? `${currentDisplayName}（${currentUser}）` : currentUser;
   $("#current-user").textContent = readableUser;
   $("#current-user").title = readableUser;
-  $("#current-role").textContent = isSuperAdmin ? "管理员" : "普通账号";
+  $("#current-role").textContent = enterpriseIdentity?.role === "admin" ? "平台管理员" : isAccountAdmin ? "部门管理员" : isAdmin ? "文档编辑者" : "只读成员";
   $("#upload-account").textContent = readableUser || "—";
   const operatorInput = $("#rec-operator");
   if (operatorInput && !operatorInput.value) operatorInput.value = currentDisplayName || currentUser || "";
-  $("#change-password-link").hidden = !isAdmin;
+  $("#change-password-link").hidden = !currentUser;
   const badge = $("#mode-badge");
-  badge.textContent = isAdmin ? "退出登录" : "检索端 · 只读";
+  badge.textContent = "退出登录";
   badge.className = "mode-badge " + (isAdmin ? "admin" : "search");
-  badge.title = isAdmin ? "退出当前账号" : "查询知识库";
+  badge.title = "退出当前账号";
   $("#docs-tab-btn").textContent = portal === "search" ? "文档检索" : "文档管理";
   await loadCategories();   // 问题类型清单：内置 + 后台自定义，选择窗体用
   await loadDocuments();
+  sendBtn.disabled = false;
   if (isAdmin) {
     await loadVendors();
     await loadTemplates();
     syncTplEditor();
     renderVendorList();
     const restored = lastTab();
-    // 刷新/重进时回到上次停留的页签；首次进入（无记录）默认「新增运维记录」
-    switchTo(canAccessTab(restored) ? restored : "editor");
+    // 只恢复当前账号有权使用的页签。
+    switchTo(canAccessTab(restored) ? restored : "chat");
   } else { switchTo(PUBLIC_TABS.includes(lastTab()) ? lastTab() : "chat"); }
 }
 

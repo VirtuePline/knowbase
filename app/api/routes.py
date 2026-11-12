@@ -6,9 +6,11 @@ admin_router  — 读写：上传、替换、编辑、删除、重建。只挂�
 from __future__ import annotations
 
 import secrets
+import json
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -20,7 +22,7 @@ from app.core.answer import service as answer_service
 from app.core.llm import client as llm
 from app.config import settings
 from app.domain import taxonomy
-from app.services import audit, database, kb, recordmeta
+from app.services import access, audit, conversations, database, kb, mongo, recordmeta
 from app.services import timeline as timeline_service
 from app.services import weekly as weekly_service
 
@@ -31,6 +33,7 @@ search_router = APIRouter(prefix="/api", tags=["search"])
 class ChatRequest(BaseModel):
     question: str = Field(default="", description="工程师提问")
     history: list[dict] = Field(default_factory=list, description="预留的上下文轮次")
+    conversation_id: str = Field(default="", max_length=128)
     fast_mode: bool | None = Field(default=None, description="本次是否快速问答；缺省用服务端全局设置")
     llm_polish: bool = Field(default=False, description="是否用大模型整理答案；默认只用精排与规则提取")
     web_search: bool | None = Field(default=None, description="本次是否允许联网搜索；缺省用服务端全局设置")
@@ -40,26 +43,33 @@ class ChatRequest(BaseModel):
 @search_router.post("/chat")
 def chat(req: ChatRequest) -> dict:
     try:
-        result = answer_service.answer(
-            req.question, req.history,
-            fast_mode=req.fast_mode, llm_polish=req.llm_polish, web_search=req.web_search,
-            rejected_doc_ids=req.reject_doc_ids,
-        ).to_dict()
+        rejected = [doc_id for doc_id in req.reject_doc_ids
+                    if (doc := database.get(doc_id)) is not None and access.can_read(doc)]
+        history = conversations.load(req.conversation_id, use_history=bool(req.history))
+        with access.trusted_history_scope():
+            result = answer_service.answer(
+                req.question, history,
+                fast_mode=req.fast_mode, llm_polish=req.llm_polish, web_search=req.web_search,
+                rejected_doc_ids=rejected,
+            ).to_dict()
+        result["conversation_id"] = conversations.save(req.conversation_id, req.question, result)
         # 提问频率统计（用于首页「从一个问题开始」展示最近 7 天热门问题）
         if result.get("status") != "error":
             try:
                 database.record_question(req.question)
             except Exception:   # noqa: BLE001
                 pass
-        if req.reject_doc_ids:
+        if rejected:
             # 否决来源计入惩罚参数（持久化，后续提问持续降权）；记录失败不影响本次回答
             try:
-                database.add_answer_penalties(req.reject_doc_ids, req.question)
+                database.add_answer_penalties(rejected, req.question)
             except Exception:   # noqa: BLE001
                 pass
-            extra = f"已排除你标记的 {len(req.reject_doc_ids)} 个来源并计入惩罚参数"
+            extra = f"已排除你标记的 {len(rejected)} 个来源并计入惩罚参数"
             result["notice"] = f"{result['notice']}；{extra}" if result.get("notice") else extra
         return result
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"服务处理异常：{type(exc).__name__}") from exc
 
@@ -217,6 +227,19 @@ class MarkdownRequest(BaseModel):
     resolved: str = Field(default="", description="解决状态：resolved / improving / temporary / unresolved；空保留原值")
     uploaded_by_name: str = Field(default="", description="运维人用户名（默认当前登录用户名）；仅创建时写入")
     parent_id: str = Field(default="", description="追踪的父运维记录ID；仅创建时设置")
+    department_id: str = ""
+    visibility: str = "department"
+    shared_department_ids: list[str] = Field(default_factory=list)
+
+
+def _shared_departments(value: str) -> list[str]:
+    try:
+        result = json.loads(value or "[]")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="共享部门必须是 JSON 数组") from None
+    if not isinstance(result, list) or any(not isinstance(item, str) for item in result):
+        raise HTTPException(status_code=400, detail="共享部门必须是部门 ID 数组")
+    return result
 
 
 @admin_router.post("/documents")
@@ -231,6 +254,9 @@ async def upload_document(
     operator_name: str = Form("", description="运维人用户名；缺省为当前登录用户名"),
     parent_id: str = Form(""),
     file_time: str = Form("", description="本地文件修改时间（YYYY-MM-DD HH:MM:SS）；作为上传时间与记录时间默认值"),
+    department_id: str = Form(""),
+    visibility: str = Form("department"),
+    shared_department_ids: str = Form("[]"),
     identity: dict = Depends(require_login),
 ) -> dict:
     """上传文档：doc_type=doc 基础文档（默认）/ record 运维问题记录。
@@ -251,7 +277,9 @@ async def upload_document(
                                        vendor=vendor, resolved=resolved,
                                        uploaded_by=identity["username"],
                                        uploaded_by_name=operator_name or identity.get("display_name", ""),
-                                       parent_id=parent_id, file_time=file_time)
+                                       parent_id=parent_id, file_time=file_time,
+                                       department_id=department_id, visibility=visibility,
+                                       shared_department_ids=_shared_departments(shared_department_ids))
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="关联的父记录不存在") from exc
     except ValueError as exc:
@@ -262,6 +290,9 @@ async def upload_document(
 async def upload_knowledge(
     file: UploadFile = File(...),
     file_time: str = Form("", description="本地文件修改时间（YYYY-MM-DD HH:MM:SS）；作为上传时间默认值"),
+    department_id: str = Form(""),
+    visibility: str = Form("department"),
+    shared_department_ids: str = Form("[]"),
     identity: dict = Depends(require_login),
 ) -> dict:
     """常识注入：上传 md / docx / xlsx / csv / txt，入库固定归类为「常识库」。"""
@@ -269,7 +300,8 @@ async def upload_knowledge(
         content = await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
         return await run_in_threadpool(kb.upload, file.filename or "", content,
                                        category=taxonomy.KNOWLEDGE_CATEGORY, uploaded_by=identity["username"],
-                                       file_time=file_time)
+                                       file_time=file_time, department_id=department_id,
+                                       visibility=visibility, shared_department_ids=_shared_departments(shared_department_ids))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -279,8 +311,9 @@ IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 
 @admin_router.post("/images")
-async def upload_image(file: UploadFile = File(...)) -> dict:
+async def upload_image(file: UploadFile = File(...), identity: dict = Depends(require_login)) -> dict:
     """编辑器插图：保存到 data/images，返回站内 URL 供 Markdown 引用。"""
+    scope = access.creation_scope()
     ext = Path(file.filename or "").suffix.lower()
     if ext not in IMAGE_EXTS:
         raise HTTPException(status_code=400, detail="仅支持 png / jpg / gif / webp / bmp 格式图片")
@@ -289,6 +322,8 @@ async def upload_image(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=400, detail="图片内容为空")
     name = f"{secrets.token_hex(10)}{ext}"
     await run_in_threadpool((settings.images_dir / name).write_bytes, content)
+    mongo.db().image_assets.insert_one({"_id": name, "uploaded_by": identity["username"],
+                                       "department_id": scope["department_id"], "doc_ids": []})
     return {"url": f"/images/{name}", "name": name}
 
 
@@ -306,15 +341,19 @@ async def replace_document(doc_id: str, file: UploadFile = File(...)) -> dict:
 
 @admin_router.post("/documents/{doc_id}/attachments")
 async def upload_attachments(doc_id: str, files: list[UploadFile] = File(...),
-                             identity: dict = Depends(require_login)) -> dict:
+                             identity: dict = Depends(require_login),
+                             batch_id: Annotated[str, Form()] = "") -> dict:
     """给记录挂附件：只存附件目录，不进文档库、不切分、不参与向量检索。"""
+    access.require_write(doc_id)
+    if len(files) > kb.ATTACHMENT_MAX_COUNT:
+        raise HTTPException(status_code=400, detail=f"单条记录最多 {kb.ATTACHMENT_MAX_COUNT} 个附件")
     payload: list[tuple[str, bytes]] = []
     for file in files:
         content = await _read_upload(file, kb.ATTACHMENT_MAX_BYTES,
                                      f"{file.filename or '附件'} 超过 20MB 上限")
         payload.append((file.filename or "", content))
     try:
-        attachments = await run_in_threadpool(kb.add_attachments, doc_id, payload, identity["username"])
+        attachments = await run_in_threadpool(kb.add_attachments, doc_id, payload, identity["username"], batch_id=batch_id)
         return {"attachments": attachments}
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="记录不存在") from exc
@@ -322,7 +361,7 @@ async def upload_attachments(doc_id: str, files: list[UploadFile] = File(...),
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@admin_router.get("/documents/{doc_id}/attachments/{stored}")
+@search_router.get("/documents/{doc_id}/attachments/{stored}")
 def read_attachment(doc_id: str, stored: str) -> FileResponse:
     """打开 / 下载记录附件；图片与 PDF 直接内嵌预览。"""
     try:
@@ -360,7 +399,8 @@ def create_markdown(req: MarkdownRequest, identity: dict = Depends(require_login
                                 categories=req.categories,
                                 uploaded_by=identity["username"],
                                 uploaded_by_name=req.uploaded_by_name or identity.get("display_name", ""),
-                                parent_id=req.parent_id)
+                                parent_id=req.parent_id, department_id=req.department_id,
+                                visibility=req.visibility, shared_department_ids=req.shared_department_ids)
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="关联的父记录不存在") from exc
     except ValueError as exc:
@@ -384,6 +424,7 @@ def update_markdown(doc_id: str, req: MarkdownRequest, identity: dict = Depends(
 @admin_router.get("/documents/{doc_id}/edits")
 def list_edits(doc_id: str, identity: dict = Depends(require_login)) -> dict:
     """单条记录的编辑溯源日志（新在前）。"""
+    access.require_read(doc_id)
     return {"edits": database.list_edit_logs(doc_id)}
 
 
@@ -396,6 +437,29 @@ def list_all_edits(limit: int = 100, identity: dict = Depends(require_super_admi
 class CategoryRequest(BaseModel):
     category: str = Field(default="", description="单一分类（兼容旧客户端）")
     categories: list[str] = Field(default_factory=list, description="多分类标签；非空时优先于 category")
+
+
+class DocumentAccessRequest(BaseModel):
+    department_id: str | None = None
+    visibility: str | None = None
+    shared_department_ids: list[str] | None = None
+
+
+@admin_router.patch("/documents/{doc_id}/access")
+def update_document_access(doc_id: str, req: DocumentAccessRequest) -> dict:
+    record = access.require_read(doc_id)
+    if not access.is_platform_admin() and (record.visibility == "public" or
+                                          record.department_id not in access.managed_departments()):
+        raise HTTPException(status_code=403, detail="只有所属部门管理员可以调整文档权限")
+    department_id = req.department_id if req.department_id is not None else record.department_id
+    if not access.is_platform_admin() and department_id != record.department_id:
+        raise HTTPException(status_code=403, detail="只有平台管理员可以转移文档归属部门")
+    scope = access.creation_scope(
+        department_id, req.visibility if req.visibility is not None else record.visibility,
+        req.shared_department_ids if req.shared_department_ids is not None else record.shared_department_ids,
+    )
+    database.set_document_access(doc_id, **scope)
+    return {"doc": kb.get_document(doc_id)}
 
 
 @admin_router.patch("/documents/{doc_id}/category")
@@ -454,7 +518,7 @@ def web_search_status() -> dict:
     }
 
 
-@admin_router.post("/web-search")
+@admin_router.post("/web-search", dependencies=[Depends(require_super_admin)])
 def set_web_search(req: WebSearchRequest) -> dict:
     database.set_runtime_setting("web_search", "on" if req.enabled else "off")
     return {
@@ -474,7 +538,7 @@ def fast_mode_status() -> dict:
     return {"enabled": database.fast_mode_enabled()}
 
 
-@admin_router.post("/fast-mode")
+@admin_router.post("/fast-mode", dependencies=[Depends(require_super_admin)])
 def set_fast_mode(req: FastModeRequest) -> dict:
     database.set_runtime_setting("fast_mode", "on" if req.enabled else "off")
     return {"enabled": database.fast_mode_enabled()}
@@ -484,7 +548,7 @@ class VendorRequest(BaseModel):
     name: str = Field(description="厂商名称")
 
 
-@admin_router.post("/vendors")
+@admin_router.post("/vendors", dependencies=[Depends(require_super_admin)])
 def add_vendor(req: VendorRequest) -> dict:
     """新增厂商；重名忽略。"""
     try:
@@ -493,7 +557,7 @@ def add_vendor(req: VendorRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@admin_router.delete("/vendors/{name}")
+@admin_router.delete("/vendors/{name}", dependencies=[Depends(require_super_admin)])
 def remove_vendor(name: str) -> dict:
     """删除厂商。已有文档上填的厂商值保持不变。"""
     return {"vendors": recordmeta.delete_vendor(name)}
@@ -503,7 +567,7 @@ class CategoryNameRequest(BaseModel):
     name: str = Field(description="自定义问题类型名称")
 
 
-@admin_router.post("/categories")
+@admin_router.post("/categories", dependencies=[Depends(require_super_admin)])
 def add_category(req: CategoryNameRequest) -> dict:
     """新增自定义问题类型；与内置类型重名时忽略。"""
     try:
@@ -512,7 +576,7 @@ def add_category(req: CategoryNameRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@admin_router.delete("/categories/{name}")
+@admin_router.delete("/categories/{name}", dependencies=[Depends(require_super_admin)])
 def remove_category(name: str) -> dict:
     """删除自定义问题类型；已保存记录上的标签保留。"""
     try:
@@ -526,7 +590,7 @@ class TemplateRequest(BaseModel):
     content: str = Field(default="", description="模板内容；为空表示恢复默认模板")
 
 
-@admin_router.put("/templates")
+@admin_router.put("/templates", dependencies=[Depends(require_super_admin)])
 def save_template(req: TemplateRequest) -> dict:
     """保存某问题类型的上传模板。"""
     try:
@@ -547,7 +611,7 @@ class WeeklySettingsRequest(BaseModel):
 @admin_router.get("/weekly-report/settings")
 def weekly_report_settings(identity: dict = Depends(require_super_admin)) -> dict:
     """周报定时生成设置 + 可勾选的运维人名单（来自历史运维记录）。"""
-    return {**weekly_service.get_settings(), "owners": database.list_record_owners()}
+    return {**weekly_service.get_settings(), "owners": weekly_service.record_owners()}
 
 
 @admin_router.put("/weekly-report/settings")
@@ -561,18 +625,18 @@ def save_weekly_settings(req: WeeklySettingsRequest, identity: dict = Depends(re
 @admin_router.get("/weekly-reports")
 def list_weekly_reports(limit: int = 12, identity: dict = Depends(require_login)) -> dict:
     """周报列表（新在前）：管理员看全部，普通账号只看本人的。"""
-    reports = database.list_weekly_reports(max(1, min(limit, 52)))
-    if identity.get("role") != "admin":
-        mine = {identity.get("display_name") or "", identity.get("username") or ""}
-        reports = [r for r in reports if r.get("person") in mine]
-    return {"reports": reports}
+    return {"reports": weekly_service.visible_reports(max(1, min(limit, 52)))}
 
 
 @admin_router.post("/weekly-reports/generate")
 def generate_weekly_reports(identity: dict = Depends(require_login)) -> dict:
     """生成本周周报：普通账号仅生成自己的，管理员生成名单内所有人。"""
     if identity.get("role") != "admin":
-        me = (identity.get("display_name") or identity.get("username") or "").strip()
+        if access.managed_departments():
+            return {"reports": weekly_service.generate_reports(operators=[
+                account for account in weekly_service.record_owners(managed_only=True)
+                if weekly_service._can_generate_for(account)])}
+        me = identity.get("username", "").strip()
         if not me:
             raise HTTPException(status_code=400, detail="当前账号没有可用的用户名，无法定位本人记录")
         return {"reports": weekly_service.generate_reports(operators=[me])}
@@ -584,6 +648,8 @@ def delete_document(doc_id: str) -> dict:
     try:
         if not kb.delete(doc_id):
             raise HTTPException(status_code=404, detail="文档不存在")
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"deleted": doc_id, "stats": kb.stats()}
@@ -606,6 +672,9 @@ def update_event_status(req: EventStatusRequest) -> dict:
     status = req.status.strip()
     if status and status not in database.EVENT_STATUSES:
         raise HTTPException(status_code=400, detail=f"未知状态：{status}")
-    database.set_event_status(req.chunk_id, req.doc_id, status)
+    if req.doc_id and req.doc_id != req.chunk_id:
+        raise HTTPException(status_code=400, detail="事件与文档 ID 不一致")
+    doc = access.require_write(req.doc_id or req.chunk_id)
+    database.set_event_status(doc.id, doc.id, status)
     return {"chunk_id": req.chunk_id, "status": status}
 

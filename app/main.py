@@ -10,24 +10,26 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+import re
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.accounts import auth_router, identity_payload, require_login
 from app.api.routes import admin_router, search_router
 from app.config import settings
-from app.services import audit, auth, database
+from app.services import audit, auth, database, access, mongo
 from app.services.retrieval_service import retrieval
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     database.init_db()
+    _migrate_images()
+    # 单独部署查询端也需要可用的初始企业账号。
+    auth.ensure_admin_user(settings.auth_admin_user, settings.auth_admin_password)
     if app.state.portal == "admin":
-        # 管理端强制认证，旧配置 auth.enabled=false 也不能跳过初始化与登录。
-        auth.ensure_admin_user(settings.auth_admin_user, settings.auth_admin_password)
         # 周报定时生成：守护线程每分钟检查计划时间（幂等，同一周重复到点不会重复生成）
         from app.services import weekly
         weekly.start_weekly_scheduler()
@@ -41,6 +43,22 @@ async def _lifespan(app: FastAPI):
     yield
 
 
+def _migrate_images():
+    """给历史正文图片绑定所属文档；不会将未引用的旧图片自动公开。"""
+    for row in database._docs().find({}, {"stored_name": 1, "uploaded_by": 1}):
+        path = (settings.raw_dir / row.get("stored_name", "")).resolve()
+        if not path.is_relative_to(settings.raw_dir.resolve()) or path.suffix.lower() not in {".md", ".txt"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        for name in set(re.findall(r"/images/([A-Za-z0-9_.-]+)", text)):
+            mongo.db().image_assets.update_one({"_id": name}, {
+                "$addToSet": {"doc_ids": str(row["_id"])},
+                "$setOnInsert": {"uploaded_by": row.get("uploaded_by", "")}}, upsert=True)
+
+
 class AssetFiles(StaticFiles):
     """仅公开前端样式与脚本，HTML 必须通过各自的页面权限入口。"""
 
@@ -52,15 +70,31 @@ class AssetFiles(StaticFiles):
 
 def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
     app = FastAPI(
-        title=f"工厂维保 / MES 运维知识库助手 — {title_suffix}",
-        description="基于本地文档的维保报修与 MES 运维问答服务",
+        title=f"企业知识库 — {title_suffix}",
+        description="公共知识、部门资料与受权限控制的企业问答服务",
         version="0.2.0",
         lifespan=_lifespan,
     )
     app.state.portal = mode
     for router in routers:
-        dependencies = [Depends(require_login)] if mode == "admin" and router is search_router else []
+        dependencies = [Depends(require_login)] if router is search_router else []
         app.include_router(router, dependencies=dependencies)
+
+    @app.middleware("http")
+    async def bind_access(request, call_next):
+        token = request.cookies.get(auth.SESSION_COOKIE)
+        identity = auth.session_identity(token) if token else None
+        stamp = access.permission_stamp(identity) if identity and request.url.path == "/api/chat" else None
+        with access.identity_scope(identity):
+            response = await call_next(request)
+            if stamp and response.status_code == 200:
+                refreshed = auth.session_identity(token)
+                if not refreshed or access.permission_stamp(refreshed) != stamp:
+                    return JSONResponse({"detail": "访问权限已更新，请重新提问"}, status_code=409,
+                                        headers={"Cache-Control": "no-store"})
+            if request.url.path.startswith(("/api/", "/images/")):
+                response.headers["Cache-Control"] = "no-store"
+            return response
 
     if mode == "admin":
         # 管理端审计：每次写操作（非 GET）记录 IP、时间、动作、账号到 MongoDB
@@ -88,58 +122,64 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
 
     @app.get("/api/mode")
     def current_mode(admin_session: str | None = Cookie(default=None)) -> dict:
-        if mode == "admin":
-            return {"mode": mode, "portal": mode, **identity_payload(auth.session_identity(admin_session))}
-        return {"mode": mode, "portal": mode, "admin": False, "authenticated": False,
-                "auth": False, "user": "", "role": "", "can_register": False,
-                "must_change_password": False}
+        return {"mode": mode, "portal": mode, **identity_payload(auth.session_identity(admin_session))}
 
-    if settings.images_dir.is_dir():
-        app.mount("/images", StaticFiles(directory=str(settings.images_dir)), name="images")
+    @app.get("/images/{name}")
+    def image(name: str, identity: dict = Depends(require_login)):
+        if not re.fullmatch(r"[A-Za-z0-9_-]+\.(?:png|jpg|jpeg|gif|webp|bmp)", name, re.I):
+            raise HTTPException(status_code=404, detail="图片不存在")
+        asset = mongo.db().image_assets.find_one({"_id": name})
+        allowed = identity["role"] == "admin"
+        if asset and not allowed:
+            linked = asset.get("doc_ids", [])
+            allowed = (not linked and asset.get("uploaded_by") == identity["username"]) or any(
+                doc is not None and access.can_read(doc) for doc in (database.get(key) for key in linked))
+        path = settings.images_dir / name
+        if not allowed or not path.is_file():
+            raise HTTPException(status_code=404, detail="图片不存在或无权访问")
+        return FileResponse(path, headers={"Cache-Control": "no-store"})
 
     if settings.web_dir.is_dir():
         app.mount("/static", AssetFiles(directory=str(settings.web_dir)), name="static")
 
         @app.get("/")
         def index(admin_session: str | None = Cookie(default=None)):          # noqa: F811
-            if mode == "admin":
-                identity = auth.session_identity(admin_session)
-                if identity is None:
-                    return RedirectResponse("/login", status_code=303)
-                if identity.get("must_change_password", False):
-                    return RedirectResponse("/change-password", status_code=303)
+            identity = auth.session_identity(admin_session)
+            if identity is None:
+                return RedirectResponse("/login", status_code=303)
+            if identity.get("must_change_password", False):
+                return RedirectResponse("/change-password", status_code=303)
             return FileResponse(settings.web_dir / "index.html")
 
-        if mode == "admin":
-            @app.get("/login")
-            def login_page(admin_session: str | None = Cookie(default=None)):
-                identity = auth.session_identity(admin_session)
-                if identity is not None:
-                    target = "/change-password" if identity.get("must_change_password", False) else "/"
-                    return RedirectResponse(target, status_code=303)
-                return FileResponse(settings.web_dir / "login.html")
+        @app.get("/login")
+        def login_page(admin_session: str | None = Cookie(default=None)):
+            identity = auth.session_identity(admin_session)
+            if identity is not None:
+                target = "/change-password" if identity.get("must_change_password", False) else "/"
+                return RedirectResponse(target, status_code=303)
+            return FileResponse(settings.web_dir / "login.html")
 
-            @app.get("/change-password")
-            def change_password_page(admin_session: str | None = Cookie(default=None)):
-                if auth.session_identity(admin_session) is None:
-                    return RedirectResponse("/login", status_code=303)
-                return FileResponse(settings.web_dir / "change-password.html")
+        @app.get("/change-password")
+        def change_password_page(admin_session: str | None = Cookie(default=None)):
+            if auth.session_identity(admin_session) is None:
+                return RedirectResponse("/login", status_code=303)
+            return FileResponse(settings.web_dir / "change-password.html")
 
-            @app.get("/register")
-            def register_page(admin_session: str | None = Cookie(default=None)):
-                identity = auth.session_identity(admin_session)
-                if identity is None:
-                    return RedirectResponse("/login", status_code=303)
-                if identity.get("must_change_password", False):
-                    return RedirectResponse("/change-password", status_code=303)
-                if identity["role"] != "admin":
-                    raise HTTPException(status_code=403, detail="只有管理员可以注册账号")
-                return FileResponse(settings.web_dir / "register.html")
+        @app.get("/register")
+        def register_page(admin_session: str | None = Cookie(default=None)):
+            identity = auth.session_identity(admin_session)
+            if identity is None:
+                return RedirectResponse("/login", status_code=303)
+            if identity.get("must_change_password", False):
+                return RedirectResponse("/change-password", status_code=303)
+            if identity["role"] != "admin" and not access.managed_departments(identity):
+                raise HTTPException(status_code=403, detail="只有管理员可以注册账号")
+            return FileResponse(settings.web_dir / "register.html")
     return app
 
 
-# 查询端：只读接口。可直接暴露给车间终端。
-search_app = _make_app("查询端", [search_router], "search")
+# 查询端：登录后的只读知识访问，账号接口仍按角色授权。
+search_app = _make_app("查询端", [search_router, auth_router], "search")
 
 # 管理端：查询端 + 登录 + 写操作（写操作需登录）。仅对运维人员开放，不挂在外网。
 admin_app = _make_app("管理端", [search_router, auth_router, admin_router], "admin")

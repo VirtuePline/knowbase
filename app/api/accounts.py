@@ -5,7 +5,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 
-from app.services import auth
+from app.services import auth, access, database, mongo
 
 auth_router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -20,6 +20,18 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(default="", max_length=128)
     role: str = "user"
+    department_ids: list[str] = Field(default_factory=lambda: ["operations"])
+    department_roles: dict[str, str] = Field(default_factory=dict)
+
+
+class MembershipRequest(BaseModel):
+    department_ids: list[str]
+    department_roles: dict[str, str] = Field(default_factory=dict)
+
+
+class DepartmentRequest(BaseModel):
+    id: str = ""
+    name: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -30,6 +42,11 @@ class ChangePasswordRequest(BaseModel):
 
 def identity_payload(identity: dict | None) -> dict:
     """保留 admin 代表管理端已登录的旧前端契约，角色另由 role 表达。"""
+    try:
+        departments = database.list_departments() if identity else []
+    except AttributeError:
+        departments = [{"id": "operations", "name": "运维部门"}]
+    manager = bool(identity and (identity["role"] == "admin" or access.managed_departments(identity)))
     return {"admin": bool(identity), "authenticated": bool(identity), "auth": True,
             "user": identity["username"] if identity else "",
             "account": identity["username"] if identity else "",
@@ -37,7 +54,13 @@ def identity_payload(identity: dict | None) -> dict:
             "display_name": identity.get("display_name", identity["username"]) if identity else "",
             "role": identity["role"] if identity else "",
             "must_change_password": bool(identity and identity.get("must_change_password")),
-            "can_register": bool(identity and identity["role"] == "admin" and not identity.get("must_change_password"))}
+            "can_register": manager and not identity.get("must_change_password", False) if identity else False,
+            "department_ids": identity.get("department_ids", []) if identity else [],
+            "department_roles": identity.get("department_roles", {}) if identity else {},
+            "departments": departments,
+            "can_manage_users": manager,
+            "can_write": bool(identity and (identity["role"] == "admin" or access.writable_departments(identity))),
+            "permission_stamp": access.permission_stamp(identity) if identity else ""}
 
 
 def require_session(admin_session: str | None = Cookie(default=None)) -> dict:
@@ -55,7 +78,7 @@ def require_login(admin_session: str | None = Cookie(default=None)) -> dict:
 
 
 def require_account_admin(identity: dict = Depends(require_login)) -> dict:
-    if identity["role"] != "admin":
+    if identity["role"] != "admin" and not access.managed_departments(identity):
         raise HTTPException(status_code=403, detail="只有管理员可以注册账号")
     return identity
 
@@ -115,7 +138,9 @@ def register(req: RegisterRequest, identity: dict = Depends(require_account_admi
         raise HTTPException(status_code=400, detail="注册账号的角色只能是普通用户")
     try:
         account, display_name = auth.validate_registration(req.account, req.username, req.password)
-        auth.create_user(account, role="user", display_name=display_name)
+        departments, roles = _validate_memberships(req.department_ids, req.department_roles, identity)
+        auth.create_user(account, role="user", display_name=display_name,
+                         department_ids=departments, department_roles=roles)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except DuplicateKeyError:
@@ -126,13 +151,83 @@ def register(req: RegisterRequest, identity: dict = Depends(require_account_admi
 
 @auth_router.get("/admin/users")
 def list_all_users(identity: dict = Depends(require_account_admin)) -> dict:
-    return {"users": auth.list_users()}
+    users = auth.list_users()
+    if identity["role"] != "admin":
+        managed = access.managed_departments(identity)
+        users = [user for user in users if user["role"] != "admin" and managed.intersection(user["department_ids"])]
+        users = [{**user, "department_ids": [d for d in user["department_ids"] if d in managed],
+                  "department_roles": {d: r for d, r in user["department_roles"].items() if d in managed}}
+                 for user in users]
+    return {"users": users}
 
 
 @auth_router.delete("/admin/users/{account}")
 def delete_user(account: str, identity: dict = Depends(require_account_admin)) -> dict:
+    if identity["role"] != "admin":
+        raise HTTPException(status_code=403, detail="删除企业账号仅限平台管理员；部门管理员可移除本部门成员")
     try:
         auth.delete_user(account.strip())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {"deleted": True, "user": account}
+
+
+def _validate_memberships(departments, roles, identity):
+    departments = list(dict.fromkeys(departments))
+    existing = {row["id"] for row in database.list_departments()}
+    if any(d not in existing for d in departments) or set(roles) - set(departments):
+        raise ValueError("部门不存在或角色与成员部门不匹配")
+    if any(role not in {"admin", "editor", "member"} for role in roles.values()):
+        raise ValueError("部门角色只能是 admin / editor / member")
+    if identity["role"] != "admin" and set(departments) - access.managed_departments(identity):
+        raise HTTPException(status_code=403, detail="只能管理本部门成员")
+    return departments, {d: roles.get(d, "member") for d in departments}
+
+
+@auth_router.patch("/admin/users/{account}/departments")
+def set_memberships(account: str, req: MembershipRequest, identity: dict = Depends(require_account_admin)):
+    row = mongo.db().users.find_one({"_id": account})
+    if not row:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if row.get("role") == "admin" and identity["role"] != "admin":
+        raise HTTPException(status_code=403, detail="不能修改平台管理员")
+    try:
+        departments, roles = _validate_memberships(req.department_ids, req.department_roles, identity)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if identity["role"] != "admin":
+        managed = access.managed_departments(identity)
+        original = auth._row_identity(row)
+        departments += [d for d in original["department_ids"] if d not in managed]
+        roles.update({d: r for d, r in original["department_roles"].items() if d not in managed})
+    mongo.db().users.update_one({"_id": account}, {"$set": {
+        "department_ids": departments, "department_roles": roles}})
+    database.bump_access_revision()
+    visible = set(departments) if identity["role"] == "admin" else access.managed_departments(identity)
+    return {"updated": True, "account": account, "department_ids": [d for d in departments if d in visible],
+            "department_roles": {d: r for d, r in roles.items() if d in visible}}
+
+
+@auth_router.get("/departments")
+def departments(identity: dict = Depends(require_login)):
+    return {"departments": database.list_departments()}
+
+
+def _save_department(department_id, name, identity):
+    if identity["role"] != "admin":
+        raise HTTPException(status_code=403, detail="只有平台管理员可以维护部门")
+    try:
+        department = database.save_department(department_id, name)
+        return {"department": department, "departments": database.list_departments()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@auth_router.post("/departments")
+def create_department(req: DepartmentRequest, identity: dict = Depends(require_login)):
+    return _save_department(req.id, req.name, identity)
+
+
+@auth_router.put("/departments/{department_id}")
+def rename_department(department_id: str, req: DepartmentRequest, identity: dict = Depends(require_login)):
+    return _save_department(department_id, req.name, identity)

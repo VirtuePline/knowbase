@@ -17,12 +17,13 @@ from app.domain.schemas import DocRecord
 from app.services import mongo
 
 _INT_FIELDS = {"size", "chunks", "skipped"}
-_LIST_FIELDS = {"categories"}
+_LIST_FIELDS = {"categories", "shared_department_ids"}
 _DOC_FIELDS = (
     "id", "name", "stored_name", "ext", "size", "sha256", "chunks",
     "uploaded_at", "status", "error", "summary", "skipped", "category", "categories", "vendor", "doc_type",
     "resolved", "uploaded_by", "uploaded_by_name", "parent_id", "root_id",
     "last_edited_by", "last_edited_name", "last_edited_at",
+    "department_id", "visibility", "shared_department_ids",
 )
 
 
@@ -47,6 +48,9 @@ def init_db() -> None:
     _docs().create_index([("parent_id", ASCENDING)])
     _docs().create_index([("root_id", ASCENDING)])
     mongo.db().event_status.create_index([("doc_id", ASCENDING)])
+    _docs().create_index([("department_id", ASCENDING), ("visibility", ASCENDING)])
+    _docs().create_index("shared_department_ids")
+    initialize_enterprise()
 
 
 def _row_to_doc(row: dict) -> DocRecord:
@@ -54,6 +58,8 @@ def _row_to_doc(row: dict) -> DocRecord:
     # 文档主键存 _id；兼容带冗余 id 字段的历史数据
     row["id"] = str(row.get("_id") or row.get("id") or "")
     row["doc_type"] = _normalize_doc_type(row)
+    row["department_id"] = row.get("department_id") or "operations"
+    row["visibility"] = row.get("visibility") or "department"
     values = {}
     for f in _DOC_FIELDS:
         if f in _INT_FIELDS:
@@ -150,9 +156,11 @@ def fast_mode_enabled() -> bool:
 def add_answer_penalties(doc_ids, question: str = "") -> int:
     """记录被否决的答案来源文档：按文档累计惩罚次数，后续检索对其降权。"""
     added = 0
+    from app.services import access
+    scope = access.feedback_scope()
     for doc_id in {str(d).strip() for d in doc_ids or [] if str(d).strip()}:
         mongo.db().answer_penalties.update_one(
-            {"_id": doc_id},
+            {"_id": f"{scope}:{doc_id}" if scope else doc_id},
             {"$inc": {"count": 1},
              "$set": {"last_question": (question or "")[:200], "updated_at": now_iso()}},
             upsert=True,
@@ -166,8 +174,11 @@ def answer_penalty_counts(doc_ids) -> dict:
     ids = [str(d).strip() for d in doc_ids or [] if str(d).strip()]
     if not ids:
         return {}
-    return {d["_id"]: int(d.get("count", 0))
-            for d in mongo.db().answer_penalties.find({"_id": {"$in": ids}}, {"count": 1})}
+    from app.services import access
+    scope = access.feedback_scope()
+    prefix = scope + ":" if scope else ""
+    return {d["_id"][len(prefix):]: int(d.get("count", 0))
+            for d in mongo.db().answer_penalties.find({"_id": {"$in": [prefix + key for key in ids]}}, {"count": 1})}
 
 
 # ---------- 文档编辑日志（溯源：谁在何时新建 / 修改过记录） ----------
@@ -227,7 +238,8 @@ def save_weekly_report(week_start: str, person: str, items: list[dict], generate
     mongo.db().weekly_reports.replace_one(
         {"_id": f"{week_start}:{person}"},
         {"_id": f"{week_start}:{person}", "week_start": week_start, "person": person,
-         "items": items, "markdown": markdown, "generated_at": generated_at},
+         "items": items, "markdown": markdown, "generated_at": generated_at,
+         "owner_account": person, "access_revision": access_revision()},
         upsert=True,
     )
 
@@ -330,7 +342,10 @@ def delete(doc_id: str) -> bool:
         raise ValueError("该记录存在后续追踪，请先删除子追踪记录")
     db = mongo.db()
     db.event_status.delete_many({"doc_id": doc_id})
-    return _docs().delete_one({"_id": doc_id}).deleted_count > 0
+    deleted = _docs().delete_one({"_id": doc_id}).deleted_count > 0
+    if deleted:
+        bump_access_revision()
+    return deleted
 
 
 # ---------- 记录附件（只挂在记录上，不进文档库、不参与索引） ----------
@@ -387,8 +402,12 @@ def record_question(question: str) -> None:
     q = "".join(str(question or "").split())[:40]
     if not q:
         return
+    from app.services import access
+    query = {"question": q}
+    if not access.is_internal():
+        query["scope"] = access.feedback_scope()
     mongo.db().question_stats.update_one(
-        {"question": q},
+        query,
         {"$inc": {"count": 1}, "$set": {"last_at": now_iso()}},
         upsert=True,
     )
@@ -397,6 +416,64 @@ def record_question(question: str) -> None:
 def top_questions(days: int = 7, limit: int = 4) -> list[dict]:
     """最近 days 天内提问次数最多的问题（按计数倒序）。"""
     since = (datetime.now(CN_TZ) - timedelta(days=max(1, days))).strftime("%Y-%m-%d %H:%M:%S")
-    rows = (mongo.db().question_stats.find({"last_at": {"$gte": since}}, {"_id": 0})
+    from app.services import access
+    query = {"last_at": {"$gte": since}}
+    if not access.is_internal():
+        query["scope"] = access.feedback_scope()
+    rows = (mongo.db().question_stats.find(query, {"_id": 0})
             .sort("count", DESCENDING).limit(max(1, limit)))
     return [{"question": r.get("question", ""), "count": r.get("count", 0)} for r in rows]
+
+
+def initialize_enterprise() -> None:
+    """幂等迁移：历史资料保留为运维部门内部资料，不自动公开。"""
+    mongo.db().departments.update_one({"_id": "operations"},
+        {"$setOnInsert": {"name": "运维部门", "created_at": now_iso()}}, upsert=True)
+    for field, value in (("department_id", "operations"), ("visibility", "department"),
+                         ("shared_department_ids", [])):
+        _docs().update_many({field: {"$exists": False}}, {"$set": {field: value}})
+    mongo.db().users.update_many({"department_ids": {"$exists": False}},
+                                {"$set": {"department_ids": ["operations"],
+                                          "department_roles": {"operations": "editor"}}})
+
+
+def list_departments() -> list[dict]:
+    rows = [{"id": row["_id"], "name": row.get("name", row["_id"])}
+            for row in mongo.db().departments.find({}).sort("name", ASCENDING)]
+    return rows or [{"id": "operations", "name": "运维部门"}]
+
+
+def save_department(department_id: str, name: str) -> dict:
+    import re
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,47}", department_id):
+        raise ValueError("部门编号须为小写字母开头的字母、数字、下划线或短横线")
+    name = name.strip()
+    if not 1 <= len(name) <= 60:
+        raise ValueError("部门名称须为1–60个字符")
+    mongo.db().departments.update_one({"_id": department_id},
+        {"$set": {"name": name}, "$setOnInsert": {"created_at": now_iso()}}, upsert=True)
+    bump_access_revision()
+    return {"id": department_id, "name": name}
+
+
+def set_document_access(doc_id: str, department_id: str, visibility: str,
+                        shared_department_ids: list[str]) -> bool:
+    result = _docs().update_one({"_id": doc_id}, {"$set": {
+        "department_id": department_id, "visibility": visibility,
+        "shared_department_ids": list(shared_department_ids),
+    }})
+    if result.matched_count:
+        bump_access_revision()
+    return bool(result.matched_count)
+
+
+def bump_access_revision() -> None:
+    mongo.db().app_settings.update_one({"_id": "access_revision"}, {"$inc": {"version": 1}}, upsert=True)
+
+
+def access_revision() -> int:
+    try:
+        row = mongo.db().app_settings.find_one({"_id": "access_revision"})
+    except AttributeError:  # 不带设置集合的旧内存测试替身
+        return 0
+    return int((row or {}).get("version", 0))

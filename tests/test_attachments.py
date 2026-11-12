@@ -59,6 +59,33 @@ class AttachmentTest(unittest.TestCase):
             kb.add_attachments("d1", [("setup.exe", b"MZ")])
         self.assertIn("可执行文件", str(ctx.exception))
 
+    def test_invalid_later_attachment_does_not_write_the_valid_prefix(self):
+        with self.assertRaises(ValueError):
+            kb.add_attachments("d1", [("日志.txt", b"log"), ("bad.exe", b"MZ")])
+        self.assertEqual(self.store, [])
+        self.assertEqual(list(self.dir.rglob("*")), [])
+
+    def test_metadata_failure_removes_written_files(self):
+        with patch.object(kb.database, "add_attachments", side_effect=RuntimeError("save failed")):
+            with self.assertRaises(RuntimeError):
+                kb.add_attachments("d1", [("a.pdf", b"pdf"), ("b.txt", b"text")])
+        self.assertEqual(self.store, [])
+        self.assertEqual(list((self.dir / "d1").iterdir()), [])
+
+    def test_retry_of_committed_batch_does_not_create_duplicate_attachments(self):
+        files = [("日志.txt", b"log"), ("照片.png", b"image")]
+        first = kb.add_attachments("d1", files, batch_id="test-batch-1")
+        again = kb.add_attachments("d1", files, batch_id="test-batch-1")
+        self.assertEqual(first, again)
+        self.assertEqual(len(self.store), 2)
+        self.assertEqual(len(list((self.dir / "d1").iterdir())), 2)
+
+    def test_reusing_batch_for_different_files_does_not_hide_the_new_version(self):
+        kb.add_attachments("d1", [("日志.txt", b"old")], batch_id="test-batch-2")
+        with self.assertRaises(ValueError):
+            kb.add_attachments("d1", [("日志.txt", b"new")], batch_id="test-batch-2")
+        self.assertEqual(len(self.store), 1)
+
     def test_rejects_oversized_file(self):
         big = b"0" * (kb.ATTACHMENT_MAX_BYTES + 1)
         with self.assertRaises(ValueError) as ctx:

@@ -10,7 +10,7 @@ from pymongo import MongoClient
 from app.api import routes
 from app.domain.schemas import DocRecord
 from app.main import search_app
-from app.services import database, mongo, timeline
+from app.services import auth, database, mongo, timeline
 
 
 class TimelinePaginationTest(unittest.TestCase):
@@ -155,7 +155,23 @@ class TimelinePaginationTest(unittest.TestCase):
 
 class TimelineApiTest(unittest.TestCase):
     def setUp(self):
+        identity = {"username": "timeline-test", "display_name": "时间线测试员", "role": "admin",
+                    "department_ids": ["operations"], "department_roles": {"operations": "admin"},
+                    "must_change_password": False, "password_version": 0}
+        session = patch.object(auth, "session_identity", side_effect=lambda token: identity if token == "timeline-session" else None)
+        session.start()
+        self.addCleanup(session.stop)
         self.api = TestClient(search_app)
+        self.addCleanup(self.api.close)
+        self.api.cookies.set(auth.SESSION_COOKIE, "timeline-session")
+
+    def test_anonymous_timeline_requires_login_before_query(self):
+        anonymous = TestClient(search_app)
+        self.addCleanup(anonymous.close)
+        with patch.object(routes.timeline_service, "build") as build:
+            response = anonymous.get("/api/timeline")
+        self.assertEqual(response.status_code, 401)
+        build.assert_not_called()
 
     def test_default_query_forwards_only_thirty_events(self):
         payload = {"events": [], "has_more": False, "next_offset": 0, "total": 0}

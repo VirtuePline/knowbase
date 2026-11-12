@@ -74,9 +74,10 @@ class RecordIdentityTest(unittest.TestCase):
         response = self.api.post("/api/documents/markdown", json={"content": "x"})
         self.assertEqual(response.status_code, 401)
 
-    def test_query_port_never_exposes_registration_or_upload(self):
+    def test_query_port_requires_identity_for_accounts_and_has_no_document_writes(self):
         api = TestClient(search_app)
-        self.assertNotIn("post", search_app.openapi()["paths"].get("/api/admin/register", {}))
+        self.assertIn("post", search_app.openapi()["paths"].get("/api/admin/login", {}))
+        self.assertEqual(api.post("/api/admin/register", json={"account": "new", "username": "新用户"}).status_code, 401)
         self.assertIn(api.post("/api/documents/markdown", json={"content": "x"}).status_code, (404, 405))
 
 

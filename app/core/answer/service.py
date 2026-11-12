@@ -1,4 +1,4 @@
-"""方案优先：知识库处理方案 → 模型提取原文步骤 → 联网参考 → 明确缺失。"""
+"""企业知识问答；运维部门保留方案提取，所有资料服从当前身份权限。"""
 from __future__ import annotations
 
 import re
@@ -28,7 +28,8 @@ from app.domain.taxonomy import (
     vendor_hint,
 )
 from app.services.database import answer_penalty_counts, fast_mode_enabled, uploaded_dates, web_search_runtime_enabled
-from app.services.retrieval_service import retrieval
+from app.services import access
+from app.services.retrieval_service import authorized_hits, allowed_document_ids, operations_mode, retrieval
 
 
 def _source_metrics(hit: ScoredChunk | None) -> dict:
@@ -42,6 +43,7 @@ def _source_metrics(hit: ScoredChunk | None) -> dict:
     }
 
 def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
+    hits = authorized_hits(hits)
     uploads = uploaded_dates([hit.chunk.doc_id for hit in hits])
     sources = [
         SourceRef(
@@ -97,6 +99,7 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
     还有几个没有MAC的"原话不含量词）。模型答不上（NO_ANSWER / 异常）时返回
     None，落回常规流程（方案提取 → 问答 → 摘录），不把失败伪装成回答。
     """
+    hits = authorized_hits(hits)
     anchor = next((h for h in hits if h.chunk.table), None)
     if anchor is None or not settings.llm_available:
         return None
@@ -207,6 +210,10 @@ def _top_hits(question: str, vendor: str = "", fast: bool = False,
     hits = _apply_answer_penalties(hits, reject_docs or [])
     if not hits:
         return []
+    if not operations_mode(question):
+        # 制度、财务、人事等知识没有“同类故障”语义，关键词召回可独立支持原文查询。
+        return [hit for hit in hits if hit.coverage >= settings.min_coverage
+                or hit.semantic >= settings.semantic_threshold or hit.rerank >= settings.rerank_threshold]
     # 相关性门槛：rerank / 语义相似度单路强信号即可放行；仅关键词覆盖达标时
     # 要求语义不低于下限（semantic_floor）双确认——防止只碰上「网页」「系统」这类
     # 通用词的不相关记录被当答案返回。rerank 是逐对打分的 Cross-Encoder，能识别
@@ -363,6 +370,7 @@ def _expand_table_hits(hits: list[ScoredChunk]) -> list[ScoredChunk]:
     12 行——那会给出以偏概全的数字（如只数了一个窗口的 8 台）。扩展后每个表按
     文档内窗口顺序完整进入上下文，max_context_chars 仍兜底截断。
     """
+    hits = authorized_hits(hits)
     expanded: list[ScoredChunk] = []
     scored_by_id = {hit.chunk.id: hit for hit in hits}
     seen_tables: set[tuple[str, str]] = set()
@@ -384,21 +392,28 @@ def _expand_table_hits(hits: list[ScoredChunk]) -> list[ScoredChunk]:
     return list(unique.values())
 
 
-def answer(question: str, history: list[dict] | None = None,
+def _answer(question: str, history: list[dict] | None = None,
            *, fast_mode: bool | None = None, llm_polish: bool = False,
            web_search: bool | None = None,
            rejected_doc_ids: list[str] | None = None) -> AnswerResponse:
+    # 浏览器回传的旧对话不能作为已获授权的证据；只有服务端验证的上下文可复用。
+    if not access.is_internal() and not access.history_is_trusted():
+        history = []
+    ops = operations_mode(question or "")
     text = (question or "").strip()
     if not text:
-        return AnswerResponse(status="guide", answer="请输入要查询的设备故障现象、MES 报错代码或工单问题。", answer_origin="none")
+        return AnswerResponse(status="guide", answer="请输入要查询的企业制度、业务流程、文档内容或工作问题。", answer_origin="none")
 
-    if is_management_request(text):
+    management = is_management_request(text) if ops else text in {
+        "上传文件", "上传文档", "删除文件", "删除文档", "查看上传列表", "重建索引", "重建文档库",
+    }
+    if management:
         return AnswerResponse(status="guide", answer=MANAGEMENT_GUIDE, category="管理指令", answer_origin="none")
 
-    category, _matched = classify(text)
+    category, _matched = classify(text) if ops else ("", [])
 
     # 问题点名了厂商（如「华智」）：归入厂商系统类，检索优先该厂商的文档
-    vendor = vendor_hint(text)
+    vendor = vendor_hint(text) if ops else ""
     if vendor:
         category = "厂商系统"
 
@@ -418,19 +433,20 @@ def answer(question: str, history: list[dict] | None = None,
         except LLMError:
             search_query = text
     # 改写补出的厂商名也参与检索置顶；分类仍按工程师原话判定
-    vendor = vendor_hint(text) or vendor_hint(search_query)
+    vendor = (vendor_hint(text) or vendor_hint(search_query)) if ops else ""
     context_hint = "已结合上一轮对话补全检索关键词" if search_query != text else ""
 
     def _notice(*parts: str) -> str:
         return "；".join(part for part in parts if part)
 
-    hits = _top_hits(search_query, vendor, fast=fast, reject_docs=rejected_doc_ids or [])
+    hits = authorized_hits(_top_hits(search_query, vendor, fast=fast, reject_docs=rejected_doc_ids or []))
     # 排名高不代表同一种故障。所有作答、模型与摘录路径共用此门禁，
     # 也核对原始问题，避免历史改写把“电脑打不开”带回上一轮的音响故障。
-    hits = filter_fault_hits(search_query, hits)
-    if search_query != text:
-        hits = filter_fault_hits(text, hits)
-    evidence = extract_solutions(hits, text)
+    if ops:
+        hits = filter_fault_hits(search_query, hits)
+        if search_query != text:
+            hits = filter_fault_hits(text, hits)
+    evidence = extract_solutions(hits, text) if ops else []
     evidence_response = None
     if evidence:
         selected = list({item.hit.chunk.id: item.hit for item in evidence}.values())
@@ -448,9 +464,13 @@ def answer(question: str, history: list[dict] | None = None,
             return stats
     model_failed = False
     if hits and settings.llm_available and use_llm:
+        hits = authorized_hits(hits)  # 调用模型前重新校验，权限变更不依赖索引重建。
+        if not hits:
+            return AnswerResponse(status="not_found", answer="可访问的知识库记录已变更，请重新提问。",
+                                  answer_origin="none")
         model_context = append_references(render_hits(hits, question=text), hits)
         try:
-            plan = _draft(text, model_context, len(hits), history)
+            plan = _draft(text, model_context, len(hits), history) if ops else None
         except LLMError:
             plan = None
             model_failed = True
@@ -487,12 +507,17 @@ def answer(question: str, history: list[dict] | None = None,
         # 知识库命中但没有可执行方案（如「某某的 IP 是多少」这类台账查询）：
         # 直接回相关记录原文，不转联网，避免把知识库里已有的信息盖掉。
         notice = "未找到与问题直接对应的处理方案，以下为知识库相关记录原文，请按需取用。"
-        if fast:
+        if not ops:
+            notice = "以下为当前账号可访问的知识库原文；可打开「大模型整理」获取基于文档的回答。"
+        elif fast:
             notice = "快速模式：未整理处理步骤，以下为知识库原文，请按需取用。"
         elif not use_llm:
             notice = "以下为精排后的知识库记录原文；需要模型整理成方案时，可打开「大模型整理」。"
         notice = _notice(notice, context_hint)
         return _kb_excerpts(text, category, hits, notice, focus_question=search_query)
+    if not ops:
+        return AnswerResponse(status="not_found", answer="当前可访问的企业知识库中未找到相关内容，请补充关键词或联系文档所属部门。",
+                              answer_origin="none")
     if not category:
         # 问题不属于任何知识库领域（无设备/系统/故障关键词）：
         # 回答"不在知识库覆盖范围"，不联网，避免用外部网页回答无关问题。
@@ -506,3 +531,21 @@ def answer(question: str, history: list[dict] | None = None,
         answer="知识库中没有与当前问题相关的记录。请补充设备型号、错误码或处理记录，以便进一步定位。",
         category=category, sources=[], answer_origin="none",
         notice="知识库无相关内容，未做联网搜索。")
+
+
+def answer(question: str, history: list[dict] | None = None,
+           *, fast_mode: bool | None = None, llm_polish: bool = False,
+           web_search: bool | None = None,
+           rejected_doc_ids: list[str] | None = None) -> AnswerResponse:
+    initial_allowed = allowed_document_ids()
+    response = _answer(question, history, fast_mode=fast_mode, llm_polish=llm_polish,
+                       web_search=web_search, rejected_doc_ids=rejected_doc_ids)
+    if access.is_internal():
+        return response
+    # 模型调用期间也可能发生撤权；任何用到的主资料或补充引用被撤权，就不返回旧答案。
+    allowed = allowed_document_ids() or set()
+    used = {source.doc_id for source in response.sources if source.doc_id}
+    used.update(reference.doc_id for source in response.sources for reference in source.references)
+    if not (initial_allowed or set()).issubset(allowed) or not used.issubset(allowed):
+        return AnswerResponse(status="not_found", answer="文档访问权限已变更，请重新提问。", answer_origin="none")
+    return response

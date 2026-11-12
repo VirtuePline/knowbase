@@ -18,6 +18,9 @@ const statusBox = document.querySelector("#account-status");
 let accountReady = false;
 let submittingAccount = false;
 let mustSetPassword = false;
+let accountDepartments = [];
+let accountIdentity = null;
+function accountEscape(value) { return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "\'": "&#39;" }[character] || character)); }
 
 function accountError(message) {
   errorBox.textContent = message;
@@ -75,7 +78,11 @@ accountForm.addEventListener("submit", async (event) => {
         usernameField.focus(); return;
       }
       endpoint = "/api/admin/register";
-      payload = { account, username };
+      const department_ids = [...document.querySelectorAll('[data-account-department]:checked')].map((checkbox) => checkbox.dataset.accountDepartment);
+      if (!department_ids.length) { accountError("请选择至少一个所属部门"); return; }
+      const department_roles = {};
+      document.querySelectorAll('[data-account-role]').forEach((select) => { if (department_ids.includes(select.dataset.accountRole)) department_roles[select.dataset.accountRole] = select.value; });
+      payload = { account, username, department_ids, department_roles };
     } else {
       endpoint = "/api/admin/login";
       payload = { username, password: passwordField.value };
@@ -98,7 +105,7 @@ accountForm.addEventListener("submit", async (event) => {
     if (isChangePasswordPage) { window.location.assign("/"); return; }
     if (!isRegisterPage) { window.location.assign(data.must_change_password === true ? "/change-password" : "/"); return; }
     accountForm.reset();
-    successBox.textContent = `普通账号「${username}（${account}）」已创建。初始密码为空，首次登录需设置密码。您仍保持管理员登录。`;
+    successBox.textContent = `成员账号「${username}（${account}）」已创建。初始密码为空，首次登录需设置密码。您仍保持管理员登录。`;
     successBox.hidden = false;
     statusBox.textContent = "账号创建成功";
     accountIdentifierField.focus();
@@ -127,14 +134,14 @@ function preparePasswordPage(mode) {
   document.querySelector("#password-section-label").textContent = mustSetPassword ? "首次登录" : "账号设置";
   document.querySelector("#account-title").textContent = mustSetPassword ? "设置您的密码" : "修改密码";
   document.querySelector("#password-description").textContent = mustSetPassword
-    ? "首次登录需要先设置自己的密码，再进入运维工作台。"
+    ? "首次登录需要先设置自己的密码，再进入企业知识工作台。"
     : "验证当前密码，为您自己的账号设置新密码。";
   document.querySelector("#password-context-note").textContent = mustSetPassword ? "设置完成前暂不能使用工作台" : "密码仅用于您自己的账号";
   document.querySelector("#password-note").textContent = mustSetPassword
     ? "新账号初始密码为空，请设置您自己的密码。保存成功后将进入工作台。"
     : "修改成功后将使用新密码登录，当前会话会同步更新。";
   document.querySelector("#password-submit-label").textContent = mustSetPassword ? "设置密码并进入工作台" : "保存新密码并进入工作台";
-  document.title = `${mustSetPassword ? "设置您的密码" : "修改密码"} · 运维知识库`;
+  document.title = `${mustSetPassword ? "设置您的密码" : "修改密码"} · 企业知识库`;
 }
 
 async function initializeAccountPage() {
@@ -142,7 +149,7 @@ async function initializeAccountPage() {
     const response = await fetch("/api/mode");
     if (!response.ok) throw new Error("无法读取登录状态，请刷新重试");
     const mode = await response.json();
-    if (mode.portal !== "admin") throw new Error("请从管理端地址访问账号页面");
+    if (isRegisterPage && mode.portal !== "admin") throw new Error("请从管理端地址创建账号");
     const authenticated = mode.authenticated === true || mode.admin === true;
     if (isChangePasswordPage) {
       if (!authenticated) { window.location.replace("/login"); return; }
@@ -152,7 +159,13 @@ async function initializeAccountPage() {
       if (!isRegisterPage && authenticated) { window.location.replace("/"); return; }
       if (isRegisterPage) {
         if (!authenticated) { window.location.replace("/login"); return; }
-        if (mode.role !== "admin" || mode.can_register !== true) throw new Error("只有管理员可以创建普通账号");
+        if (mode.can_manage_users !== true) throw new Error("只有平台管理员或部门管理员可以创建成员账号");
+        accountIdentity = mode;
+        const response = await fetch("/api/departments");
+        if (!response.ok) throw new Error("无法读取部门目录");
+        const data = await response.json();
+        accountDepartments = (data.departments || []).filter((department) => mode.role === "admin" || mode.department_roles?.[department.id] === "admin");
+        document.querySelector("#account-departments").innerHTML = accountDepartments.map((department) => `<label class="account-department"><input type="checkbox" data-account-department="${accountEscape(department.id)}" aria-label="加入${accountEscape(department.name)}" /><span class="department-name">${accountEscape(department.name)}</span><select data-account-role="${accountEscape(department.id)}" aria-label="${accountEscape(department.name)}角色"><option value="member">只读成员</option><option value="editor">文档编辑者</option><option value="admin">部门管理员</option></select></label>`).join("");
         document.querySelector("#register-actor").textContent = accountDisplay(mode);
       }
     }
@@ -160,7 +173,7 @@ async function initializeAccountPage() {
     accountFields.disabled = false;
     statusBox.textContent = isChangePasswordPage
       ? (mustSetPassword ? "首次登录 · 请先设置密码" : "当前账号 · 修改密码")
-      : isRegisterPage ? "创建账号与用户名 · 初始密码为空" : "管理端 · 新账号首次登录请将密码留空";
+      : isRegisterPage ? "创建账号与用户名 · 初始密码为空" : "企业知识库 · 新账号首次登录请将密码留空";
     if (isChangePasswordPage) (mustSetPassword ? newPasswordField : currentPasswordField).focus();
     else (isRegisterPage ? accountIdentifierField : usernameField).focus();
   } catch (error) {

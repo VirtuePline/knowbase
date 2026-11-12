@@ -1,0 +1,31 @@
+.record-attachments { margin: 20px 0 24px; border: 1px solid var(--line, #dce5e3); border-radius: 14px; background: #fbfdfc; overflow: hidden; }
+.record-attachments-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 18px 12px; }
+.record-attachments-heading h3 { margin: 0; color: var(--text, #243c39); font-size: 14px; font-weight: 650; }
+.record-attachments-heading h3 span { margin-left: 7px; color: var(--muted, #778a87); font-size: 11px; font-weight: 400; }
+.record-attachments-count { color: var(--accent, #147d77); font-size: 11px; white-space: nowrap; }
+.record-attachment-drop { margin: 0 18px 12px; padding: 17px 18px; border: 1px dashed #bccfca; border-radius: 10px; background: #f1f7f5; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; transition: border-color .15s, background .15s; }
+.record-attachment-drop:focus-visible, .record-attachment-drop.over { outline: 3px solid #147d7724; outline-offset: 2px; border-color: var(--accent, #147d77); background: #e9f5ef; }
+.record-attachment-symbol { display: grid; place-items: center; width: 35px; height: 38px; color: var(--accent, #147d77); border-radius: 9px; background: #fff; border: 1px solid #dfebe5; flex-shrink: 0; }
+.record-attachment-symbol svg { width: 21px; height: 21px; }
+.record-attachment-help { flex: 1; min-width: 200px; }
+.record-attachment-help strong { display: block; color: #355850; font-weight: 550; font-size: 12px; }
+.record-attachment-help small { display: block; color: var(--muted, #778a87); font-size: 11px; margin-top: 2px; }
+.record-attachment-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.record-attachment-actions .ghost { font-size: 12px; padding: 6px 10px; min-height: 32px; }
+.record-attachment-list { list-style: none; padding: 0 18px; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.record-attachment-item { display: flex; align-items: center; gap: 10px; border: 1px solid #e3eae7; background: #fff; padding: 10px 12px; border-radius: 9px; min-width: 0; }
+.record-attachment-type { display: grid; place-items: center; width: 35px; height: 39px; border-radius: 7px; background: #eff5f3; color: #5c7f75; font-size: 9px; font-weight: 650; flex-shrink: 0; }
+.record-attachment-file { min-width: 0; flex: 1; }
+.record-attachment-file strong { display: block; color: var(--text, #243c39); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.record-attachment-file small { color: var(--muted, #778a87); font-size: 10px; }
+.record-attachment-remove { border: 0; border-radius: 5px; padding: 4px 7px; background: transparent; color: #879692; font-size: 19px; line-height: 1; cursor: pointer; }
+.record-attachment-remove:hover { color: #b34d48; background: #fcf0ee; }
+.record-attachment-remove:disabled { opacity: .4; cursor: wait; }
+.record-attachments-footer { padding: 12px 18px 15px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.record-attachments-footer p { flex-basis: 100%; margin: 0; color: var(--muted, #778a87); font-size: 11px; overflow-wrap: anywhere; }
+.record-attachment-status { flex: 1; color: #72857e; font-size: 11px; line-height: 1.7; }
+.record-attachment-status.error { color: #af5a34; }
+.record-attachments [hidden] { display: none !important; }
+.record-attachments-hint { color: var(--muted, #778a87); font-size: 12px; margin-top: 8px; }
+.record-attachments-hint a { color: var(--accent, #147d77); text-underline-offset: 3px; }
+@media (max-width: 700px) { .record-attachment-list { grid-template-columns: 1fr; } .record-attachment-drop { align-items: flex-start; gap: 10px; } .record-attachment-actions { width: 100%; padding-left: 45px; } .record-attachments-heading { gap: 8px; } }

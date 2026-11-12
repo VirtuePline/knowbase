@@ -12,7 +12,7 @@ def make_record(doc_id: str, name: str, owner: str, uploaded_at: str,
     return DocRecord(
         id=doc_id, name=name, stored_name=f"{doc_id}.md", ext=".md", size=10,
         sha256=doc_id, chunks=1, uploaded_at=uploaded_at, status="ready",
-        doc_type=doc_type, uploaded_by="acc", uploaded_by_name=owner,
+        doc_type=doc_type, uploaded_by=owner, uploaded_by_name=owner,
     )
 
 

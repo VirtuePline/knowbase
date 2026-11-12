@@ -175,6 +175,9 @@ class DocRecord:
     last_edited_by: str = ""    # 最近一次在线编辑的登录账号；溯源用
     last_edited_name: str = ""  # 最近一次在线编辑的显示名
     last_edited_at: str = ""    # 最近一次在线编辑时间
+    department_id: str = "operations"
+    visibility: str = "department"  # public = 全体登录员工；department = 归属/共享部门
+    shared_department_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -200,4 +203,7 @@ class DocRecord:
             "last_edited_by": self.last_edited_by,
             "last_edited_name": self.last_edited_name,
             "last_edited_at": self.last_edited_at,
+            "department_id": self.department_id,
+            "visibility": self.visibility,
+            "shared_department_ids": list(self.shared_department_ids),
         }

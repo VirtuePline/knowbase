@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 
 from app.config import settings
@@ -21,7 +22,8 @@ from app.core.retrieval.reranker import RerankError, get_reranker
 from app.core.retrieval.relevance import filter_fault_hits
 from app.core.retrieval.vector_store import VectorStore
 from app.domain.schemas import Chunk, ScoredChunk
-from app.domain.taxonomy import KNOWLEDGE_CATEGORY, vendor_in_chunk
+from app.domain.taxonomy import KNOWLEDGE_CATEGORY, classify, vendor_hint, vendor_in_chunk
+from app.services import access, database
 
 # RRF 融合常数：排名越靠前贡献越大，两路都命中的分块得到叠加
 _RRF_K = 60
@@ -29,6 +31,31 @@ _RRF_K = 60
 _RECALL = 10
 # 向量库单次嵌入的分块批大小，避免一次性占用过多内存
 _EMBED_BATCH = 32
+
+
+def allowed_document_ids() -> set[str] | None:
+    """权限来自当前数据库，不依赖可能尚未重建的共享检索索引。"""
+    if access.is_internal():
+        return None
+    query = {"$and": [access.read_filter(), {"status": "ready"}]}
+    return {str(row["_id"]) for row in database._docs().find(query, {"_id": 1})}
+
+
+def authorized_hits(hits: list[ScoredChunk]) -> list[ScoredChunk]:
+    allowed = allowed_document_ids()
+    return hits if allowed is None else [hit for hit in hits if hit.chunk.doc_id in allowed]
+
+
+def operations_mode(question: str = "") -> bool:
+    """运维是企业知识库中的一个部门，其他部门不套用故障语义门禁。"""
+    identity = access.current_identity() or {}
+    if access.is_internal():
+        return True
+    if "operations" not in identity.get("department_ids", []):
+        return False
+    # 运维员工也会查询公共制度；只对其运维问题沿用专门的方案与故障规则。
+    return (not question or bool(classify(question)[0] or vendor_hint(question))
+            or bool(re.search(r"扫码枪|扫描枪|扫码器|读码器", question)))
 
 
 def _embed_text(chunk: Chunk) -> str:
@@ -121,7 +148,7 @@ class RetrievalService:
         return self._index
 
     def search(self, question: str, top_k: int = 6, vendor: str = "",
-               use_rerank: bool = True) -> list[ScoredChunk]:
+               use_rerank: bool = True, allowed_doc_ids: set[str] | None = None) -> list[ScoredChunk]:
         """混合检索：BM25 + 向量语义召回 → RRF 融合候选 → Cross-Encoder rerank 排序。
 
         召回宽度固定为 _RECALL 个分块（含错别字、口语化问法要靠向量召回捞回台账），
@@ -133,9 +160,15 @@ class RetrievalService:
         vendor 非空时（问题点名了厂商，如「华智剔废乱剔」）该厂商的文档强制置顶，
         不受 rerank 打分影响。
         """
+        authorized = allowed_document_ids()
+        if authorized is not None:
+            allowed_doc_ids = authorized if allowed_doc_ids is None else authorized & allowed_doc_ids
+        if allowed_doc_ids is not None and not allowed_doc_ids:
+            return []
         index = self.index
         candidate_count = max(top_k, _RECALL)
-        bm25_hits = index.search(question, top_k=candidate_count)
+        scope = {"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids is not None else {}
+        bm25_hits = index.search(question, top_k=candidate_count, **scope)
         vector_hits: list[ScoredChunk] = []
         embedder = get_embedder()
         if embedder is not None:
@@ -143,10 +176,10 @@ class RetrievalService:
                 query = embedder.query(question)
                 by_id = {c.id: c for c in index.chunks}
                 for chunk_id, similarity in self._vectors.search(
-                    query, candidate_count, settings.embedding_model,
+                    query, candidate_count, settings.embedding_model, **scope,
                 ):
                     chunk = by_id.get(chunk_id)
-                    if chunk is not None:
+                    if chunk is not None and (allowed_doc_ids is None or chunk.doc_id in allowed_doc_ids):
                         vector_hits.append(ScoredChunk(
                             chunk=chunk, score=similarity, coverage=0.0, semantic=similarity, semantic_used=True,
                         ))
@@ -169,7 +202,8 @@ class RetrievalService:
                     entry.semantic_used = True
         candidates = sorted(fused.values(), key=lambda h: (h.score, h.semantic, h.coverage), reverse=True)
         # 在截断与精排之前排除明确的设备/故障冲突，给同故障的其他候选留下位置。
-        candidates = filter_fault_hits(question, candidates)
+        if operations_mode(question):
+            candidates = filter_fault_hits(question, candidates)
 
         if vendor:
             # 厂商文档置顶：问题描述与文档用词差异大时 rerank 会低估它们，
@@ -207,6 +241,8 @@ class RetrievalService:
 
     def stats(self) -> dict:
         index = self.index
+        allowed = allowed_document_ids()
+        chunks = index.chunks if allowed is None else [c for c in index.chunks if c.doc_id in allowed]
         if settings.llm_available:
             llm = settings.llm_model
         else:
@@ -215,13 +251,14 @@ class RetrievalService:
         if embedder is None:
             embedding = "已停用"
         else:
-            embedding = (f"{settings.embedding_model}（{self._vectors.count(settings.embedding_model)} 条向量，"
+            scope = {"allowed_doc_ids": allowed} if allowed is not None else {}
+            embedding = (f"{settings.embedding_model}（{self._vectors.count(settings.embedding_model, **scope)} 条向量，"
                          f"{self._vectors.backend()} 索引）")
             if self._vector_error:
                 embedding += f"，最近异常：{self._vector_error}"
         return {
-            "chunks": len(index.chunks),
-            "documents": index.doc_count(),
+            "chunks": len(chunks),
+            "documents": len({chunk.doc_id for chunk in chunks}),
             "llm": llm,
             "embedding": embedding,
             "rerank": "bge-reranker-base" if get_reranker() is not None else "已停用",

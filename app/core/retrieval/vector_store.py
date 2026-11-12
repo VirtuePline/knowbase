@@ -91,8 +91,23 @@ class VectorStore:
     def backend() -> str:
         return "faiss" if faiss is not None else "numpy"
 
-    def search(self, query: list[float], top_k: int, model: str) -> list[tuple[str, float]]:
+    def search(self, query: list[float], top_k: int, model: str,
+               allowed_doc_ids: set[str] | None = None) -> list[tuple[str, float]]:
         """余弦相似度检索，返回 [(chunk_id, 相似度)]，按相似度降序。"""
+        if allowed_doc_ids is not None:
+            if not allowed_doc_ids:
+                return []
+            # 有权限边界的查询只读取获授权文档的向量，再排序；全库 FAISS 缓存不能
+            # 先 top-k 后过滤，也不能按上一次使用者的权限复用搜索结果。
+            rows = list(self._col.find(
+                {"model": model, "doc_id": {"$in": list(allowed_doc_ids)}}, {"vector": 1}))
+            if not rows:
+                return []
+            matrix = np.asarray([row["vector"] for row in rows], dtype=np.float32)
+            if matrix.ndim != 2 or matrix.shape[1] != len(query):
+                return []
+            return self._search_numpy(matrix, [row["_id"] for row in rows],
+                                      np.asarray(query, dtype=np.float32), top_k)
         key = (model, self._version)
         if faiss is not None and self._faiss_key == key and self._faiss_index is not None:
             return self._query_faiss(query, top_k)
@@ -140,5 +155,8 @@ class VectorStore:
         order = np.argsort(-sims)[:top_k]
         return [(ids[i], float(sims[i])) for i in order]
 
-    def count(self, model: str = "") -> int:
-        return self._col.count_documents({"model": model} if model else {})
+    def count(self, model: str = "", allowed_doc_ids: set[str] | None = None) -> int:
+        query = {"model": model} if model else {}
+        if allowed_doc_ids is not None:
+            query["doc_id"] = {"$in": list(allowed_doc_ids)}
+        return self._col.count_documents(query)

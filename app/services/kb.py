@@ -11,6 +11,7 @@ import uuid
 from collections import Counter
 from dataclasses import replace as replace_record
 from pathlib import Path
+from fastapi import HTTPException
 
 from app.config import settings
 from app.core.ingest.pipeline import Ingester, sha256_of
@@ -23,7 +24,7 @@ from app.domain.taxonomy import (
     normalize_doc_category,
     record_categories,
 )
-from app.services import database, recordmeta
+from app.services import access, database, mongo, recordmeta
 from app.services.preview import is_editable, merge_preview
 from app.services.retrieval_service import retrieval
 
@@ -64,9 +65,52 @@ def _decode(raw: bytes) -> str:
 
 def _require(doc_id: str) -> DocRecord:
     record = database.get(doc_id)
-    if not record:
+    if not record or not access.can_read(record):
         raise DocumentNotFound(doc_id)
     return record
+
+
+def _require_write(doc_id: str) -> DocRecord:
+    record = _require(doc_id)
+    if not access.can_write(record):
+        raise HTTPException(status_code=403, detail="没有此文档的修改权限")
+    return record
+
+
+def _visible_records() -> list[DocRecord]:
+    if access.is_internal():
+        return database.list_all()
+    return [database._row_to_doc(row) for row in database._docs().find(access.read_filter())]
+
+
+def _validate_images(content: str) -> set[str]:
+    names = set(re.findall(r"/images/([A-Za-z0-9_.-]+)", content))
+    assets = mongo.db().image_assets
+    if not access.is_platform_admin():
+        actor = access.current_identity() or {}
+        for name in names:
+            asset = assets.find_one({"_id": name})
+            if asset and not asset.get("doc_ids") and asset.get("uploaded_by") == actor.get("username"):
+                continue
+            parents = [database.get(value) for value in (asset or {}).get("doc_ids", [])]
+            if not any(parent is not None and access.can_read(parent) for parent in parents):
+                raise HTTPException(status_code=403, detail="不能引用无权访问的图片")
+    return names
+
+
+def _bind_images(doc_id: str, content: str) -> None:
+    """图片访问继承使用它的文档权限；撤销文档权限后不能通过旧图片地址旁路。"""
+    names = _validate_images(content)
+    assets = mongo.db().image_assets
+    assets.update_many({"doc_ids": doc_id, "_id": {"$nin": list(names)}}, {"$pull": {"doc_ids": doc_id}})
+    for name in names:
+        assets.update_one({"_id": name}, {"$addToSet": {"doc_ids": doc_id}}, upsert=True)
+
+
+def _same_scope(record: DocRecord, scope: dict) -> bool:
+    return (access.can_write(record) and record.department_id == scope["department_id"]
+            and record.visibility == scope["visibility"]
+            and set(record.shared_department_ids) == set(scope["shared_department_ids"]))
 
 
 def _tracking_root(parent_id: str, doc_id: str) -> str:
@@ -75,9 +119,10 @@ def _tracking_root(parent_id: str, doc_id: str) -> str:
         return doc_id
     if parent_id == doc_id:
         raise ValueError("记录不能跟踪自身")
-    parent = database.get(parent_id)
-    if not parent:
-        raise ValueError("所跟踪的记录不存在")
+    try:
+        parent = _require_write(parent_id)
+    except DocumentNotFound:
+        raise ValueError("所跟踪的记录不存在") from None
     is_record = parent.doc_type == "record" or (
         not parent.doc_type and "常识库" not in record_categories(parent))
     if parent.status != "ready" or not is_record:
@@ -93,6 +138,18 @@ def _doc_dict(record: DocRecord) -> dict:
     data = record.to_dict()
     data["editable"] = is_editable(record.ext)
     data["has_source"] = _raw_path(record).is_file()
+    data["can_write"] = access.can_write(record)
+    data["can_manage_access"] = (access.is_platform_admin() or
+                                  (record.visibility != "public" and record.department_id in access.managed_departments()))
+    if record.parent_id:
+        parent = database.get(record.parent_id)
+        if parent is None or not access.can_read(parent):
+            data["parent_id"] = ""
+            data["root_id"] = record.id
+    if record.root_id and record.root_id != record.id:
+        root = database.get(record.root_id)
+        if root is None or not access.can_read(root):
+            data["root_id"] = record.id
     return data
 
 
@@ -149,7 +206,7 @@ def _with_categories(docs: list[DocRecord]) -> list[DocRecord]:
 
 def list_documents(category: str = "", doc_type: str = "") -> list[dict]:
     """文档列表。doc_type=doc 返回基础文档（含常识库：文档即常识库，不再分开），record 只返回运维问题记录。"""
-    docs = _with_categories(database.list_all())
+    docs = _with_categories(_visible_records())
     if doc_type == "doc":
         docs = [doc for doc in docs if doc.doc_type == "doc"]
     elif doc_type == "record":
@@ -162,7 +219,7 @@ def list_documents(category: str = "", doc_type: str = "") -> list[dict]:
 
 def category_counts(doc_type: str = "") -> list[dict]:
     """各分类的文档数，顺序固定，供前端筛选条使用；统计范围与列表过滤一致。"""
-    docs = _with_categories(database.list_all())
+    docs = _with_categories(_visible_records())
     if doc_type == "doc":
         docs = [doc for doc in docs if doc.doc_type == "doc"]
     elif doc_type == "record":
@@ -178,7 +235,7 @@ def set_category(doc_id: str, category: str) -> dict:
 
 def set_categories(doc_id: str, categories: list) -> dict:
     """人工设置全部分类标签（可多选）：首标签为主分类，空列表清空标签。"""
-    _require(doc_id)
+    _require_write(doc_id)
     tags: list[str] = []
     for value in categories or []:
         text = (value or "").strip()
@@ -192,7 +249,7 @@ def set_categories(doc_id: str, categories: list) -> dict:
 
 def set_vendor(doc_id: str, vendor: str) -> dict:
     """人工设置 / 清除记录的厂商（厂商系统类记录按厂商归类）。"""
-    _require(doc_id)
+    _require_write(doc_id)
     value = (vendor or "").strip()
     if value and value not in database.list_vendors():
         raise ValueError(f"未知厂商：{value}，请先在「模板与厂商设置」里添加")
@@ -202,7 +259,7 @@ def set_vendor(doc_id: str, vendor: str) -> dict:
 
 def set_document_time(doc_id: str, date: str) -> dict:
     """人工修正记录时间（年月日）；时分秒保留原值，仅日期部分替换。"""
-    record = _require(doc_id)
+    record = _require_write(doc_id)
     text = (date or "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         raise ValueError("时间格式应为 YYYY-MM-DD，例如 2026-11-04")
@@ -234,7 +291,8 @@ def _norm_file_time(value: str) -> str:
 def upload(filename: str, content: bytes, category: str = "", doc_type: str = "doc",
            date: str = "", vendor: str = "", resolved: str = "", *,
            categories: str = "", uploaded_by: str = "", uploaded_by_name: str = "",
-           parent_id: str = "", file_time: str = "") -> dict:
+           parent_id: str = "", file_time: str = "", department_id: str = "",
+           visibility: str = "department", shared_department_ids: list[str] | None = None) -> dict:
     """上传文档；category / categories 非空时入库后强制设置分类，优先于自动判定。
 
     doc_type：doc=基础文档（文档管理页上传），record=运维问题记录（运维问题上传页上传）。
@@ -246,7 +304,10 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     uploaded_by 为创建账号；uploaded_by_name 为运维人用户名（默认当前登录用户名，可改）；
     parent_id 非空时新建独立追踪，不覆盖或复用父记录。
     """
+    scope = access.creation_scope(department_id, visibility, shared_department_ids)
     original, ext = _check_upload(filename, content)
+    if ext in {".md", ".txt"}:
+        _validate_images(_decode(content))
     file_time = _norm_file_time(file_time)   # 文件修改时间：作为上传时间与记录时间默认值
     norm_resolved = _norm_resolved(resolved)
     cats = normalize_doc_categories(part for part in _CAT_SPLIT.split(categories or "") if part.strip())
@@ -266,7 +327,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     digest = sha256_of(target)
     existing = None if parent_id else database.find_by_hash(
         digest, uploaded_by=uploaded_by, parent_id="")
-    if existing and existing.status == "ready":
+    if existing and existing.status == "ready" and _same_scope(existing, scope):
         target.unlink(missing_ok=True)
         if cats:
             database.set_categories(existing.id, cats)
@@ -291,8 +352,11 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         resolved=norm_resolved,
         uploaded_by=uploaded_by, uploaded_by_name=uploaded_by_name,
         parent_id=parent_id, root_id=root_id,
+        **scope,
     )
     database.add(record)
+    if ext in {".md", ".txt"}:
+        _bind_images(record.id, _decode(content))
     result = _ingest(record, target, category=primary)
     if cats:
         database.set_categories(result.id, cats)
@@ -314,8 +378,10 @@ def replace_file(doc_id: str, filename: str, content: bytes) -> dict:
 
     新文件解析失败时不动原文档，原文件、分块与检索结果保持不变。
     """
-    record = _require(doc_id)
+    record = _require_write(doc_id)
     original, ext = _check_upload(filename, content)
+    if ext in {".md", ".txt"}:
+        _validate_images(_decode(content))
 
     stored = _safe_stored_name(original, doc_id)
     staging = settings.raw_dir / f".replace_{uuid.uuid4().hex[:8]}{ext}"
@@ -326,7 +392,7 @@ def replace_file(doc_id: str, filename: str, content: bytes) -> dict:
             raise ValueError("新文件与当前文档内容完全相同，无需替换")
         duplicate = None if record.parent_id else database.find_by_hash(
             digest, uploaded_by=record.uploaded_by, parent_id="")
-        if duplicate and duplicate.status == "ready":
+        if duplicate and duplicate.status == "ready" and access.can_read(duplicate):
             if duplicate.id == doc_id:
                 raise ValueError("新文件与当前文档内容完全相同，无需替换")
             raise ValueError(f"新文件与已有文档《{duplicate.name}》内容完全相同，未替换")
@@ -352,6 +418,7 @@ def replace_file(doc_id: str, filename: str, content: bytes) -> dict:
         sha256=digest, status="processing",
     )
     database.add(updated)
+    _bind_images(updated.id, _decode(content) if ext in {".md", ".txt"} else "")
     return {"replaced": True, "doc": _doc_dict(_ingest(updated, target, category=record.category))}
 
 
@@ -359,12 +426,14 @@ def delete(doc_id: str) -> bool:
     record = database.get(doc_id)
     if not record:
         return False
+    _require_write(doc_id)
     if database.count_children(doc_id):
         raise ValueError("该记录存在后续追踪，请先删除子追踪记录")
     _raw_path(record).unlink(missing_ok=True)
     _remove_attachment_dir(doc_id)
     Ingester().remove(doc_id)
     database.delete(doc_id)
+    mongo.db().image_assets.update_many({"doc_ids": doc_id}, {"$pull": {"doc_ids": doc_id}})
     retrieval.rebuild()
     return True
 
@@ -409,19 +478,19 @@ def _attachment_ext(name: str) -> str:
     return ext
 
 
-def add_attachments(doc_id: str, files: list[tuple[str, bytes]], uploaded_by: str = "") -> list[dict]:
+def add_attachments(doc_id: str, files: list[tuple[str, bytes]], uploaded_by: str = "",
+                    batch_id: str = "") -> list[dict]:
     """给已有记录挂附件：存 data/attachments/<doc_id>/，元数据写在文档上。
 
     附件不进文档库、不切分、不参与向量检索，只在记录预览里可打开；
     单文件上限 20MB，单条记录最多 20 个。
     """
-    _require(doc_id)
+    _require_write(doc_id)
     existing = database.get_attachments(doc_id)
-    if len(existing) + len(files) > ATTACHMENT_MAX_COUNT:
-        raise ValueError(f"单条记录最多 {ATTACHMENT_MAX_COUNT} 个附件")
-    folder = _attachment_dir(doc_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    entries: list[dict] = []
+    if batch_id and not re.fullmatch(r"[A-Za-z0-9_-]{8,96}", batch_id):
+        raise ValueError("附件批次标识无效")
+    # 整批验证通过后再写文件，避免后一个附件不合法时留下前面的孤立文件。
+    prepared: list[tuple[str, str, bytes]] = []
     for filename, content in files:
         original = Path(str(filename or "")).name
         if not original:
@@ -431,16 +500,44 @@ def add_attachments(doc_id: str, files: list[tuple[str, bytes]], uploaded_by: st
             raise ValueError(f"{original}：文件内容为空")
         if len(content) > ATTACHMENT_MAX_BYTES:
             raise ValueError(f"{original}：附件超过 20MB，请压缩后再上传")
-        stored = f"{uuid.uuid4().hex[:12]}{ext}"
-        (folder / stored).write_bytes(content)
-        entries.append({"stored": stored, "name": original, "size": len(content),
-                        "uploaded_at": database.now_iso(), "uploaded_by": uploaded_by})
-    database.add_attachments(doc_id, entries)
+        prepared.append((original, ext, content))
+    if batch_id:
+        previous = sorted((item for item in existing if item.get("batch_id") == batch_id),
+                          key=lambda item: item.get("batch_index", 0))
+        if previous:
+            if len(previous) != len(prepared) or any(
+                    item["name"] != name or item.get("sha256") != hashlib.sha256(content).hexdigest()
+                    for item, (name, _, content) in zip(previous, prepared)):
+                raise ValueError("附件批次已使用，请刷新附件列表后重试")
+            return existing
+    if len(existing) + len(files) > ATTACHMENT_MAX_COUNT:
+        raise ValueError(f"单条记录最多 {ATTACHMENT_MAX_COUNT} 个附件")
+    folder = _attachment_dir(doc_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    entries: list[dict] = []
+    written: list[Path] = []
+    try:
+        for index, (original, ext, content) in enumerate(prepared):
+            stored = f"{uuid.uuid4().hex[:12]}{ext}"
+            target = folder / stored
+            written.append(target)
+            target.write_bytes(content)
+            entries.append({"stored": stored, "name": original, "size": len(content),
+                            "uploaded_at": database.now_iso(), "uploaded_by": uploaded_by})
+            if batch_id:
+                entries[-1].update(batch_id=batch_id, batch_index=index,
+                                   sha256=hashlib.sha256(content).hexdigest())
+        database.add_attachments(doc_id, entries)
+    except Exception:
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise
     return database.get_attachments(doc_id)
 
 
 def attachment_path(doc_id: str, stored: str) -> tuple[Path, str, str]:
     """附件的本地路径、下载名与媒体类型；只接受登记过的附件，防路径穿越。"""
+    _require(doc_id)
     entry = next((a for a in database.get_attachments(doc_id) if a.get("stored") == stored), None)
     if entry is None:
         raise DocumentNotFound("附件不存在")
@@ -455,7 +552,7 @@ def attachment_path(doc_id: str, stored: str) -> tuple[Path, str, str]:
 
 
 def remove_attachment(doc_id: str, stored: str) -> list[dict]:
-    _require(doc_id)
+    _require_write(doc_id)
     entry = next((a for a in database.get_attachments(doc_id) if a.get("stored") == stored), None)
     if entry is None:
         raise DocumentNotFound("附件不存在")
@@ -504,7 +601,9 @@ def read_source(doc_id: str) -> dict:
 def save_markdown(content: str, doc_id: str = "", filename: str = "",
                   category: str = "", vendor: str = "", resolved: str = "", *,
                   categories: str = "", uploaded_by: str = "", uploaded_by_name: str = "",
-                  parent_id: str = "", edited_by: str = "", edited_by_name: str = "") -> dict:
+                  parent_id: str = "", edited_by: str = "", edited_by_name: str = "",
+                  department_id: str = "", visibility: str = "department",
+                  shared_department_ids: list[str] | None = None) -> dict:
     """新建或更新 Markdown / 文本记录，并立即重建索引。
 
     doc_id 为空时新建；传入已有 doc_id 时覆盖原文件与分块。
@@ -516,6 +615,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     """
     if not content.strip():
         raise ValueError("内容为空，未保存")
+    _validate_images(content)
     if vendor and vendor not in recordmeta.list_vendors():
         raise ValueError("未知厂商，请先在「模板与厂商设置」里添加")
     cats = normalize_doc_categories(part for part in _CAT_SPLIT.split(categories or "") if part.strip())
@@ -526,7 +626,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     if doc_id:
         if parent_id:
             raise ValueError("跟踪关系创建后不可修改，请新建追踪记录")
-        record = _require(doc_id)
+        record = _require_write(doc_id)
         if not is_editable(record.ext):
             raise ValueError(f"{record.ext} 文件不支持在线编辑，仅支持 .md / .txt")
         raw = (filename or record.name).strip() or record.name
@@ -534,6 +634,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
         ext = ".txt" if (Path(raw).suffix.lower() == ".txt" or record.ext == ".txt") else ".md"
         name = Path(raw).stem.strip() or record.name
     else:
+        scope = access.creation_scope(department_id, visibility, shared_department_ids)
         date_suffix = database.now_iso()[:10].replace("-", "")
         base = Path((filename or "").strip() or f"运维记录_{date_suffix}").name
         ext = ".txt" if base.lower().endswith(".txt") else ".md"
@@ -558,7 +659,9 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     digest = hashlib.sha256(payload).hexdigest()
     duplicate = None if parent_id else database.find_by_hash(
         digest, uploaded_by=uploaded_by, parent_id="")
-    if duplicate and duplicate.id != doc_id and duplicate.status == "ready":
+    target_scope = ({"department_id": record.department_id, "visibility": record.visibility,
+                     "shared_department_ids": record.shared_department_ids} if record else scope)
+    if duplicate and duplicate.id != doc_id and duplicate.status == "ready" and _same_scope(duplicate, target_scope):
         return {"duplicated": True, "doc": _doc_dict(duplicate)}
 
     stored = _safe_stored_name(f"{name}{ext}", doc_id)
@@ -584,8 +687,10 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
             parent_id=parent_id, root_id=root_id,
             last_edited_by=(edited_by or "").strip(), last_edited_name=(edited_by_name or "").strip(),
             last_edited_at=database.now_iso(),
+            **scope,
         )
     database.add(new_record)
+    _bind_images(doc_id, content)
     # 编辑溯源日志：谁在何时新建 / 修改了这份记录（重复内容跳过时不记）
     database.add_edit_log(doc_id, (edited_by or "").strip() or uploaded_by,
                           (edited_by_name or "").strip() or uploaded_by_name,
@@ -609,7 +714,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
 
 def reingest(doc_id: str) -> DocRecord:
     """按当前分析规则重新解析一份文档（原始文件需仍在）。"""
-    record = _require(doc_id)
+    record = _require_write(doc_id)
     path = _raw_path(record)
     if not path.is_file():
         raise ValueError("原始文件缺失，无法重新分析")
@@ -617,9 +722,17 @@ def reingest(doc_id: str) -> DocRecord:
 
 
 def rebuild() -> dict:
+    if not access.is_platform_admin():
+        raise HTTPException(status_code=403, detail="只有平台管理员可以重建全库索引")
     index = retrieval.rebuild()
     return {"chunks": len(index.chunks), "documents": index.doc_count()}
 
 
 def stats() -> dict:
-    return retrieval.stats()
+    if access.is_internal():
+        return retrieval.stats()
+    records = _visible_records()
+    return {"documents": len(records), "chunks": sum(doc.chunks for doc in records),
+            "llm": settings.llm_model if settings.llm_available else "未配置（仅返回检索摘录）",
+            "embedding": settings.embedding_model if settings.embedding_enabled else "已停用",
+            "rerank": "bge-reranker-base" if settings.rerank_enabled else "已停用"}

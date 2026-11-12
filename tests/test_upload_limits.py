@@ -38,11 +38,15 @@ class UploadLimitsTest(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(routes.kb, "upload", side_effect=ingest) as store:
             result = await routes.upload_document(upload(), "record", "MES系统", "", "", "", "",
+                                                   department_id="operations", visibility="department",
+                                                   shared_department_ids="[]",
                                                    identity={"username": "engineer", "role": "user"})
             self.assertEqual(result, {"ok": True})
             self.assertEqual(store.call_args.kwargs["doc_type"], "record")
             self.assertEqual(store.call_args.kwargs["uploaded_by"], "engineer")
-            self.assertEqual(await routes.upload_knowledge(upload(), identity={"username": "engineer"}), {"ok": True})
+            self.assertEqual(await routes.upload_knowledge(upload(), department_id="operations",
+                             visibility="department", shared_department_ids="[]",
+                             identity={"username": "engineer"}), {"ok": True})
         with patch.object(routes.kb, "replace_file", side_effect=ingest):
             self.assertEqual(await routes.replace_document("doc1", upload()), {"ok": True})
 

@@ -33,6 +33,7 @@ class AccountsTest(unittest.TestCase):
         self.users.delete_one.side_effect = self.delete
         self.users.count_documents.side_effect = lambda query: len(self.rows)
         patches = [patch.object(auth, "settings", self.config),
+                   patch.object(accounts.database, "list_departments", return_value=[{"id": "operations", "name": "运维部门"}]),
                    patch.object(auth.mongo, "db", return_value=SimpleNamespace(users=self.users))]
         for patcher in patches:
             patcher.start()
@@ -82,7 +83,12 @@ class AccountsTest(unittest.TestCase):
         self.assertEqual(response.json(), {"admin": True, "authenticated": True, "auth": True,
                                           "user": "operator", "account": "operator", "username": "operator",
                                           "display_name": "operator", "role": "user", "can_register": False,
-                                          "must_change_password": False})
+                                          "must_change_password": False,
+                                          "department_ids": ["operations"], "department_roles": {"operations": "editor"},
+                                          "departments": [{"id": "operations", "name": "运维部门"}],
+                                          "can_manage_users": False, "can_write": True,
+                                          "permission_stamp": response.json()["permission_stamp"]})
+        self.assertTrue(response.json()["permission_stamp"])
         cookie = response.headers["set-cookie"].lower()
         self.assertIn("httponly", cookie)
         self.assertIn("samesite=lax", cookie)
@@ -173,7 +179,7 @@ class AccountsTest(unittest.TestCase):
                 auth.ensure_admin_user("admin", "")
         self.assertNotIn("admin", self.rows)
 
-    def test_admin_pages_and_static_html_are_protected_search_is_public(self):
+    def test_both_portals_and_static_html_are_protected(self):
         from app import main
 
         for name in ("index.html", "login.html", "register.html", "change-password.html", "styles.css", "app.js"):
@@ -191,11 +197,12 @@ class AccountsTest(unittest.TestCase):
             self.assertEqual(admin.get("/static/login.html").status_code, 404)
             self.assertEqual(admin.get("/static/index.html").status_code, 404)
             self.assertEqual(admin.get("/static/styles.css").status_code, 200)
-            self.assertEqual(search.get("/").status_code, 200)
-            self.assertEqual(search.get("/login").status_code, 404)
-            self.assertEqual(search.get("/register").status_code, 404)
+            self.assertEqual(search.get("/", follow_redirects=False).headers["location"], "/login")
+            self.assertEqual(search.get("/login").status_code, 200)
+            self.assertEqual(search.get("/register", follow_redirects=False).headers["location"], "/login")
+            self.assertEqual(search.get("/api/documents").status_code, 401)
             self.assertEqual(search.post("/api/admin/register", json={}).status_code, 404)
-            self.assertFalse(search.get("/api/mode").json()["auth"])
+            self.assertTrue(search.get("/api/mode").json()["auth"])
             auth.create_user("operator", "test-password")
             admin.post("/api/admin/login", json={"username": "operator", "password": "test-password"})
             self.assertEqual(admin.get("/").status_code, 200)

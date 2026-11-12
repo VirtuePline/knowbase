@@ -1,0 +1,3561 @@
+
+const $ = (sel) => document.querySelector(sel);
+const toastEl = $("#toast");
+let toastTimer = null;
+
+function toast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2600);
+}
+
+/* ---------- Markdown 渲染（标题 / 强调 / 链接 / 图片 / 表格 / 代码 / 引用 / 列表） ---------- */
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function safeUrl(value, image = false) {
+  const raw = String(value).replace(/&amp;/g, "&").trim();
+  if (!raw) return "";
+  const scheme = raw.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (scheme) {
+    const allowed = ["http", "https"];
+    if (!image && scheme[1].toLowerCase() === "mailto") allowed.push("mailto");
+    if (!allowed.includes(scheme[1].toLowerCase())) return "";
+  }
+  return escapeAttr(String(value).trim());
+}
+
+function inline(s) {
+  const cached = [];
+  const keep = (html) => `\u0000${cached.push(html) - 1}\u0000`;
+  let text = escapeHtml(s);
+
+  // 先保护代码、图片和链接，避免其中的符号被后续强调规则改写
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => keep(`<code>${code}</code>`));
+  // 文档库引用：[《名称》](doc://文档ID) 渲染为可点击预览的引用标签
+  text = text.replace(/\[([^\]]+)\]\((doc(?:-ref)?):\/\/([A-Za-z0-9_-]+)\)/g, (match, label, scheme, id) =>
+    keep(`<span class="doc-ref" data-doc-pv="${escapeAttr(id)}" data-ref-scheme="${scheme}" contenteditable="false" role="button" tabindex="0" title="点击预览文档">${label}</span>`));
+  text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, url) => {
+    const href = safeUrl(url, true);
+    return href ? keep(`<img src="${href}" alt="${escapeAttr(alt)}" loading="lazy" />`) : match;
+  });
+  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, url) => {
+    const href = safeUrl(url);
+    return href ? keep(`<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`) : match;
+  });
+  text = text
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/~~([^~\n]+)~~/g, "<del>$1</del>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  return text.replace(/\u0000(\d+)\u0000/g, (_, index) => cached[Number(index)] || "");
+}
+
+function renderMarkdown(src) {
+  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // 代码块
+    if (/^\s*```/.test(line)) {
+      const language = line.trim().slice(3).trim().replace(/[^\w+#.-]/g, "");
+      const body = [];
+      i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
+      i++;
+      const cls = language ? ` class="language-${language}"` : "";
+      out.push(`<pre><code${cls}>${escapeHtml(body.join("\n"))}</code></pre>`);
+      continue;
+    }
+    // 表格
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const split = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      const header = split(line);
+      i += 2;
+      const body = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { body.push(split(lines[i])); i++; }
+      out.push("<table><thead><tr>" + header.map((h) => `<th>${inline(h)}</th>`).join("") + "</tr></thead><tbody>" +
+        body.map((r) => "<tr>" + r.map((c) => `<td>${inline(c)}</td>`).join("") + "</tr>").join("") +
+        "</tbody></table>");
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      i++; continue;
+    }
+    // 引用
+    if (/^\s*>\s?/.test(line)) {
+      const body = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        body.push(inline(lines[i].replace(/^\s*>\s?/, "")));
+        i++;
+      }
+      out.push(`<blockquote><p>${body.join("<br>")}</p></blockquote>`);
+      continue;
+    }
+    // 分隔线
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push("<hr />");
+      i++; continue;
+    }
+    if (/^\s*[-*]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
+      const items = [];
+      const ordered = /^\s*\d+[.)]\s+/.test(line);
+      while (i < lines.length && (/^\s*[-*]\s+/.test(lines[i]) || /^\s*\d+[.)]\s+/.test(lines[i]))) {
+        items.push(inline(lines[i].replace(/^\s*(?:[-*]|\d+[.)])\s+/, "")));
+        i++;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>` + items.map((t) => `<li>${t}</li>`).join("") + `</${tag}>`);
+      continue;
+    }
+    if (!line.trim()) { i++; continue; }
+    out.push(`<p>${inline(line)}</p>`);
+    i++;
+  }
+  return out.join("");
+}
+
+/* ---------- 标签页 ---------- */
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => switchTo(btn.dataset.tab));
+});
+
+/* ---------- 问答 ---------- */
+const log = $("#chat-log");
+const questionBox = $("#question");
+const sendBtn = $("#send");
+sendBtn.disabled = true;
+const history = [];
+let historyConversationId = "";
+
+function addMessage(role, html, raw) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble" + (role === "bot" ? " md" : "");
+  if (role === "bot") bubble.innerHTML = html;
+  else bubble.textContent = html;
+  wrap.appendChild(bubble);
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+  return bubble;
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password) return "";
+    return url.href;
+  } catch { return ""; }
+}
+
+function renderAnswerOrigin(data) {
+  if (data.status === "guide") return "";
+  const legacySolution = data.solution_found === undefined && data.status === "ok" && (data.sources || []).length > 0;
+  const web = data.answer_origin === "web";
+  const found = data.solution_found === true || legacySolution;
+  // 知识库命中但没有处理方案时后端直接回原文摘录（answer_origin=knowledge_base）
+  const records = data.answer_origin === "knowledge_base" && (data.sources || []).length > 0;
+  const kind = web ? "web" : (found || records) ? "knowledge-base" : "unavailable";
+  const label = web ? "联网参考" : found ? "知识库方案" : records ? "知识库记录" : "尚无方案";
+  return `<div class="answer-origin ${kind}"><span aria-hidden="true"></span>${label}</div>`;
+}
+
+function renderSourceMetrics(source) {
+  if (source.kind === "web" || ["web", "reference"].includes(source.scoring_method)) return "";
+  if (source.scoring_method === "context") {
+    return '<div class="source-metrics"><span class="source-metric context" title="该片段用于补全台账上下文，未单独参与检索评分。">台账上下文（未单独评分）</span></div>';
+  }
+  const finite = (value) => typeof value === "number" && Number.isFinite(value);
+  const metric = (label, value, description, extraClass = "") =>
+    `<span class="source-metric ${extraClass}" title="${description}" aria-label="${label} ${value}。${description}">${label} <b>${value}</b></span>`;
+  const metrics = [];
+  if (source.scoring_method === "rrf") {
+    if (finite(source.rrf_score)) {
+      metrics.push(metric("排序分", source.rrf_score.toFixed(6), "RRF 排名融合分，仅用于本次检索排序；不代表相关概率，不可跨问题比较。", "ranking"));
+    }
+    if (finite(source.keyword_coverage)) {
+      metrics.push(metric("关键词覆盖", `${Math.round(source.keyword_coverage * 100)}%`, "查询关键词的覆盖指标，不代表答案正确率。"));
+    }
+    if (finite(source.semantic_similarity)) {
+      metrics.push(metric("语义相似度", source.semantic_similarity.toFixed(2), "向量余弦相似度，衡量语义接近程度，不代表置信度或正确率。"));
+    }
+    if (finite(source.rerank_score)) {
+      metrics.push(metric("重排分", source.rerank_score.toFixed(2), "重排模型给出的分数，用于候选排序，不代表答案正确率。"));
+    }
+  } else if (!source.scoring_method && finite(source.score)) {
+    metrics.push(metric("历史排序分", source.score.toFixed(3), "历史记录中保存的排序分，原始计分方法与精度可能无法恢复；不代表相关概率，不可跨问题比较。", "legacy"));
+  }
+  return metrics.length ? `<div class="source-metrics">${metrics.join("")}</div>` : "";
+}
+
+function renderSourceReferences(references, label = "引用文档") {
+  const seen = new Set();
+  const items = (references || []).filter((reference) => {
+    const key = String(reference.doc_id || reference.doc_name || "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((reference) => {
+    const id = escapeAttr(escapeHtml(String(reference.doc_id || "")));
+    const name = escapeHtml(String(reference.doc_name || "未命名文档"));
+    const uploadDay = escapeHtml(String(reference.uploaded_at || "").slice(0, 10));
+    const title = id
+      ? `<button type="button" class="source-name" data-src-pv="${id}" title="点击预览">${name}</button>`
+      : `<span>${name}</span>`;
+    return `<li>${title}${uploadDay ? `<span class="source-reference-date">${uploadDay}</span>` : ""}</li>`;
+  }).join("");
+  return items ? `<div class="source-references"><span class="source-references-label">${escapeHtml(label)}</span><ul>${items}</ul></div>` : "";
+}
+
+function renderSources(sources) {
+  if (!sources || !sources.length) return "";
+  const primary = sources.filter((source) => source.scoring_method !== "reference");
+  const legacyReferences = sources.filter((source) => source.scoring_method === "reference");
+  const matched = new Set();
+  const items = primary.map((s) => {
+    const name = escapeHtml(String(s.doc_name || "未命名来源"));
+    const snippet = escapeHtml(String(s.snippet || ""));
+    if (s.kind === "web" || s.scoring_method === "web") {
+      const url = safeHttpUrl(s.url);
+      const title = url
+        ? `<a class="who web-source-link" href="${escapeAttr(escapeHtml(url))}" target="_blank" rel="noopener noreferrer">${name}<span aria-hidden="true"> ↗</span></a>`
+        : `<span class="who">${name}</span>`;
+      const location = url ? new URL(url).hostname : "外部资料";
+      return `<div class="source web-source">${title}<span class="source-kind">联网参考</span><div class="where web-source-host">${escapeHtml(location)}</div><div class="snip">${snippet}</div></div>`;
+    }
+    // 兼容浏览器里已保存的扁平引用；新回答直接使用父来源的 references。
+    const references = [...(s.references || [])];
+    legacyReferences.forEach((reference) => {
+      if (String(reference.location || "").includes(`《${s.doc_name}》`)) {
+        references.push(reference);
+        matched.add(reference);
+      }
+    });
+    const id = escapeAttr(escapeHtml(String(s.doc_id || "")));
+    const uploadDay = String(s.uploaded_at || "").slice(0, 10);   // 年月日
+    return `<div class="source">
+      <button type="button" class="who source-name" data-src-pv="${id}" title="点击预览">${name}</button>
+      <span class="source-kind">知识库</span>
+      <span class="where">${escapeHtml(String(s.location || "全文"))}</span>
+      ${uploadDay ? `<span class="where" title="来源文档上传时间">${uploadDay}</span>` : ""}
+      ${renderSourceReferences(references)}
+      ${renderSourceMetrics(s)}
+      ${s.summary ? `<div class="sum">摘要：${escapeHtml(String(s.summary).split("\n")[0])}</div>` : ""}
+      ${snippet ? `<div class="snip">${snippet}</div>` : ""}
+    </div>`;
+  }).join("");
+  const unmatched = legacyReferences.filter((reference) => !matched.has(reference));
+  return `<details class="sources"><summary>查看参考来源（${primary.length}）</summary>${items}${renderSourceReferences(unmatched, "其他引用文档")}</details>`;
+}
+
+// 来源条目「预览 / 下载」：复用文档管理页的预览弹窗与下载逻辑
+document.addEventListener("click", (e) => {
+  const pv = e.target.closest("[data-src-pv]");
+  if (pv) { openPreview(pv.dataset.srcPv); return; }
+  const dl = e.target.closest("[data-src-dl]");
+  if (dl) downloadDoc(dl.dataset.srcDl);
+});
+
+// 渲染一条机器人回答气泡；rejected 为本次已累计排除的来源文档（「重新回答」链）
+function renderChatAnswer(bubble, data, question, started, rejected = []) {
+  const notice = data.notice ? `<div class="notice">${escapeHtml(data.notice)}</div>` : "";
+  const cat = data.category ? `<div class="muted" style="font-size:12px;margin-bottom:6px">已解析模块：${escapeHtml(data.category)}</div>` : "";
+  const seconds = (performance.now() - started) / 1000;
+  const elapsed = `<div class="answer-elapsed">耗时 ${seconds < 1 ? seconds.toFixed(2) : seconds.toFixed(1)} 秒</div>`;
+  const kbDocs = [...new Set((data.sources || [])
+    .filter((s) => s.kind !== "web" && !["web", "reference"].includes(s.scoring_method))
+    .map((s) => String(s.doc_id || "")).filter(Boolean))];
+  let reAsk = "";
+  if (kbDocs.length && data.status !== "guide") {
+    bubble.dataset.question = question;
+    bubble.dataset.reject = JSON.stringify(rejected);
+    bubble.dataset.kbdocs = JSON.stringify(kbDocs);
+    reAsk = `<div class="re-ask"><button class="ghost" type="button" data-reask title="把命中来源计入惩罚参数并重新检索：本次排除直接命中的文档，后续提问也会降低它们的权重">答案不对？排除命中来源重新回答</button></div>`;
+  }
+  bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + renderMarkdown(data.answer) + renderSources(data.sources) + elapsed + reAsk;
+}
+
+// 「答案不对」：把当前回答的知识库来源计入惩罚参数，重新请求并原位替换回答
+log.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-reask]");
+  if (!btn) return;
+  const bubble = btn.closest(".bubble");
+  const question = bubble ? bubble.dataset.question : "";
+  if (!bubble || !question) return;
+  const prevRejected = JSON.parse(bubble.dataset.reject || "[]");
+  const kbDocs = JSON.parse(bubble.dataset.kbdocs || "[]");
+  const allRejected = [...new Set([...prevRejected, ...kbDocs])];
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = "正在重新检索…";
+  const started = performance.now();
+  const llmOn = !fmState.enabled && llmState.enabled;
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        history: [],
+        fast_mode: fmState.enabled,
+        llm_polish: llmOn,
+        web_search: llmOn && wsState.enabled,
+        reject_doc_ids: allRejected,
+      }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    historyConversationId = String(data.conversation_id || "");
+    renderChatAnswer(bubble, data, question, started, allRejected);
+    log.scrollTop = log.scrollHeight;
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = oldText;
+    toast(`重新回答失败：${String(err.message || err)}`);
+  }
+});
+
+let lastAnswered = false;   // 上一轮是否已成功回答（快速问答据此自动开启新对话）
+
+async function ask(question, userLabel) {
+  const desc = String(question || "").trim();
+  if ((!desc && !pendingImage) || sendBtn.disabled) return;
+
+  // 快速问答：每轮问答互相独立，上一轮已回答后再次提问自动开启新对话
+  if (fmState.enabled && lastAnswered && log.children.length) {
+    startNewChat();
+    lastAnswered = false;
+  }
+
+  const hero = document.querySelector(".chat-hero");
+  if (hero) hero.style.display = "none";   // 发出第一条问题后隐藏欢迎标题
+  hintsBox.style.display = "none";
+  sendBtn.disabled = true;
+  log.setAttribute("aria-busy", "true");
+
+  // 附了图片：发送时才调视觉模型识别，识别结果与文字描述合并成最终问题
+  let q = desc;
+  let label = userLabel;
+  if (pendingImage) {
+    const rec = addMessage("bot", '<span class="muted">正在识别图片内容…</span>');
+    try {
+      const form = new FormData();
+      form.append("image", pendingImage.file);
+      const resp = await fetch("/api/chat/image", { method: "POST", body: form });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.detail || "图片识别失败");
+      rec.parentElement.remove();
+      const imgQ = String(data.question || "").trim();
+      if (desc) q = imgQ ? desc + "\n（图片识别：" + imgQ + "）" : desc;
+      else q = imgQ;
+      label = "[图片]" + (desc ? " " + desc : imgQ ? " " + imgQ : "");
+    } catch (err) {
+      // 识别失败：输入框文字与图片附件都保留，用户可直接重发
+      rec.innerHTML = `<div class="notice">${escapeHtml(String(err.message || err))}</div>`;
+      sendBtn.disabled = false;
+      log.setAttribute("aria-busy", "false");
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
+    clearAttachImage();
+  }
+  if (!q.trim()) { sendBtn.disabled = false; log.setAttribute("aria-busy", "false"); return; }
+
+  addMessage("user", label || q);
+  questionBox.value = "";
+  const pending = addMessage("bot", '<span class="muted">正在查找解决方案…</span>');
+  const started = performance.now();
+  const llmOn = !fmState.enabled && llmState.enabled;   // 快速模式下不整理、不联网
+
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: q,
+        history: ctxState.enabled && llmOn ? history : [],
+        conversation_id: ctxState.enabled && llmOn && history.length ? historyConversationId : "",
+        fast_mode: fmState.enabled,
+        llm_polish: llmOn,
+        web_search: llmOn && wsState.enabled,
+      }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    historyConversationId = String(data.conversation_id || "");
+    renderChatAnswer(pending, data, q, started);
+    if (data.status !== "guide") {
+      lastAnswered = true;
+      saveHistoryItem({
+        q: label || q,
+        answer: String(data.answer || ""),
+        origin: data.answer_origin || "",
+        solution_found: data.solution_found === true,
+        sources: data.sources || [],
+        time: Date.now(),
+      });
+    }
+    if (ctxState.enabled && !fmState.enabled) {
+      history.push({ role: "user", content: q }, { role: "assistant", content: data.answer });
+      if (history.length > 6) history.splice(0, history.length - 6);
+    }
+  } catch (err) {
+    pending.innerHTML = `<div class="notice">请求失败：${escapeHtml(String(err.message || err))}，请确认服务已启动。</div>`;
+  } finally {
+    sendBtn.disabled = false;
+    log.setAttribute("aria-busy", "false");
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+const hintsBox = $("#hints");
+
+// 输入第一个字符后隐藏预设问题（本次会话不再出现）
+questionBox.addEventListener("input", () => {
+  if (questionBox.value.trim()) hintsBox.style.display = "none";
+});
+
+sendBtn.addEventListener("click", () => ask(questionBox.value));
+questionBox.addEventListener("keydown", (e) => {
+  // Enter 直接发送；Shift+Enter 换行
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(questionBox.value); }
+});
+// 快捷问题点击直接提问（事件委托，支持动态替换为热门问题）
+hintsBox.addEventListener("click", (e) => {
+  const el = e.target.closest(".hint");
+  if (!el) return;
+  hintsBox.style.display = "none";
+  ask(el.textContent);
+});
+
+// 首页快捷问题：展示最近 7 天提问最多的 4 个问题；无数据时保留默认
+async function loadTopQuestions() {
+  try {
+    const resp = await fetch("/api/questions/top");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const qs = (data.questions || []).filter((q) => q.question).slice(0, 4);
+    if (!qs.length) return;
+    hintsBox.querySelectorAll(".hint").forEach((b) => b.remove());
+    for (const q of qs) {
+      const btn = document.createElement("button");
+      btn.className = "hint";
+      btn.type = "button";
+      btn.textContent = q.question;
+      hintsBox.appendChild(btn);
+    }
+  } catch { /* 网络异常时保留默认快捷问题 */ }
+}
+
+/* ---------- 图片提问：图片先挂在输入框，用户可补描述，发送时才识别 ----------
+   图片支持在聊天框 Ctrl+V 粘贴或直接拖进来，不再放单独的导入按钮 */
+let pendingImage = null;   // { file, url }
+
+function setAttachImage(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) { toast("请粘贴或拖入图片文件"); return; }
+  if (file.size > 10 * 1024 * 1024) { toast("图片不能超过 10MB"); return; }
+  if (pendingImage) URL.revokeObjectURL(pendingImage.url);   // 替换前一张
+  pendingImage = { file, url: URL.createObjectURL(file) };
+  $("#attach-thumb").src = pendingImage.url;
+  $("#attach-name").textContent = file.name || "图片";
+  $("#attach-chips").hidden = false;
+  questionBox.focus();
+}
+
+function clearAttachImage() {
+  if (pendingImage) URL.revokeObjectURL(pendingImage.url);
+  pendingImage = null;
+  $("#attach-chips").hidden = true;
+}
+
+$("#attach-remove").addEventListener("click", clearAttachImage);
+
+// Ctrl+V 粘贴截图 / 图片：先挂附件，不直接识别
+questionBox.addEventListener("paste", (e) => {
+  const item = Array.from(e.clipboardData?.items || []).find((it) => it.type.startsWith("image/"));
+  if (!item) return;
+  e.preventDefault();
+  setAttachImage(item.getAsFile());
+});
+
+// 拖拽图片到输入框：先挂附件，不直接识别（外壳高亮，粘贴/拖入均可）
+const inputShell = $("#input-shell");
+["dragenter", "dragover"].forEach((ev) => inputShell.addEventListener(ev, (e) => {
+  e.preventDefault();
+  inputShell.classList.add("drag-img");
+}));
+["dragleave", "drop"].forEach((ev) => inputShell.addEventListener(ev, (e) => {
+  e.preventDefault();
+  inputShell.classList.remove("drag-img");
+}));
+inputShell.addEventListener("drop", (e) => {
+  const file = Array.from(e.dataTransfer?.files || []).find((f) => f.type.startsWith("image/"));
+  if (file) setAttachImage(file);
+});
+
+/* ---------- 文档管理 ---------- */
+const docRows = $("#doc-rows");
+const catFilter = $("#cat-filter");
+let docDocs = [];              // 基础文档（文档管理页）
+let recDocs = [];              // 运维问题记录（运维问题上传页）
+let docCategories = [];
+let docView = "date";          // "date" 按年月日分组 | "category" 按分类分组
+let docCatFilter = "";
+const collapsedMonths = new Set();   // 日期视图里被收起的月份，重渲染后保持状态
+let isAdmin = false;          // 当前管理端会话有文档写权限
+let isSuperAdmin = false;     // 管理员账号（role=admin）：独占用户管理、修改记录与操作日志
+
+// 管理员专属导航与页面默认隐藏，读取会话角色后统一显示。
+function applyRoleVisibility() {
+  document.body.classList.toggle("super-admin", isSuperAdmin);
+}
+let isAccountAdmin = false;   // 账号管理员：可创建普通账号
+let currentUser = "";          // 稳定英文账号，用于身份标识
+let currentDisplayName = "";   // 可包含中文，仅用于展示
+let portal = "search";         // "search" 检索端口 | "admin" 管理端口
+let replaceTargetId = "";
+let editorRequest = 0;
+
+const DOC_CATEGORY_ORDER = ["MES系统", "厂商系统", "硬件问题", "网络问题", "流水线问题", "流程问题", "常识库", "其他"];
+const DOC_CATEGORY_STYLE = {
+  "MES系统": ["#e8f0ff", "#1d4ed8"],
+  "厂商系统": ["#f3e8ff", "#7e22ce"],
+  "硬件问题": ["#ffedd5", "#c2410c"],
+  "网络问题": ["#dcf5f0", "#0f766e"],
+  "流水线问题": ["#ccfbf1", "#0f766e"],
+  "流程问题": ["#dcfce7", "#15803d"],
+  "常识库": ["#e7f8f0", "#0d9463"],
+  "其他": ["#eef0f3", "#4b5563"],
+};
+
+function catName(value) {
+  const name = String(value || "").trim();
+  return name || "其他";
+}
+
+function catBadge(value) {
+  const name = catName(value);
+  // 未登记样式的分类回退到「其他」配色，避免解构 undefined 中断整个渲染
+  const [bg, fg] = DOC_CATEGORY_STYLE[name] || DOC_CATEGORY_STYLE["其他"];
+  return `<span class="cat-tag" style="background:${bg};color:${fg}">${escapeHtml(name)}</span>`;
+}
+
+// 记录的全部分类标签：categories 数组优先，空时回退主分类（旧数据 / 自动判定）
+function docCats(d) {
+  return Array.isArray(d?.categories) && d.categories.length ? d.categories : [catName(d?.category)];
+}
+function catBadges(d) { return docCats(d).map((name) => catBadge(name)).join(""); }
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+}
+
+function statusTag(s) {
+  const map = { ready: ["ready", "可检索"], failed: ["failed", "失败"], processing: ["processing", "处理中"] };
+  const [cls, label] = map[s] || ["processing", s];
+  return `<span class="tag ${cls}">${label}</span>`;
+}
+
+// 文件后缀名 → 文件类型名（文档管理「格式」列展示用）
+const EXT_TYPE_NAMES = {
+  pdf: "PDF 文档",
+  docx: "Word 文档",
+  xlsx: "Excel 表格",
+  xlsm: "Excel 表格",
+  csv: "CSV 表格",
+  md: "Markdown",
+  txt: "文本",
+};
+
+function extTypeName(ext) {
+  const key = String(ext || "").replace(/^\./, "").toLowerCase();
+  return EXT_TYPE_NAMES[key] || ext || "未知";
+}
+
+async function loadDocuments() {
+  try {
+    const resp = await fetch("/api/documents?doc_type=doc");
+    const data = await resp.json();
+    docDocs = data.documents || [];
+    docCategories = data.categories || [];
+    $("#stats").textContent = `${data.stats.documents} 份文档 · ${data.stats.chunks} 个检索单元`;
+    $("#stats").title = `模型：${data.stats.llm}；语义向量：${data.stats.embedding || "未启用"}`;
+    $("#overview-documents").textContent = data.stats.documents.toLocaleString("zh-CN");
+    $("#overview-chunks").textContent = data.stats.chunks.toLocaleString("zh-CN");
+    if (docCatFilter && !docCategories.some((item) => item.name === docCatFilter && item.count > 0)) {
+      docCatFilter = "";
+    }
+    renderCategoryFilter();
+    renderDocs();
+  } catch {
+    $("#stats").textContent = "知识库暂时无法连接";
+    docRows.innerHTML = '<tr><td colspan="7" class="muted">无法连接服务，请稍后重试</td></tr>';
+  }
+}
+
+function renderCategoryFilter() {
+  if (!docCategories.length) {
+    catFilter.innerHTML = "";
+    return;
+  }
+  const total = docCategories.reduce((sum, item) => sum + item.count, 0);
+  const chips = [{ name: "", label: "全部", count: total }].concat(
+    docCategories.filter((item) => item.count > 0).map((item) => ({ name: item.name, label: item.name, count: item.count }))
+  );
+  catFilter.innerHTML = chips.map((chip) => {
+    const active = (chip.name || "") === docCatFilter;
+    return `<button type="button" class="cat-chip${active ? " active" : ""}" data-cat-filter="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
+  }).join("");
+}
+
+// 记录时间列：只显示年月日；管理员点击可修改
+function timeCell(d) {
+  const date = String(d.uploaded_at || "").slice(0, 10);
+  if (!enterpriseCanWrite(d)) return escapeHtml(date);
+  return `<button type="button" class="ghost" data-time="${escapeHtml(d.id)}" title="点击修改记录时间（年月日）">${escapeHtml(date)}</button>`;
+}
+
+function recordRelationsHtml(record, previewAttribute) {
+  const parts = [];
+  if (record.parent_id) {
+    const parentId = escapeAttr(escapeHtml(String(record.parent_id)));
+    const parentName = escapeHtml(String(record.parent_name || "关联问题"));
+    parts.push(`<button type="button" class="relation-link" data-${previewAttribute}="${parentId}" title="预览父问题">追踪自：${parentName}</button>`);
+  }
+  const children = Math.max(0, Number(record.child_count) || 0);
+  if (children) parts.push(`<span class="relation-count">${children} 条后续记录</span>`);
+  return parts.join("");
+}
+
+function docRowHtml(d) {
+  const id = escapeHtml(d.id);
+  const skipped = d.skipped ? `<div class="muted" style="font-size:12px">已忽略 ${d.skipped} 个非主要部分（目录 / 封面 / 版权等）</div>` : "";
+  const btns = [
+    `<button class="ghost" data-pv="${id}">预览</button>`,
+    d.has_source ? `<button class="ghost" data-dl="${id}">下载</button>` : "",
+    enterpriseCanManageAccess(d) ? `<button class="ghost" data-document-access="${id}">管理权限</button>` : "",
+    enterpriseCanWrite(d) && d.editable ? `<button class="ghost" data-edit="${id}">编辑</button>` : "",
+    enterpriseCanWrite(d) ? `<button class="ghost" data-rep="${id}">替换</button>` : "",
+    enterpriseCanWrite(d) ? `<button class="ghost danger" data-del="${id}">删除</button>` : "",
+  ].filter(Boolean).join("");
+  const vendorOptions = ['<option value="">（选择厂商）</option>'];
+  if (d.vendor && !vendorList.includes(d.vendor)) {
+    vendorOptions.push(`<option value="${escapeAttr(d.vendor)}" selected>${escapeHtml(d.vendor)}（清单外）</option>`);
+  }
+  vendorOptions.push(...vendorList.map((name) =>
+    `<option value="${escapeAttr(name)}"${name === (d.vendor || "") ? " selected" : ""}>${escapeHtml(name)}</option>`));
+  // 管理员：标签徽标 + 「改标签」按钮（点击打开问题类型选择窗体）；厂商仍是二级单选
+  const category = enterpriseCanWrite(d)
+    ? catBadges(d) + `
+      <span class="multicat inline-cat">
+        <button type="button" class="cat-select multicat-btn" data-inline-btn="${id}" title="打开选择窗体修改分类标签（可多选）">改标签</button>
+      </span>` +
+      (docCats(d).includes("厂商系统")
+        ? `<select class="cat-select vendor-select" data-vendor="${id}" title="厂商：厂商系统类记录必选" style="margin-top:6px">${vendorOptions.join("")}</select>`
+        : "")
+    : catBadges(d);
+  return `<tr>
+        <td><span class="doc-link" data-pv="${id}" title="点击预览">${escapeHtml(d.name)}</span>${enterpriseDocumentLabel(d)}
+          ${d.summary ? `<div class="doc-summary" title="${escapeHtml(d.summary)}">${escapeHtml(d.summary)}</div>` : ""}
+          ${d.vendor ? `<div class="net-tags"><span class="net-tag" title="厂商">厂商：${escapeHtml(d.vendor)}</span></div>` : ""}
+          <div class="record-provenance"><span>运维人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
+            `${(d.last_edited_name || d.last_edited_by) ? `<span>最后修改：${escapeHtml(String(d.last_edited_name || d.last_edited_by))}${d.last_edited_at ? " · " + escapeHtml(String(d.last_edited_at)) : ""}</span>` : ""}` +
+            `${recordRelationsHtml(d, "pv")}</div>
+          ${skipped}${d.error ? `<div class="muted" style="font-size:12px">${escapeHtml(d.error)}</div>` : ""}</td>
+        <td>${category}</td>
+        <td class="muted">${escapeHtml(extTypeName(d.ext))}</td>
+        <td>${d.chunks}</td>
+        <td>${statusTag(d.status)}</td>
+        <td class="muted">${timeCell(d)}</td>
+        <td><div class="op-btns">${btns}</div></td></tr>`;
+}
+
+function groupRowHtml(label, count, toggleKey = "") {
+  // toggleKey 非空时该分组行可点击收起 / 展开（目前用于日期视图的月份分组）
+  const fold = toggleKey ? `<span class="fold">${collapsedMonths.has(toggleKey) ? "▸" : "▾"}</span>` : "";
+  const toggle = toggleKey ? ` data-month-toggle="${escapeAttr(toggleKey)}"` : "";
+  return `<tr class="doc-group"${toggle}><td colspan="7">${fold}<span class="group-title">${label}</span><span class="group-count">${count} 份</span></td></tr>`;
+}
+
+function sortByUploadedDesc(docs) {
+  return docs.slice().sort((a, b) => String(b.uploaded_at || "").localeCompare(String(a.uploaded_at || "")));
+}
+
+function renderByDate(docs) {
+  const months = new Map();
+  for (const doc of sortByUploadedDesc(docs)) {
+    const date = String(doc.uploaded_at || "").slice(0, 10);
+    const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
+    const monthKey = valid ? date.slice(0, 7) : "unknown";
+    if (!months.has(monthKey)) {
+      months.set(monthKey, {
+        label: valid ? `${date.slice(0, 4)} 年 ${Number(date.slice(5, 7))} 月` : "日期未知",
+        days: new Map(),
+        count: 0,
+      });
+    }
+    const bucket = months.get(monthKey);
+    bucket.count += 1;
+    const dayKey = valid ? date.slice(8, 10) : "unknown";
+    if (!bucket.days.has(dayKey)) bucket.days.set(dayKey, []);
+    bucket.days.get(dayKey).push(doc);
+  }
+  let html = "";
+  for (const [monthKey, bucket] of months) {
+    html += groupRowHtml(escapeHtml(bucket.label), bucket.count, monthKey);
+    if (collapsedMonths.has(monthKey)) continue;    // 收起的月份只保留分组行
+    for (const [day, list] of bucket.days) {
+      const dayLabel = day === "unknown" ? "日期未知" : `${Number(day)} 日`;
+      html += `<tr class="doc-day"><td colspan="7"><span>${dayLabel}</span><span class="group-count">${list.length} 份</span></td></tr>`;
+      html += list.map(docRowHtml).join("");
+    }
+  }
+  return html;
+}
+
+function renderByCategory(docs) {
+  const groups = new Map();
+  for (const doc of docs) {
+    for (const name of docCats(doc)) {   // 多标签记录出现在它挂的每个分类分组里
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(doc);
+    }
+  }
+  let html = "";
+  for (const name of [...DOC_CATEGORY_ORDER, ...[...groups.keys()].filter((name) => !DOC_CATEGORY_ORDER.includes(name))]) {
+    const list = groups.get(name);
+    if (!list || !list.length) continue;
+    if (name === "厂商系统") {
+      // 厂商系统类记录进一步按厂商分组
+      const byVendor = new Map();
+      for (const doc of list) {
+        const vendor = doc.vendor || "厂商未填写";
+        if (!byVendor.has(vendor)) byVendor.set(vendor, []);
+        byVendor.get(vendor).push(doc);
+      }
+      for (const [vendor, vendorDocs] of byVendor) {
+        html += groupRowHtml(`${catBadge(name)}<span class="group-count">厂商：${escapeHtml(vendor)}</span>`, vendorDocs.length);
+        html += sortByUploadedDesc(vendorDocs).map(docRowHtml).join("");
+      }
+    } else {
+      html += groupRowHtml(catBadge(name), list.length);
+      html += sortByUploadedDesc(list).map(docRowHtml).join("");
+    }
+  }
+  return html;
+}
+
+function renderDocs() {
+  const docs = docCatFilter ? docDocs.filter((d) => docCats(d).includes(docCatFilter)) : docDocs;
+  if (!docs.length) {
+    docRows.innerHTML = `<tr><td colspan="7" class="muted">${docCatFilter
+      ? `「${escapeHtml(docCatFilter)}」分类下暂无文档`
+      : "暂无基础文档，先上传系统手册、设备资料等文件；运维问题记录见「运维问题管理」页"}</td></tr>`;
+    return;
+  }
+  docRows.innerHTML = docView === "category" ? renderByCategory(docs) : renderByDate(docs);
+}
+
+document.querySelectorAll(".docs-view .ghost").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (docView === btn.dataset.view) return;
+    docView = btn.dataset.view;
+    document.querySelectorAll(".docs-view .ghost").forEach((b) => b.classList.toggle("active", b === btn));
+    renderDocs();
+  });
+});
+
+catFilter.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-cat-filter]");
+  if (!chip) return;
+  const value = chip.dataset.catFilter || "";
+  docCatFilter = value === docCatFilter ? "" : value;   // 再点一次取消筛选
+  renderCategoryFilter();
+  renderDocs();
+});
+
+// 运维问题记录表已从页面移除；bindDocTable 对不存在的表格直接跳过
+function bindDocTable(rowsEl, reload) {
+  if (!rowsEl) return;
+  rowsEl.addEventListener("change", async (event) => {
+    // 行内厂商下拉：厂商系统类记录设置厂商
+    const vendorSel = event.target.closest(".vendor-select");
+    if (vendorSel) {
+      const id = vendorSel.dataset.vendor;
+      const vendor = vendorSel.value;
+      vendorSel.disabled = true;
+      try {
+        const resp = await fetch("/api/documents/" + encodeURIComponent(id) + "/vendor", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vendor }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.detail || "厂商更新失败");
+        toast(vendor ? `厂商已设为「${vendor}」` : "已清除厂商");
+        reload();
+        refreshTimelineIfVisible();
+      } catch (err) {
+        toast(String(err.message || err));
+        vendorSel.disabled = false;
+      }
+      return;
+    }
+
+    // 行内改分类（勾选即保存的旧面板已移除，改为「改标签」按钮打开窗体）
+  });
+
+  rowsEl.addEventListener("click", async (e) => {
+    const inlineBtn = e.target.closest("[data-inline-btn]");
+    if (inlineBtn) {   // 打开问题类型选择窗体，确定后全量保存
+      const id = inlineBtn.dataset.inlineBtn;
+      const doc = [...docDocs, ...recDocs].find((d) => d.id === id);
+      catDialog.open({
+        selected: docCats(doc),
+        allowAuto: false,
+        onConfirm: async (tags) => {
+          try {
+            const resp = await fetch("/api/documents/" + encodeURIComponent(id) + "/category", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ categories: tags }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.detail || "分类更新失败");
+            toast(tags.length ? `已设为：${tags.join("、")}` : "已清空分类标签");
+            reload();
+            refreshTimelineIfVisible();
+          } catch (err) {
+            toast(String(err.message || err));
+          }
+        },
+      });
+      return;
+    }
+    const timeBtn = e.target.closest("[data-time]");
+    if (timeBtn) { openTimeEditor(timeBtn.dataset.time); return; }
+    const group = e.target.closest("[data-month-toggle]");
+    if (group) {
+      const key = group.dataset.monthToggle;
+      collapsedMonths.has(key) ? collapsedMonths.delete(key) : collapsedMonths.add(key);
+      renderDocs();
+      return;
+    }
+
+    const pv = e.target.closest("[data-pv]");
+    if (pv) { openPreview(pv.dataset.pv); return; }
+
+    const edit = e.target.closest("[data-edit]");
+    if (edit) { switchTo("editor"); loadEditable(edit.dataset.edit); return; }
+
+    const dl = e.target.closest("[data-dl]");
+    if (dl) { downloadDoc(dl.dataset.dl); return; }
+
+    const rp = e.target.closest("[data-rep]");
+    if (rp) { startReplace(rp.dataset.rep); return; }
+
+    const btn = e.target.closest("[data-del]");
+    if (!btn) return;
+    const id = btn.dataset.del;
+    if (!confirm("确认从知识库删除该文档？删除后需重新上传才能恢复。")) return;
+    btn.disabled = true;
+    const resp = await fetch("/api/documents/" + encodeURIComponent(id), { method: "DELETE" });
+    if (resp.ok) { toast("已删除"); reload(); refreshTimelineIfVisible(); }
+    else { toast("删除失败"); btn.disabled = false; }
+  });
+}
+
+bindDocTable(docRows, loadDocuments);
+
+/* ---------- 修改记录时间弹窗 ---------- */
+const timeMask = $("#time-mask");
+let timeDocId = "";
+
+function closeTimeEditor() { timeMask.classList.remove("show"); timeDocId = ""; }
+
+function openTimeEditor(id) {
+  const doc = docDocs.find((d) => d.id === id) || recDocs.find((d) => d.id === id);
+  if (!isAdmin || !doc) return;
+  timeDocId = id;
+  $("#time-doc").textContent = doc.name;
+  const date = String(doc.uploaded_at || "").slice(0, 10);
+  $("#time-input").value = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
+  timeMask.classList.add("show");
+}
+
+$("#time-close").addEventListener("click", closeTimeEditor);
+timeMask.addEventListener("click", (event) => { if (event.target === timeMask) closeTimeEditor(); });
+
+$("#time-save").addEventListener("click", async () => {
+  if (!timeDocId) return;
+  const date = $("#time-input").value;
+  if (!date) { toast("请选择日期"); return; }
+  const btn = $("#time-save");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/documents/" + encodeURIComponent(timeDocId) + "/time", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || "保存失败");
+    const doc = data.doc;
+    const index = docDocs.findIndex((item) => item.id === doc.id);
+    if (index >= 0) docDocs[index] = doc;
+    const rIndex = recDocs.findIndex((item) => item.id === doc.id);
+    if (rIndex >= 0) recDocs[rIndex] = doc;
+    renderDocs();
+    renderRecList();
+    closeTimeEditor();
+    toast("记录时间已更新");
+  } catch (err) {
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---------- 问题时间线 ---------- */
+const tlBody = $("#tl-body");
+const tlCatFilterEl = $("#tl-cat-filter");
+const tlStartDateInput = $("#tl-start-date");
+const tlEndDateInput = $("#tl-end-date");
+const tlLoadMoreButton = $("#tl-load-more");
+const tlLoadState = $("#tl-load-state");
+const tlSentinel = $("#tl-sentinel");
+const TL_PAGE_SIZE = 30;
+let tlData = null;                 // 当前筛选条件下已加载的分页数据
+let tlCatFilter = "";              // 当前筛选的分类，空串为全部
+let tlVendorFilter = "";           // 二级筛选：厂商（厂商系统类记录的厂商），空串为全部
+let tlStatusFilter = "";           // 状态筛选："yes" 已解决 | "no" 未解决 | 空串为全部（常识库不受状态筛选影响）
+let tlStartDate = "";
+let tlEndDate = "";
+let tlLoading = false;
+let tlHasMore = false;
+let tlNextOffset = 0;
+let tlError = "";
+let tlRequestId = 0;
+let tlRequestController = null;
+let tlSentinelVisible = false;
+let tlAutoLoadReady = false;
+const tlCollapsed = new Set();     // 收起的分类，重渲染后保持
+
+function tlDateLabel(date) {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(date || "");
+  if (!m) return "时间未知";
+  const base = `${m[1]} 年 ${Number(m[2])} 月`;
+  return m[3] ? `${base} ${Number(m[3])} 日` : base;
+}
+
+function tlBadge(resolved) {
+  if (resolved === "yes") return '<span class="tl-badge yes">已解决</span>';
+  if (resolved === "improving") return '<span class="tl-badge improving">改善中</span>';
+  if (resolved === "temporary") return '<span class="tl-badge temporary">临时解决</span>';
+  return '<span class="tl-badge no">未解决</span>';   // 未标记 / 人工未解决 / 结果未知均显示未解决
+}
+
+// 事件的有效状态：人工标记优先；「结果未知」视为未解决
+function tlEffective(event) {
+  if (event.status === "resolved") return "yes";
+  if (event.status === "improving") return "improving";
+  if (event.status === "temporary") return "temporary";
+  return "no";   // 默认 / 人工未解决 / 结果未知（unknown）均视为未解决
+}
+
+function tlStatusControl(event) {
+  const badge = tlBadge(tlEffective(event));
+  if (!enterpriseCanWrite(event)) return badge;
+  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "";   // 存量 unknown 显示为未解决
+  const options = [
+    ["", "未解决（默认）"],
+    ["improving", "改善中"],
+    ["temporary", "临时解决"],
+    ["resolved", "已解决"],
+  ].map(([v, label]) => `<option value="${v}"${v === value ? " selected" : ""}>${label}</option>`).join("");
+  return `<select class="tl-status" data-tl-status="${escapeAttr(event.chunk_id)}" data-tl-doc="${escapeAttr(event.doc_id)}" title="标记完成情况">${options}</select>`;
+}
+
+function tlItemHtml(event) {
+  // 每条问题一行：不超过 15 字的简述 + 类型 / 厂商标签，来自哪份文档以小字显示
+  // 常识库是台账类基础数据，不存在"是否解决"，不显示解决状态标记
+  const isKnowledge = docCats(event).includes("常识库");
+  const vendor = event.vendor ? `<span class="tl-heading">厂商：${escapeHtml(event.vendor)}</span>` : "";
+  const heading = event.heading ? `<span class="tl-heading">${escapeHtml(event.heading)}</span>` : "";
+  return `<div class="tl-item resolved-${isKnowledge ? "none" : tlEffective(event)}">
+      <div class="tl-card">
+        <div class="tl-meta">
+          <span class="tl-brief" title="${escapeAttr(event.summary)}">${escapeHtml(event.brief || event.summary)}</span>
+          ${isKnowledge ? "" : tlStatusControl(event)}${catBadges(event)}${vendor}${heading}
+        </div>
+        <div class="tl-source"><button type="button" class="tl-doc" data-tl-pv="${escapeAttr(event.doc_id)}" title="点击预览文档">${escapeHtml(event.doc_name)}</button><span class="tl-uploader">运维人：${escapeHtml(String(event.uploaded_by_name || event.uploaded_by || "历史记录"))}</span>${enterpriseCanWrite(event) && !isKnowledge && event.doc_type !== "doc" ? `<button type="button" class="ghost track-button" data-track="${escapeAttr(event.doc_id)}">追踪 <span aria-hidden="true">↗</span></button>` : ""}</div>
+        <div class="timeline-relations">${recordRelationsHtml(event, "tl-pv")}</div>
+      </div>
+    </div>`;
+}
+
+function renderTimeline() {
+  if (!tlData) return;
+  const events = tlData.events || [];  // 所有筛选在服务端执行，再返回本页
+  if (!events.length) {
+    tlBody.innerHTML = '<div class="tl-empty">当前时间段和筛选条件下暂无事件记录</div>';
+    return;
+  }
+  // 按天分组：一天可以有多个问题，每天一个分组、可折叠
+  const groups = new Map();   // 日期 → 当天的（已按时间倒序）
+  for (const event of events) {
+    if (!groups.has(event.date)) groups.set(event.date, []);
+    groups.get(event.date).push(event);
+  }
+  let html = "";
+  for (const [date, list] of groups) {
+    const fold = tlCollapsed.has(date) ? "▸" : "▾";
+    html += `<div class="tl-group">
+        <div class="tl-head" data-tl-group="${escapeAttr(date)}">
+          <span class="fold">${fold}</span><span class="tl-date">${tlDateLabel(date)}</span>
+          <span class="group-count">${list.length} 个问题</span>
+        </div>`;
+    if (!tlCollapsed.has(date)) {
+      html += `<div class="tl-list">${list.map(tlItemHtml).join("")}</div>`;
+    }
+    html += "</div>";
+  }
+  tlBody.innerHTML = html;
+}
+
+function renderTimelineFilter() {
+  // 计数来自服务端完整筛选范围，不能由当前已加载的 30 条推算。
+  const chips = [{ name: "", label: "全部", count: tlData?.issue_count || 0 }].concat(
+    (tlData?.categories || []).map((item) => ({ name: item.name, label: item.name, count: item.count }))
+  );
+  if (tlCatFilter && !chips.some((chip) => chip.name === tlCatFilter)) {
+    chips.push({ name: tlCatFilter, label: tlCatFilter, count: 0 });
+  }
+  let html = chips.map((chip) => {
+    const active = chip.name === tlCatFilter;
+    return `<button type="button" class="cat-chip${active ? " active" : ""}" data-tl-filter="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
+  }).join("");
+  // 二级分类（厂商）：只有点选「厂商系统」分类时才显示厂商二级筛选行
+  const vendors = tlCatFilter === "厂商系统" ? tlData?.vendors || [] : [];
+  if (vendors.length || tlVendorFilter) {
+    const vendorChips = [{ name: "", label: "全部厂商", count: vendors.reduce((sum, vendor) => sum + vendor.count, 0) }]
+      .concat(vendors.map(({ name, count }) => ({ name, label: name, count })));
+    if (tlVendorFilter && !vendorChips.some((chip) => chip.name === tlVendorFilter)) {
+      vendorChips.push({ name: tlVendorFilter, label: tlVendorFilter, count: 0 });
+    }
+    html += `<div style="flex-basis:100%;height:0"></div>` + vendorChips.map((chip) => {
+      const active = chip.name === tlVendorFilter;
+      return `<button type="button" class="cat-chip${active ? " active" : ""}" data-tl-vendor="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
+    }).join("");
+  }
+  // 状态筛选（右侧）：已解决 / 未解决；常识库台账无解决状态，选中常识库分类时整组隐藏
+  if (tlCatFilter !== "常识库") {
+    const counts = tlData?.status_counts || {};
+    const statusChips = [
+      { name: "", label: "全部状态", count: counts[""] || 0 },
+      { name: "yes", label: "已解决", count: counts.yes || 0 },
+      { name: "improving", label: "改善中", count: counts.improving || 0 },
+      { name: "temporary", label: "临时解决", count: counts.temporary || 0 },
+      { name: "no", label: "未解决", count: counts.no || 0 },
+    ];
+    html += statusChips.map((chip) => {
+      const active = chip.name === tlStatusFilter;
+      return `<button type="button" class="cat-chip${active ? " active" : ""}" data-tl-status-filter="${chip.name}"${chip.name === "" ? ' style="margin-left:auto"' : ""}>${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
+    }).join("");
+  }
+  tlCatFilterEl.innerHTML = html;
+}
+
+function updateTimelinePagination() {
+  const loaded = tlData?.events?.length || 0;
+  const total = Number(tlData?.total || 0);
+  tlLoadState.textContent = tlError || (tlLoading
+    ? (loaded ? `已加载 ${loaded} 条，正在加载…` : "正在加载最近的记录…")
+    : tlData ? `已加载 ${loaded} / ${total} 条${tlHasMore ? "，每次加载 30 条" : ""}` : "");
+  tlLoadMoreButton.hidden = !tlError && (!tlHasMore || !tlData);
+  tlLoadMoreButton.disabled = tlLoading;
+  tlLoadMoreButton.textContent = tlError ? "重试" : tlLoading ? "加载中…" : "加载更多";
+  tlBody.setAttribute("aria-busy", tlLoading ? "true" : "false");
+}
+
+async function loadTimeline({ append = false } = {}) {
+  if (append && (tlLoading || !tlData || !tlHasMore || !$("#tab-timeline").classList.contains("active"))) return;
+  if (!append) {
+    tlRequestController?.abort();
+    tlRequestId += 1;
+    tlData = null;
+    tlHasMore = false;
+    tlNextOffset = 0;
+    tlError = "";
+    tlAutoLoadReady = false;
+    tlBody.innerHTML = '<div class="tl-empty">加载中…</div>';
+  }
+  const requestId = tlRequestId;
+  const offset = tlNextOffset;
+  const controller = new AbortController();
+  tlRequestController = controller;
+  tlLoading = true;
+  tlError = "";
+  tlAutoLoadReady = false;
+  updateTimelinePagination();
+  const params = new URLSearchParams({ offset: String(offset), limit: String(TL_PAGE_SIZE) });
+  for (const [name, value] of Object.entries({ start_date: tlStartDate, end_date: tlEndDate,
+    category: tlCatFilter, vendor: tlVendorFilter, status: tlStatusFilter })) {
+    if (value) params.set(name, value);
+  }
+  try {
+    const resp = await fetch(`/api/timeline?${params}`, { signal: controller.signal });
+    if (!resp.ok) throw new Error("时间线加载失败，请重试");
+    const data = await resp.json();
+    if (requestId !== tlRequestId) return;
+    const page = Array.isArray(data.events) ? data.events : [];
+    const events = append ? [...tlData.events] : [];
+    const seen = new Set(events.map((event) => event.doc_id));
+    for (const event of page) {
+      if (!seen.has(event.doc_id)) { events.push(event); seen.add(event.doc_id); }
+    }
+    tlData = { ...data, events };
+    tlNextOffset = Number.isInteger(data.next_offset) ? data.next_offset : offset + page.length;
+    tlHasMore = data.has_more === true && page.length > 0 && tlNextOffset > offset;
+    renderTimelineFilter();
+    renderTimeline();
+  } catch (err) {
+    if (requestId !== tlRequestId || err.name === "AbortError") return;
+    tlError = "时间线加载失败，请重试";
+    if (!tlData) tlBody.innerHTML = '<div class="tl-empty">时间线加载失败，点击下方重试</div>';
+  } finally {
+    if (requestId === tlRequestId) {
+      tlLoading = false;
+      tlRequestController = null;
+      updateTimelinePagination();
+    }
+  }
+}
+
+function refreshTimelineIfVisible() {
+  tlRequestController?.abort();
+  tlRequestId += 1;
+  tlData = null;
+  tlLoading = false;
+  tlHasMore = false;
+  tlAutoLoadReady = false;
+  if ($("#tab-timeline").classList.contains("active")) loadTimeline();
+}
+
+// 日期选择控件：原生选择器保留，显示文字覆盖为中文（2026年11月5日）
+function refreshTlDateDisplay() {
+  document.querySelectorAll(".tl-date-wrap").forEach((wrap) => {
+    const input = wrap.querySelector("input[type=date]");
+    const text = wrap.querySelector(".tl-date-text");
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.value || "");
+    text.textContent = m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : "年 / 月 / 日";
+    wrap.classList.toggle("empty", !m);
+  });
+}
+refreshTlDateDisplay();
+document.addEventListener("change", (e) => {
+  if (e.target.matches(".tl-date-wrap input[type=date]")) refreshTlDateDisplay();
+});
+
+$("#tl-range-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!tlStartDateInput.reportValidity() || !tlEndDateInput.reportValidity()) return;
+  if (tlStartDateInput.value && tlEndDateInput.value && tlStartDateInput.value > tlEndDateInput.value) {
+    toast("开始日期不能晚于结束日期");
+    return;
+  }
+  tlStartDate = tlStartDateInput.value;
+  tlEndDate = tlEndDateInput.value;
+  loadTimeline();
+});
+
+$("#tl-clear-range").addEventListener("click", () => {
+  tlStartDateInput.value = tlEndDateInput.value = "";
+  tlStartDate = tlEndDate = "";
+  loadTimeline();
+});
+
+tlLoadMoreButton.addEventListener("click", () => loadTimeline({ append: !!tlData }));
+
+function maybeLoadTimelineMore() {
+  if (tlAutoLoadReady && tlSentinelVisible && !tlError) loadTimeline({ append: true });
+}
+
+if (typeof IntersectionObserver !== "undefined") {
+  new IntersectionObserver((entries) => {
+    tlSentinelVisible = entries.some((entry) => entry.isIntersecting);
+    maybeLoadTimelineMore();
+  }, { rootMargin: "200px 0px" }).observe(tlSentinel);
+}
+
+// 每次浏览动作最多追加一页，避免折叠日期后短列表在视口内连续加载所有记录。
+document.addEventListener("scroll", (e) => {
+  const timelineTab = $("#tab-timeline");
+  if (tlLoading || !timelineTab.classList.contains("active")) return;
+  // 预览弹窗、侧栏等区域的滚动不应加载背景时间线。
+  if (e.target !== document && e.target !== document.scrollingElement && !e.target?.contains?.(timelineTab)) return;
+  tlAutoLoadReady = true;
+  const rect = tlSentinel.getBoundingClientRect();
+  tlSentinelVisible = rect.top <= window.innerHeight + 200 && rect.bottom >= 0;
+  maybeLoadTimelineMore();
+}, { passive: true, capture: true });
+
+tlCatFilterEl.addEventListener("click", (e) => {
+  const vendorChip = e.target.closest("[data-tl-vendor]");
+  if (vendorChip) {
+    tlVendorFilter = vendorChip.dataset.tlVendor === tlVendorFilter ? "" : vendorChip.dataset.tlVendor;  // 再点一次取消筛选
+    loadTimeline();
+    return;
+  }
+  const statusChip = e.target.closest("[data-tl-status-filter]");
+  if (statusChip) {
+    tlStatusFilter = statusChip.dataset.tlStatusFilter === tlStatusFilter ? "" : statusChip.dataset.tlStatusFilter;  // 再点一次取消筛选
+    loadTimeline();
+    return;
+  }
+  const chip = e.target.closest("[data-tl-filter]");
+  if (!chip) return;
+  tlCatFilter = chip.dataset.tlFilter === tlCatFilter ? "" : chip.dataset.tlFilter;  // 再点一次取消筛选
+  tlVendorFilter = "";   // 切换一级分类时清空厂商筛选，避免组合后看不到结果
+  if (tlCatFilter === "常识库") tlStatusFilter = "";   // 常识库无状态筛选，清掉残留条件以免滤空台账
+  loadTimeline();
+});
+
+tlBody.addEventListener("change", async (e) => {
+  const sel = e.target.closest("[data-tl-status]");
+  if (!sel) return;
+  const chunkId = sel.dataset.tlStatus;
+  const status = sel.value;
+  sel.disabled = true;
+  try {
+    const resp = await fetch("/api/timeline/event-status", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chunk_id: chunkId, doc_id: sel.dataset.tlDoc || "", status }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || "标记失败");
+    }
+    await loadTimeline();
+    toast(status ? "完成情况已标记" : "已恢复按内容判定");
+  } catch (err) {
+    toast(String(err.message || err));
+    sel.disabled = false;
+  }
+});
+
+tlBody.addEventListener("click", (e) => {
+  const track = e.target.closest("[data-track]");
+  if (track && isAdmin) {
+    const event = (tlData?.events || []).find((item) => item.doc_id === track.dataset.track);
+    if (event) startTracking(event);
+    return;
+  }
+  const head = e.target.closest("[data-tl-group]");
+  if (head) {
+    const name = head.dataset.tlGroup;
+    tlCollapsed.has(name) ? tlCollapsed.delete(name) : tlCollapsed.add(name);
+    renderTimeline();
+    return;
+  }
+  const link = e.target.closest("[data-tl-pv]");
+  if (link) openPreview(link.dataset.tlPv);
+});
+
+/* ---------- 厂商与问题类型模板（后台设置面板 + 编辑器联动） ---------- */
+let vendorList = [];        // 厂商清单（/api/vendors）
+
+/* ---------- 问题类型多选下拉框（上传页 / 编辑器共用）+ 二级选项配置 ---------- */
+// 二级选项配置：类型名 → { label, required, getOptions }。后期新增二级选项只需在此登记一行。
+const CATEGORY_SUBS = {
+  "厂商系统": { label: "厂商", required: true, getOptions: () => vendorList },
+};
+let categoryList = [...DOC_CATEGORY_ORDER];   // 全部可选问题类型（/api/categories：内置 + 后台自定义）
+function selectableCategories() { return categoryList.filter((n) => n !== "常识库"); }
+async function loadCategories() {
+  try {
+    const resp = await fetch("/api/categories");
+    const data = await resp.json();
+    if (Array.isArray(data.categories) && data.categories.length) categoryList = data.categories;
+  } catch { /* 拉取失败时用内置清单 */ }
+}
+
+// 工厂：btn=打开选择窗体的按钮 sub=二级选项容器；勾选带二级选项的类型后，
+// 其二级选项以单选框（radio）形式渲染在多选按钮右侧（窗体内也可选择）
+let pickerSeq = 0;   // 工厂实例序号：二级单选框分组用（同一实例内互斥）
+function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange } = {}) {
+  const uid = ++pickerSeq;
+  const state = new Set();     // 已勾选的问题类型（空 = 自动判定）
+  const subState = new Map();  // 类型 → 已选的二级选项值
+
+  function labelText() {
+    if (!state.size) return emptyLabel;
+    const names = [...state];
+    return names.length === 1 ? names[0] : `${names[0]} 等 ${names.length} 项`;
+  }
+  function renderSubs() {
+    const parts = [];
+    for (const cat of state) {
+      const conf = CATEGORY_SUBS[cat];
+      if (!conf) continue;
+      const current = subState.get(cat) || "";
+      parts.push(`<span class="subcat"><span class="subcat-label">${escapeHtml(conf.label)}：</span>${
+        (conf.getOptions() || []).map((name) =>
+          `<label class="subcat-opt"><input type="radio" name="picker-${uid}-sub" data-subcat="${escapeAttr(cat)}" value="${escapeAttr(name)}"${name === current ? " checked" : ""}>${escapeHtml(name)}</label>`).join("")}</span>`);
+    }
+    sub.innerHTML = parts.join(" ");   // 容器固定占位，无二级选项时留白，后面控件不移动
+  }
+  function prune() {
+    for (const key of [...subState.keys()]) if (!state.has(key)) subState.delete(key);
+  }
+  function sync() {
+    btn.textContent = labelText();
+    renderSubs();
+    if (onChange) onChange();
+  }
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    catDialog.open({
+      selected: [...state].filter(Boolean),
+      subs: Object.fromEntries(subState),
+      allowAuto: true,
+      onConfirm: (cats, subs) => {
+        state.clear();
+        for (const c of cats) if (selectableCategories().includes(c)) state.add(c);
+        subState.clear();
+        for (const [k, v] of Object.entries(subs || {})) if (v) subState.set(k, v);
+        prune();
+        sync();
+      },
+    });
+  });
+  sub.addEventListener("change", (e) => {
+    const radio = e.target.closest("input[type=radio]");
+    if (!radio) return;
+    subState.set(radio.dataset.subcat, radio.value);
+    if (onChange) onChange();
+  });
+
+  return {
+    selected: () => [...state].filter(Boolean),
+    isEmpty: () => !state.size,
+    has: (cat) => state.has(cat),
+    subValue: (cat) => subState.get(cat) || "",
+    setSub(cat, value) { if (state.has(cat)) { subState.set(cat, value || ""); renderSubs(); } },
+    set(cats) {   // 统一入口：设置选中的问题类型（同步按钮文字与二级选项区）
+      state.clear();
+      for (const c of cats || []) if (selectableCategories().includes(c)) state.add(c);
+      prune();
+      sync();
+    },
+    refresh: renderSubs,   // 厂商清单变化后重渲染二级选项
+  };
+}
+
+/* ---------- 问题类型选择窗体（上传页 / 编辑器 / 记录列表「改标签」共用） ---------- */
+const catDialog = {
+  mask: $("#cat-dialog-mask"),
+  optsBox: $("#cat-dialog-opts"),
+  subsBox: $("#cat-dialog-subs"),
+  draft: new Set(),          // 草稿：已勾选类型（空 = 自动判定）
+  subDraft: new Map(),       // 草稿：类型 → 二级选项值
+  allowAuto: true,           // 是否提供「自动判定」项（行内改标签不提供）
+  onConfirm: null,
+  open({ selected = [], subs = {}, allowAuto = true, onConfirm = null } = {}) {
+    this.allowAuto = allowAuto;
+    this.draft = new Set((selected || []).filter(Boolean));
+    this.subDraft = new Map(Object.entries(subs || {}));
+    this.onConfirm = onConfirm;
+    this.render();
+    $("#cat-dialog-new").value = "";
+    this.mask.classList.add("show");
+  },
+  close() { this.mask.classList.remove("show"); this.onConfirm = null; },
+  render() {
+    const items = [];
+    if (this.allowAuto) {
+      items.push(`<label class="multicat-opt${this.draft.size ? "" : " checked"}"><input type="checkbox" value=""><span>自动判定</span></label>`);
+    }
+    for (const name of selectableCategories()) {
+      items.push(`<label class="multicat-opt${this.draft.has(name) ? " checked" : ""}"><input type="checkbox" value="${escapeAttr(name)}"${this.draft.has(name) ? " checked" : ""}><span>${escapeHtml(name)}</span></label>`);
+    }
+    this.optsBox.innerHTML = items.join("");
+    // 二级选项：勾选带二级配置的类型时，在窗体下方显示单选框组
+    const parts = [];
+    for (const cat of this.draft) {
+      const conf = CATEGORY_SUBS[cat];
+      if (!conf) continue;
+      const current = this.subDraft.get(cat) || "";
+      parts.push(`<div class="subcat"><span class="subcat-label">${escapeHtml(conf.label)}：</span>${
+        (conf.getOptions() || []).map((name) =>
+          `<label class="subcat-opt"><input type="radio" name="cat-dialog-sub" data-subcat="${escapeAttr(cat)}" value="${escapeAttr(name)}"${name === current ? " checked" : ""}>${escapeHtml(name)}</label>`).join("")}</div>`);
+    }
+    this.subsBox.innerHTML = parts.join("");
+    this.subsBox.hidden = !parts.length;
+  },
+  confirm() {
+    const cats = [...this.draft].filter(Boolean);
+    if (this.onConfirm) this.onConfirm(cats, Object.fromEntries(this.subDraft));
+    this.close();
+  },
+};
+catDialog.optsBox.addEventListener("change", (e) => {
+  const box = e.target.closest("input[type=checkbox]");
+  if (!box) return;
+  const name = box.value;
+  if (!name) {
+    if (box.checked) catDialog.draft.clear();   // 「自动判定」与其他类型互斥
+  } else if (box.checked) {
+    catDialog.draft.add(name);
+  } else {
+    catDialog.draft.delete(name);
+  }
+  catDialog.render();
+});
+catDialog.subsBox.addEventListener("change", (e) => {
+  const radio = e.target.closest("input[type=radio]");
+  if (radio) catDialog.subDraft.set(radio.dataset.subcat, radio.value);
+});
+$("#cat-dialog-close").addEventListener("click", () => catDialog.close());
+$("#cat-dialog-cancel").addEventListener("click", () => catDialog.close());
+$("#cat-dialog-ok").addEventListener("click", () => catDialog.confirm());
+catDialog.mask.addEventListener("click", (e) => { if (e.target === catDialog.mask) catDialog.close(); });
+$("#cat-dialog-add-btn").addEventListener("click", async () => {
+  const input = $("#cat-dialog-new");
+  const name = input.value.trim();
+  if (!name) { toast("请填写类型名称"); return; }
+  const addBtn = $("#cat-dialog-add-btn");
+  addBtn.disabled = true;
+  try {
+    const resp = await fetch("/api/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "新增失败");
+    categoryList = data.categories;
+    catDialog.draft.add(name);   // 新类型加入草稿并勾选
+    input.value = "";
+    catDialog.render();
+    toast(`已新增类型「${name}」`);
+  } catch (err) {
+    toast(String(err.message || err));
+  } finally {
+    addBtn.disabled = false;
+  }
+});
+
+const recPicker = createCategoryPicker({
+  btn: $("#rec-cat-btn"), sub: $("#rec-subcats"),
+});
+recPicker.set([]);   // 初始：自动判定、无二级选项
+let templatesCache = {};    // 问题类型 → 模板内容（/api/templates，后台自定义优先）
+
+
+
+function renderVendorOptions() {
+  recPicker.refresh();   // 厂商清单变化时同步上传区的二级单选框（保留已选值）
+  mdPicker.refresh();    // 编辑器二级单选框同步
+}
+
+async function loadVendors() {
+  try {
+    const resp = await fetch("/api/vendors");
+    const data = await resp.json();
+    vendorList = data.vendors || [];
+  } catch (err) { vendorList = []; }
+  renderVendorOptions();
+}
+
+async function loadTemplates() {
+  try {
+    const resp = await fetch("/api/templates");
+    const data = await resp.json();
+    templatesCache = data.templates || {};
+  } catch (err) { templatesCache = {}; }
+}
+
+// 按问题类型预填模板：仅在内容为空或本身就是某类型的模板时替换，避免覆盖正在写的内容；
+// 厂商系统类必须先选定厂商才会载入模板
+// 模板默认标题 = 记录名称（名称改动且正文未编辑时同步更新标题）
+let tplBase = "";      // 最近一次填入的模板文本（含预填时间行，标题为模板默认）
+let tplTitle = "";     // 最近一次填入模板时使用的记录名称
+
+function withTitle(text, title) {
+  return title ? text.replace(/^#{1,6} .*$/m, `# ${title}`) : text;
+}
+
+function maybeApplyTemplate() {
+  const cat = mdPicker.selected()[0] || "";   // 模板按主分类预填
+  if (!cat || !templatesCache[cat]) return;
+  if (CATEGORY_SUBS[cat]?.required && !mdPicker.subValue(cat)) {
+    mdStatus.textContent = `已选「${cat}」：请先选择${CATEGORY_SUBS[cat].label}，再载入模板`;
+    return;
+  }
+  const current = mdSrc.value.replace(/\r\n/g, "\n").trim();
+  const knownTemplates = Object.values(templatesCache).map((t) => String(t || "").replace(/\r\n/g, "\n").trim());
+  if (current && !knownTemplates.includes(current)) {
+    mdStatus.textContent = "已保留现有内容；要点「新建」清空后再选类型才会套用模板";
+    return;
+  }
+  tplBase = applyTimeToContent(templatesCache[cat]);   // 模板的时间行预填当前所选时间
+  tplTitle = normalizeMdFilename();
+  mdPushUndo(mdSnapshot());                            // 套用模板可撤销
+  mdSrc.value = withTitle(tplBase, tplTitle);          // 标题默认为记录名称
+  mdStatus.textContent = "";
+  lastEditorRange = { start: 0, end: 0 };
+  renderEditorPreview();
+}
+
+/* ---------- 后台设置面板：模板编辑与厂商增删 ---------- */
+const TEMPLATE_CATS = DOC_CATEGORY_ORDER.filter((name) => name !== "其他");
+const tplCat = $("#tpl-cat");
+const tplContent = $("#tpl-content");
+const tplStatus = $("#tpl-status");
+
+tplCat.innerHTML = TEMPLATE_CATS.map((name) =>
+  `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+
+function syncTplEditor() {
+  tplContent.value = templatesCache[tplCat.value] || "";
+}
+
+tplCat.addEventListener("change", syncTplEditor);
+
+$("#tpl-save").addEventListener("click", async () => {
+  const btn = $("#tpl-save");
+  btn.disabled = true;
+  tplStatus.textContent = "保存中…";
+  try {
+    const resp = await fetch("/api/templates", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: tplCat.value, content: tplContent.value }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "保存失败");
+    templatesCache = data.templates;
+    syncTplEditor();
+    tplStatus.textContent = "已保存，选择该类型时按新模板预填";
+  } catch (err) {
+    tplStatus.textContent = "";
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#tpl-reset").addEventListener("click", async () => {
+  const btn = $("#tpl-reset");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/templates", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: tplCat.value, content: "" }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "操作失败");
+    templatesCache = data.templates;
+    syncTplEditor();
+    toast(`「${tplCat.value}」已恢复默认模板`);
+  } catch (err) {
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function renderVendorList() {
+  $("#vendor-list").innerHTML = vendorList.length
+    ? vendorList.map((name) =>
+        `<span class="net-tag" style="gap:4px">${escapeHtml(name)}<button type="button" class="vendor-del" data-vendor-del="${escapeAttr(name)}" title="删除厂商" style="border:none;background:none;cursor:pointer;color:#b91c1c;font:inherit;padding:0">×</button></span>`).join("")
+    : '<span class="muted" style="font-size:13px">暂无厂商，先添加</span>';
+}
+
+$("#vendor-add").addEventListener("click", async () => {
+  const input = $("#vendor-new");
+  const name = input.value.trim();
+  if (!name) { toast("请填写厂商名称"); return; }
+  const btn = $("#vendor-add");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/vendors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "添加失败");
+    vendorList = data.vendors;
+    input.value = "";
+    renderVendorOptions();
+    renderVendorList();
+    toast(`已添加厂商「${name}」`);
+  } catch (err) {
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#vendor-list").addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-vendor-del]");
+  if (!btn) return;
+  const name = btn.dataset.vendorDel;
+  if (!confirm(`确认删除厂商「${name}」？已保存记录上填写的厂商不受影响。`)) return;
+  try {
+    const resp = await fetch("/api/vendors/" + encodeURIComponent(name), { method: "DELETE" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "删除失败");
+    vendorList = data.vendors;
+    renderVendorOptions();
+    renderVendorList();
+    toast(`已删除厂商「${name}」`);
+  } catch (err) {
+    toast(String(err.message || err));
+  }
+});
+
+// ---------- 操作日志（独立页，分页） ----------
+const AUDIT_PAGE_SIZE = 20;
+let auditPage = 1;
+let auditTotal = 0;
+
+async function loadAuditLogs() {
+  if (!isSuperAdmin) return;
+  const body = $("#audit-body");
+  try {
+    const resp = await fetch(`/api/audit-logs?limit=${AUDIT_PAGE_SIZE}&page=${auditPage}`);
+    if (!resp.ok) throw new Error("日志加载失败");
+    const data = await resp.json();
+    auditTotal = data.total || 0;
+    const logs = data.logs || [];
+    const pages = Math.max(1, Math.ceil(auditTotal / AUDIT_PAGE_SIZE));
+    auditPage = Math.min(Math.max(1, auditPage), pages);
+    if (!logs.length) {
+      body.innerHTML = '<tr><td colspan="6" style="padding:10px 8px;color:var(--muted)">暂无操作记录</td></tr>';
+    } else {
+      body.innerHTML = logs.map((log) => {
+        const ok = log.status >= 200 && log.status < 400;
+        return `<tr>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap">${escapeHtml(log.time || "")}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap">${escapeHtml(log.ip || "")}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap">${escapeHtml(log.user || "-")}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap">${escapeHtml(log.action || "")}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--line);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeAttr(log.detail || "")}">${escapeHtml(log.detail || "")}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;color:${ok ? "#1a7f4b" : "#c0392b"}">${log.status || ""}</td>
+      </tr>`;
+      }).join("");
+    }
+    $("#audit-page-info").textContent = `共 ${auditTotal} 条 · 第 ${auditPage} / ${pages} 页 · 每页 ${AUDIT_PAGE_SIZE} 条`;
+    $("#audit-prev").disabled = auditPage <= 1;
+    $("#audit-next").disabled = auditPage >= pages;
+  } catch {
+    body.innerHTML = '<tr><td colspan="6" style="padding:10px 8px;color:var(--muted)">日志加载失败</td></tr>';
+  }
+}
+
+$("#audit-refresh").addEventListener("click", () => { auditPage = 1; loadAuditLogs(); });
+$("#audit-prev").addEventListener("click", () => { if (auditPage > 1) { auditPage--; loadAuditLogs(); } });
+$("#audit-next").addEventListener("click", () => { if (auditPage * AUDIT_PAGE_SIZE < auditTotal) { auditPage++; loadAuditLogs(); } });
+
+/* ---------- 提问开关：快速问答 / 大模型整理 / 结合上文 / 新对话 / 联网搜索（随请求发送，不改全局设置） ---------- */
+// 三档模式：快速问答（跳过精排、不调模型，秒回原文）→ 默认（精排 + 规则提取，不调模型）
+// → 大模型整理（在默认基础上由模型整理答案，结合上文 / 新对话 / 联网搜索挂在该模式下）
+const fmToggle = $("#fastmode-toggle");
+const llmToggle = $("#llm-toggle");
+const wsToggle = $("#websearch-toggle");
+const ctxToggle = $("#context-toggle");
+const newChatBtn = $("#new-chat");
+let fmState = { enabled: false };   // 快速问答默认关：默认走精排，不调模型
+let llmState = { enabled: false };  // 大模型整理默认关：需要模型整理时手动开启
+let wsState = { enabled: false };   // 联网搜索默认关：需要外部参考时手动开启
+let ctxState = { enabled: true };   // 结合上文默认开：追问（"那几台的MAC呢"）自动带入历史检索
+
+function setPressed(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle("on", on);
+  btn.setAttribute("aria-pressed", String(on));
+}
+
+function renderToggles() {
+  const polish = !fmState.enabled && llmState.enabled;   // 大模型整理生效（快速模式下不生效）
+  setPressed(fmToggle, fmState.enabled);
+  if (fmToggle) fmToggle.title = fmState.enabled
+    ? "已开启：命中知识库直接回原文，秒回，不精排也不调模型（点击改用精排）"
+    : "已关闭：检索走语义精排，规则提取方案，不调模型（点击开启快速问答）";
+  setPressed(llmToggle, llmState.enabled);
+  if (llmToggle) llmToggle.title = llmState.enabled
+    ? "已开启：由模型把知识库记录整理成方案，支持追问（点击关闭）"
+    : "已关闭：仅精排与规则提取，不调模型，响应更快（点击开启）";
+  setPressed(wsToggle, wsState.enabled);
+  if (wsToggle) wsToggle.title = wsState.enabled
+    ? "已开启：知识库没有对应内容时自动查询公开网页（点击关闭）"
+    : "已关闭：仅使用知识库内容（点击开启）";
+  setPressed(ctxToggle, ctxState.enabled);
+  if (ctxToggle) ctxToggle.title = ctxState.enabled
+    ? "已开启：追问会结合之前的问题与回答检索（点击关闭）"
+    : "已关闭：每次提问互相独立（点击开启）";
+  // 显隐：快速问答只留自己；大模型整理开启后才显示结合上文 / 新对话 / 联网搜索
+  if (llmToggle) llmToggle.hidden = fmState.enabled;
+  if (wsToggle) wsToggle.hidden = fmState.enabled || !llmState.enabled;
+  if (ctxToggle) ctxToggle.hidden = fmState.enabled || !llmState.enabled;
+  if (newChatBtn) newChatBtn.hidden = fmState.enabled || !llmState.enabled;
+}
+
+function startNewChat() {
+  history.length = 0;
+  historyConversationId = "";
+  log.innerHTML = "";
+}
+
+renderToggles();
+if (fmToggle) fmToggle.addEventListener("click", () => { fmState.enabled = !fmState.enabled; renderToggles(); });
+if (llmToggle) llmToggle.addEventListener("click", () => {
+  llmState.enabled = !llmState.enabled;
+  if (!llmState.enabled) wsState.enabled = false;   // 关闭整理：联网参考一并关闭（需要模型整理）
+  renderToggles();
+});
+if (wsToggle) wsToggle.addEventListener("click", () => { wsState.enabled = !wsState.enabled; renderToggles(); });
+if (ctxToggle) ctxToggle.addEventListener("click", () => {
+  ctxState.enabled = !ctxState.enabled;
+  if (!ctxState.enabled) startNewChat();   // 关闭结合上文：立即开始新对话，已有上下文不再带入
+  renderToggles();
+});
+if (newChatBtn) newChatBtn.addEventListener("click", startNewChat);
+
+/* ---------- 历史记录：最近 10 条问答，仅存浏览器 localStorage，不上传后端 ---------- */
+const HISTORY_KEY = "kb_chat_history"; // 旧键只在迁移时清除，新历史按账号与权限版本隔离
+const HISTORY_LIMIT = 10;
+const historyPanel = $("#history-panel");
+const historyList = $("#history-list");
+let historyOpen = false;
+
+function loadHistory() {
+  try {
+    const items = JSON.parse(localStorage.getItem(enterpriseHistoryKey()) || "[]");
+    return Array.isArray(items) ? items : [];
+  } catch { return []; }
+}
+
+function saveHistoryItem(item) {
+  const items = loadHistory();
+  items.unshift(item);
+  try {
+    localStorage.setItem(enterpriseHistoryKey(), JSON.stringify(items.slice(0, HISTORY_LIMIT)));
+  } catch { /* 存储满/隐私模式：历史记录不可用，不影响问答 */ }
+}
+
+function fmtHistoryTime(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function historyOriginLabel(item) {
+  if (item.origin === "web") return ["web", "联网参考"];
+  if (item.solution_found) return ["kb", "知识库方案"];
+  return ["na", "知识库记录"];
+}
+
+function renderHistory() {
+  if (!historyList) return;
+  const items = loadHistory();
+  historyList.innerHTML = items.length ? items.map((it, i) => {
+    const [cls, label] = historyOriginLabel(it);
+    return `<div class="history-item">
+      <button type="button" class="history-q" data-hi="${i}" aria-expanded="false">
+        <span class="history-q-text">${escapeHtml(String(it.q || ""))}</span>
+        <span class="history-meta"><span class="history-origin ${cls}">${label}</span><span>${fmtHistoryTime(it.time)}</span></span>
+      </button>
+      <div class="history-a" hidden></div>
+    </div>`;
+  }).join("") : '<div class="history-empty">暂无历史记录</div>';
+}
+
+// 点击条目展开/收起回答：回答按 Markdown 重新渲染，不重复存大段 HTML
+if (historyList) historyList.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-hi]");
+  if (!btn) return;
+  const item = loadHistory()[Number(btn.dataset.hi)];
+  const body = btn.parentElement.querySelector(".history-a");
+  if (!body) return;
+  if (body.hidden) {
+    body.innerHTML = item
+      ? renderMarkdown(String(item.answer || "")) + renderSources(item.sources || [])
+      : '<span class="muted">记录已失效</span>';
+    body.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+  } else {
+    body.hidden = true;
+    body.innerHTML = "";
+    btn.setAttribute("aria-expanded", "false");
+  }
+});
+
+if (historyPanel) {
+  $("#history-btn").addEventListener("click", () => {
+    historyOpen = !historyOpen;
+    historyPanel.hidden = !historyOpen;
+    // 打开时把主内容区挤开（桌面端），不遮挡正在查看的问答
+    document.body.classList.toggle("history-open", historyOpen);
+    if (historyOpen) renderHistory();
+  });
+  $("#history-close").addEventListener("click", () => {
+    historyOpen = false;
+    historyPanel.hidden = true;
+    document.body.classList.remove("history-open");
+  });
+  $("#history-clear").addEventListener("click", () => {
+    localStorage.removeItem(enterpriseHistoryKey());
+    renderHistory();
+    toast("已清空历史记录");
+  });
+}
+
+// 进入「模板与厂商设置」页时拉取最新数据
+async function refreshSettings() {
+  await loadVendors();
+  await loadTemplates();
+  syncTplEditor();
+  renderVendorList();
+}
+
+/* ---------- 运维周报：定时设置 + 运维人勾选 + 周报列表 ---------- */
+
+const WR_WEEKDAYS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+let wrOwners = [];        // 可勾选的运维人名单（历史记录去重）
+let wrSelected = new Set();  // 已勾选（需要生成周报）的运维人
+
+async function refreshWeeklyReport() {
+  loadWeeklyReports();
+  $("#wr-generate").textContent = isSuperAdmin ? "立即生成全部" : isAccountAdmin ? "生成本部门周报" : "生成本周周报";
+  if (!isSuperAdmin) return;   // 定时设置与名单仅管理员可见
+  try {
+    const resp = await fetch("/api/weekly-report/settings");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    wrOwners = data.owners || [];
+    wrSelected = new Set(data.operators || []);
+    $("#wr-enabled").checked = !!data.enabled;
+    $("#wr-weekday").value = String(data.weekday || 5);
+    $("#wr-time").value = data.time || "18:00";
+    renderWrOwners();
+  } catch { /* 设置拉取失败不阻断列表 */ }
+}
+
+function renderWrOwners() {
+  const box = $("#wr-owners");
+  const names = [...new Set([...wrSelected, ...wrOwners])].sort();
+  box.innerHTML = names.length
+    ? names.map((name) => `
+      <label class="wr-owner" style="font-size:13px;display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer">
+        <input type="checkbox" data-wr-owner="${escapeAttr(name)}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(name)}
+      </label>`).join("")
+    : '<span class="muted" style="font-size:13px">暂无运维记录，先在记录里填写运维人后再来勾选。</span>';
+}
+
+$("#wr-owners").addEventListener("change", (e) => {
+  const name = e.target.dataset && e.target.dataset.wrOwner;
+  if (!name) return;
+  e.target.checked ? wrSelected.add(name) : wrSelected.delete(name);
+});
+
+$("#wr-save").addEventListener("click", async () => {
+  const btn = $("#wr-save");
+  btn.disabled = true;
+  $("#wr-status").textContent = "保存中…";
+  try {
+    const resp = await fetch("/api/weekly-report/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: $("#wr-enabled").checked,
+        weekday: Number($("#wr-weekday").value),
+        time: $("#wr-time").value,
+        operators: [...wrSelected],
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "保存失败");
+    $("#wr-status").textContent = "已保存，到点自动生成";
+    toast("周报设置已保存");
+  } catch (err) {
+    $("#wr-status").textContent = "";
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#wr-generate").addEventListener("click", async () => {
+  const btn = $("#wr-generate");
+  btn.disabled = true;
+  $("#wr-status").textContent = "生成中…";
+  try {
+    const resp = await fetch("/api/weekly-reports/generate", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "生成失败");
+    $("#wr-status").textContent = `已生成 ${data.reports.length} 人的本周周报`;
+    toast(`已生成 ${data.reports.length} 人的本周周报`);
+    await loadWeeklyReports();
+  } catch (err) {
+    $("#wr-status").textContent = "";
+    toast(String(err.message || err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function weeklyFallbackMarkdown(r) {
+  // 旧版周报（无 markdown 字段）用 items 现场拼一份兼容渲染
+  const lines = [`# ${r.person} 的运维周报`, ""];
+  for (const it of r.items || []) {
+    lines.push(`- [${it.doc_name || "未命名记录"}](doc://${it.doc_id || ""})（${it.date || ""}）`);
+  }
+  if (!(r.items || []).length) lines.push("本周没有运维记录。");
+  return lines.join("\n");
+}
+
+async function loadWeeklyReports() {
+  try {
+    const resp = await fetch("/api/weekly-reports");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const reports = data.reports || [];
+    $("#wr-reports").innerHTML = reports.map((r) => `
+      <div class="wr-card" style="border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:#fff;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 12px">
+          <span style="font-size:13.5px;font-weight:600">${escapeHtml(r.person)}</span>
+          <span class="muted" style="font-size:12px">${escapeHtml(r.week_start)} 那周 · ${(r.items || []).length} 条记录 · 生成于 ${escapeHtml(r.generated_at || "")}</span>
+          <button class="ghost" type="button" data-wr-toggle style="margin-left:auto;font-size:12px;padding:3px 10px">查看</button>
+        </div>
+        <div class="wr-detail" hidden style="border-top:1px solid var(--line);padding:10px 14px">
+          <div class="md" style="font-size:13.5px">${renderMarkdown(r.markdown || weeklyFallbackMarkdown(r))}</div>
+        </div>
+      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，到点自动生成，或点「生成本周周报」。</div>';
+  } catch { /* 忽略 */ }
+}
+
+// 周报列表：点「查看」展开正文，再点收起
+$("#wr-reports").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-wr-toggle]");
+  if (!btn) return;
+  const detail = btn.closest(".wr-card").querySelector(".wr-detail");
+  detail.hidden = !detail.hidden;
+  btn.textContent = detail.hidden ? "查看" : "收起";
+});
+
+/* ---------- 账号管理：创建普通账号 / 账号列表（账号管理页） ---------- */
+const regAccountInput = $("#reg-account");
+const regUsernameInput = $("#reg-username");
+const regStatus = $("#reg-status");
+
+async function postAccount(endpoint, payload, statusEl) {
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "操作失败，请稍后重试");
+  return data;
+}
+
+if ($("#reg-create")) {
+  $("#reg-create").addEventListener("click", async () => {
+    if (!isAccountAdmin) return;
+    if ($("#reg-create").disabled) return;
+    regStatus.textContent = "";
+    const account = regAccountInput.value.trim().toLowerCase();
+    const username = (regUsernameInput.value || "").normalize("NFKC").trim();
+    if (!/^[a-z][a-z0-9_.-]{0,31}$/.test(account)) {
+      regStatus.textContent = "账号应为 1–32 位，以英文字母开头，可含字母、数字、下划线、点或短横线";
+      regAccountInput.focus(); return;
+    }
+    if (!/^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9][\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_.-]{0,31}$/.test(username)) {
+      regStatus.textContent = "用户名应为 1–32 位中文、字母、数字、下划线、点或短横线";
+      regUsernameInput.focus(); return;
+    }
+    $("#reg-create").disabled = true;
+    regStatus.textContent = "正在创建…";
+    try {
+      await postAccount("/api/admin/register", { account, username, ...enterpriseMembershipValue($("#reg-departments")) }, regStatus);
+      regStatus.textContent = `已创建「${username}（${account}）」，初始密码为空`;
+      toast(`普通账号「${username}」已创建`);
+      regAccountInput.value = regUsernameInput.value = "";
+      loadUsers();
+    } catch (err) {
+      regStatus.textContent = String(err.message || err);
+    } finally {
+      $("#reg-create").disabled = false;
+    }
+  });
+}
+
+/* ---------- 账号列表与删除（管理员） ---------- */
+const usersBody = $("#users-body");
+const usersStatus = $("#users-status");
+
+async function loadUsers() {
+  if (!isAccountAdmin || !usersBody) return;
+  usersStatus.textContent = "";
+  try {
+    const resp = await fetch("/api/admin/users");
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "账号列表加载失败");
+    usersBody.innerHTML = enterpriseUsersRows(data.users || []);
+    if (!(data.users || []).length) usersStatus.textContent = "暂无账号";
+  } catch (err) {
+    usersBody.innerHTML = "";
+    usersStatus.textContent = String(err.message || err);
+  }
+}
+
+if (usersBody) {
+  usersBody.addEventListener("click", async (event) => {
+    if (!isAccountAdmin) return;
+    const button = event.target.closest("[data-del-user]");
+    if (!button) return;
+    const account = button.dataset.delUser;
+    if (!confirm(`确定删除账号「${account}」？删除后该账号将立即无法登录，且不可恢复。`)) return;
+    button.disabled = true;
+    try {
+      const resp = await fetch(`/api/admin/users/${encodeURIComponent(account)}`, { method: "DELETE" });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "删除失败，请稍后重试");
+      toast(`账号「${account}」已删除`);
+      loadUsers();
+    } catch (err) {
+      button.disabled = false;
+      toast(String(err.message || err));
+    }
+  });
+}
+
+$("#users-refresh").addEventListener("click", loadUsers);
+
+/* ---------- 当前账号 / 退出 ---------- */
+const loginMask = $("#login-mask");
+let authEnabled = false;
+
+function openLogin() { window.location.assign("/login"); }
+function closeLogin() { loginMask.classList.remove("show"); }
+
+$("#mode-badge").addEventListener("click", async () => {
+  if (!currentUser) return;
+  const button = $("#mode-badge");
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/admin/logout", { method: "POST" });
+    if (!response.ok) throw new Error("退出失败，请重试");
+    enterpriseClearSession();
+    window.location.assign("/login");
+  } catch (error) { toast(String(error.message || error)); button.disabled = false; }
+});
+
+function updateNavigation(tab) {
+  const selected = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  $("#current-view").textContent = selected ? selected.textContent : "知识中心";
+  document.querySelectorAll(".tab-btn").forEach((button) => {
+    if (button.dataset.tab === tab) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+}
+
+const LAST_TAB_KEY = "kb_last_tab";   // 记住最后停留的页签，刷新后原地恢复
+const PUBLIC_TABS = ["chat", "docs", "timeline"];
+const SUPER_ADMIN_TABS = ["edits", "logs", "settings"];
+const ADMIN_TABS = ["editor", "records", "accounts", "weekly", ...SUPER_ADMIN_TABS];
+
+function canAccessTab(tab) {
+  return PUBLIC_TABS.includes(tab) || (portal === "admin" && ((tab === "accounts" && isAccountAdmin) || (isAdmin && ADMIN_TABS.includes(tab) && tab !== "accounts" && (!SUPER_ADMIN_TABS.includes(tab) || isSuperAdmin))));
+}
+
+function lastTab() {
+  try { return localStorage.getItem(LAST_TAB_KEY) || ""; } catch { return ""; }
+}
+
+function switchTo(tab, { preserveEditor = false } = {}) {
+  if (!canAccessTab(tab)) {
+    if (ADMIN_TABS.includes(tab) && !isAdmin && portal === "admin") openLogin();
+    return;
+  }
+  if (tab === "editor" && !preserveEditor && resetEditor() === false) return;
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + tab));
+  updateNavigation(tab);
+  if (tab === "docs") loadDocuments();
+  if (tab === "timeline") loadTimeline();
+  if (tab === "editor") { loadRecordList(); loadVendors(); }
+  if (tab === "records") loadRecordList();
+  if (tab === "settings") refreshSettings();
+  if (tab === "weekly") refreshWeeklyReport();
+  if (tab === "edits") loadEditsLog();
+  if (tab === "accounts") loadUsers();
+  if (tab === "logs") { auditPage = 1; loadAuditLogs(); }
+  try { localStorage.setItem(LAST_TAB_KEY, tab); } catch { /* 隐私模式忽略 */ }
+}
+
+/* ---------- 文档预览 ---------- */
+const pvMask = $("#preview-mask");
+
+function closePreview() { pvMask.classList.remove("show"); }
+$("#pv-close").addEventListener("click", closePreview);
+pvMask.addEventListener("click", (e) => { if (e.target === pvMask) closePreview(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if ($("#md-insert-mask").classList.contains("show")) {
+    closeMdInsert();
+    mdSrc.focus();
+    mdSrc.setSelectionRange(lastEditorRange.start, lastEditorRange.end);
+  } else if (timeMask.classList.contains("show")) {
+    closeTimeEditor();
+  } else if (loginMask.classList.contains("show")) {
+    closeLogin();
+  } else {
+    closePreview();
+  }
+});
+
+function tableHtml(rows) {
+  if (!rows || !rows.length) return '<p class="muted">（空表）</p>';
+  const [head, ...body] = rows;
+  return "<table><thead><tr>" + head.map((c) => `<th>${inline(String(c))}</th>`).join("") +
+    "</tr></thead><tbody>" + body.map((r) => "<tr>" + r.map((c) => `<td>${inline(String(c))}</td>`).join("") + "</tr>").join("") +
+    "</tbody></table>";
+}
+
+async function downloadDoc(id) {
+  const url = "/api/documents/" + encodeURIComponent(id) + "/download";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || "HTTP " + resp.status);
+    }
+    const objectUrl = URL.createObjectURL(await resp.blob());
+    const doc = docDocs.find((d) => d.id === id) || recDocs.find((d) => d.id === id);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = doc ? doc.name : "document";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (err) {
+    toast("无法下载：" + String(err.message || err));
+  }
+}
+
+let previewId = "";
+$("#pv-download").addEventListener("click", () => { if (previewId) downloadDoc(previewId); });
+
+async function openPreview(id) {
+  previewId = id;
+  const body = $("#pv-body");
+  body.innerHTML = '<p class="muted">加载中…</p>';
+  pvMask.classList.add("show");
+  try {
+    const resp = await fetch("/api/documents/" + encodeURIComponent(id) + "/preview");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    const doc = data.doc;
+    $("#pv-title").textContent = doc.name;
+    const skipped = doc.skipped ? ` · 已忽略 ${doc.skipped} 个非主要部分` : "";
+    $("#pv-sub").textContent = `${catName(doc.category)} · ${doc.ext} · ${doc.chunks} 个检索单元${skipped} · ${String(doc.uploaded_at || "").slice(0, 10)} · 运维人：${doc.uploaded_by_name || doc.uploaded_by || "历史记录"}`;
+    $("#pv-download").style.display = doc.has_source ? "" : "none";
+    if (!data.sections.length) {
+      body.innerHTML = '<p class="muted">该文档暂无可预览内容，可能仍在处理或解析失败。</p>';
+      return;
+    }
+    const docSummary = doc.summary
+      ? `<div class="summary-box"><span class="label">全文摘要</span>${escapeHtml(doc.summary)}</div>` : "";
+    const attachHtml = (doc.attachments || []).length
+      ? `<div class="attach-box"><span class="label">附件（${doc.attachments.length}）</span><div class="attach-list">${doc.attachments.map((a) =>
+          `<a class="attach-item" href="/api/documents/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.stored)}" target="_blank" rel="noopener" title="打开附件（不参与检索）">${escapeHtml(a.name || "附件")}<span class="attach-size">${fmtSize(a.size)}</span></a>`).join("")}</div></div>`
+      : "";
+    body.innerHTML = attachHtml + docSummary + data.sections.map((s) => {
+      if (s.kind === "notice") return `<div class="notice">${escapeHtml(s.text)}</div>`;
+      const head = s.heading ? `<h3>${escapeHtml(s.heading)}</h3>` : "";
+      const loc = s.location ? `<div class="loc">${escapeHtml(s.location)}</div>` : "";
+      // 短章节的摘要就是原文本身，不重复显示
+      const sum = s.summary && s.summary.trim() !== (s.text || "").trim()
+        ? `<div class="summary-box"><span class="label">摘要</span>${escapeHtml(s.summary)}</div>` : "";
+      if (s.kind === "table") return head + loc + sum + tableHtml(s.table);
+      return head + loc + sum + renderMarkdown(s.text);
+    }).join("");
+  } catch (err) {
+    body.innerHTML = `<div class="notice">预览失败：${escapeHtml(String(err.message || err))}</div>`;
+  }
+}
+
+/* ---------- Markdown 在线编辑 ---------- */
+const mdSrc = $("#md-src");
+const mdPreview = $("#md-preview");
+const mdName = $("#md-name");
+const mdPicker = createCategoryPicker({   // 问题类型多选：保存时按所选标签落库，空为自动判定
+  btn: $("#md-cat-btn"), sub: $("#md-subcats"),
+  emptyLabel: "自动判定问题类型",
+  onChange: () => maybeApplyTemplate(),   // 选类型/厂商后按需预填模板
+});
+mdPicker.set([]);
+const mdTime = $("#md-time");           // 记录时间：默认当前时间，写入内容「时间」行
+const mdResolved = $("#md-resolved");   // 是否解决：时间线徽标按此显示
+
+// 本地当前日期 → 日期控件值（YYYY-MM-DD）；记录时间只保留年月日
+function todayValue() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// 内容中的「时间：」行 → 控件值（只取年月日）；无法解析时返回空
+function timeToInput(text) {
+  const line = /^[ \t]*[-*]?[ \t]*时间[：:][ \t]*(.*)$/m.exec(text || "");
+  const m = line && /(20\d{2})-(\d{1,2})-(\d{1,2})/.exec(line[1]);
+  if (!m) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+}
+
+// 把控件时间写入内容：只替换旧模板里已有的「时间：」行；
+// 模板正文不再包含时间行（时间由「问题日期」控件记录进数据库，不写正文）
+function applyTimeToContent(content) {
+  const label = mdTime.value || "";
+  if (!label) return content;
+  const timeRe = /^([ \t]*[-*]?[ \t]*时间[：:]).*$/m;
+  return timeRe.test(content) ? content.replace(timeRe, (_m, prefix) => prefix + label) : content;
+}
+
+mdTime.value = todayValue();
+mdTime.addEventListener("change", () => {
+  replaceEditorText(applyTimeToContent(mdSrc.value));
+  renderEditorPreview();
+});
+const mdStatus = $("#md-status");
+let editingId = "";          // 空表示新建
+let trackingParent = null;   // 仅新建时使用；编辑已有记录不修改父子关系
+let editingChunks = 0;
+let lastEditorRange = { start: 0, end: 0 };
+let mdInsert = { kind: "link", range: { start: 0, end: 0 } };
+let editorMode = "preview";   // 默认预览模式：在渲染结果上直接书写，不显示 Markdown 源码
+
+function syncEditorRange() {
+  const max = mdSrc.value.length;
+  const start = Math.max(0, Math.min(mdSrc.selectionStart ?? 0, max));
+  const end = Math.max(start, Math.min(mdSrc.selectionEnd ?? start, max));
+  lastEditorRange = { start, end };
+}
+
+function currentEditorRange() {
+  if (editorMode === "preview" && document.activeElement !== mdSrc) {
+    // 预览模式：完整序列化写回内容；光标/选区另用“截断到光标”的序列化定位
+    const sel = window.getSelection();
+    let stopStart = null;
+    let stopEnd = null;
+    if (sel && sel.rangeCount && mdPreview.contains(sel.getRangeAt(0).startContainer)) {
+      const range = sel.getRangeAt(0);
+      stopStart = { node: range.startContainer, offset: range.startOffset };
+      stopEnd = range.collapsed ? stopStart : { node: range.endContainer, offset: range.endOffset };
+    }
+    replaceEditorText(trimMarkdown(serializePreview(null).md));
+    const max = mdSrc.value.length;
+    const startAt = stopStart ? serializePreview(stopStart).caret : -1;
+    const endAt = stopEnd ? serializePreview(stopEnd).caret : -1;
+    const start = startAt >= 0 ? Math.min(startAt, max) : max;
+    const end = endAt >= 0 ? Math.min(Math.max(endAt, start), max) : start;
+    return { start, end };
+  }
+  if (document.activeElement === mdSrc) syncEditorRange();
+  const max = mdSrc.value.length;
+  const start = Math.max(0, Math.min(lastEditorRange.start, max));
+  return { start, end: Math.max(start, Math.min(lastEditorRange.end, max)) };
+}
+
+/* ---------- 自管理撤销 / 恢复 ----------
+   预览模式每次输入都会程序化写回 textarea（直接赋 value 会清空浏览器原生撤销栈），
+   contenteditable 预览区的撤销栈也会被重渲染清掉，因此编辑器自管撤销栈：
+   输入经 beforeinput / 预览同步压栈（600ms 内连续输入合并为一条记录），
+   Ctrl+Z 撤销、Ctrl+Y / Ctrl+Shift+Z 恢复统一接管。 */
+const mdUndoStack = [];
+const mdRedoStack = [];
+let mdLastPush = 0;
+
+function mdSnapshot() {
+  return { text: mdSrc.value, start: mdSrc.selectionStart, end: mdSrc.selectionEnd };
+}
+
+function mdResetHistory() {
+  mdUndoStack.length = 0;
+  mdRedoStack.length = 0;
+}
+
+// merge=true 用于连续打字：600ms 内不新增记录，撤销时一次退回整段输入
+function mdPushUndo(prev, merge = false) {
+  if (mdUndoStack.length && mdUndoStack[mdUndoStack.length - 1].text === prev.text) return;
+  if (merge && mdUndoStack.length && performance.now() - mdLastPush < 600) {
+    mdLastPush = performance.now();
+    mdRedoStack.length = 0;
+    return;
+  }
+  mdUndoStack.push(prev);
+  if (mdUndoStack.length > 200) mdUndoStack.shift();
+  mdRedoStack.length = 0;
+  mdLastPush = performance.now();
+}
+
+function applyMdHistory(state) {
+  mdSrc.value = state.text;
+  mdSrc.setSelectionRange(state.start, state.end);
+  renderEditorPreview();
+  syncEditorRange();
+  if (editorMode === "preview") focusPreviewEnd();   // 预览区光标无法精确映射，回到末尾继续书写
+  else mdSrc.focus();
+}
+
+function mdUndo() {
+  if (!mdUndoStack.length) return;
+  mdRedoStack.push(mdSnapshot());
+  applyMdHistory(mdUndoStack.pop());
+}
+
+function mdRedo() {
+  if (!mdRedoStack.length) return;
+  mdUndoStack.push(mdSnapshot());
+  applyMdHistory(mdRedoStack.pop());
+}
+
+// 用 insertText 方式整篇替换内容：改动会进入浏览器原生撤销栈，Ctrl+Z / Ctrl+Y 可撤回恢复；
+// 直接给 value 赋值会清空撤销栈——这正是预览模式同步、时间/标题联动后无法撤销的原因
+function replaceEditorText(next) {
+  if (mdSrc.value === next) return;
+  mdPushUndo(mdSnapshot());
+  // 直接赋值，不用 execCommand + focus：预览模式下源码框是隐藏的，
+  // 抢焦点会打断正在标题框进行的输入法组合，把组合中的文本和替换内容交替重复写入
+  mdSrc.value = next;
+}
+
+function setEditorSpan(start, end, replacement, selectStart, selectEnd) {
+  mdPushUndo(mdSnapshot());
+  const max = mdSrc.value.length;
+  start = Math.max(0, Math.min(start, max));
+  end = Math.max(start, Math.min(end, max));
+  mdSrc.setRangeText(replacement, start, end, "end");
+  mdSrc.focus();
+  const nextMax = mdSrc.value.length;
+  const from = Math.max(0, Math.min(selectStart ?? start + replacement.length, nextMax));
+  const to = Math.max(from, Math.min(selectEnd ?? from, nextMax));
+  mdSrc.setSelectionRange(from, to);
+  syncEditorRange();
+  const atEnd = mdSrc.selectionEnd >= mdSrc.value.length;
+  renderEditorPreview();
+  if (editorMode === "preview") {
+    // 光标本来就在末尾时继续在末尾输入，否则交回用户点击定位，避免误写到别处
+    if (atEnd) focusPreviewEnd();
+    else mdPreview.blur();
+  }
+}
+
+function selectedLineSpan() {
+  const { start, end } = currentEditorRange();
+  const value = mdSrc.value;
+  const lineStart = start > 0 ? value.lastIndexOf("\n", start - 1) + 1 : 0;
+  let probeEnd = end;
+  if (probeEnd > start && value.charAt(probeEnd - 1) === "\n") probeEnd -= 1;
+  let lineEnd = value.indexOf("\n", probeEnd);
+  if (lineEnd < 0) lineEnd = value.length;
+  return { start: lineStart, end: lineEnd };
+}
+
+function applyHeading(level) {
+  const span = selectedLineSpan();
+  const lines = mdSrc.value.slice(span.start, span.end).split("\n");
+  const prefix = level > 0 ? "#".repeat(level) + " " : "";
+  const sameLevel = level > 0 && lines.every((line) => line.startsWith(prefix));
+  const replacement = lines.map((line) => {
+    const body = line.replace(/^\s{0,3}#{1,6}\s+/, "");
+    return sameLevel ? body : prefix + body;
+  }).join("\n");
+  setEditorSpan(span.start, span.end, replacement);
+}
+
+function applyLineMarker(kind) {
+  const span = selectedLineSpan();
+  const lines = mdSrc.value.slice(span.start, span.end).split("\n");
+  const marker = kind === "ul" ? "- " : kind === "ol" ? "1. " : "> ";
+  const pattern = kind === "ul" ? /^\s*[-*+]\s+/
+    : kind === "ol" ? /^\s*\d+[.)]\s+/ : /^\s*>\s?/;
+  const allMarked = lines.every((line) => pattern.test(line));
+  const replacement = lines.map((line) => {
+    const indent = (line.match(/^\s*/) || [""])[0];
+    const body = line.slice(indent.length).replace(/^(?:[-*+]|\d+[.)]|>)\s+/, "");
+    return allMarked ? indent + body : indent + marker + body;
+  }).join("\n");
+  setEditorSpan(span.start, span.end, replacement);
+}
+
+function wrapInline(before, after, placeholder) {
+  const { start, end } = currentEditorRange();
+  const selected = mdSrc.value.slice(start, end);
+  const content = selected || placeholder;
+  const replacement = before + content + after;
+  const contentStart = start + before.length;
+  setEditorSpan(start, end, replacement, contentStart, contentStart + content.length);
+}
+
+function insertBlock(block, selectText = "") {
+  const { start, end } = currentEditorRange();
+  const before = mdSrc.value.slice(0, start);
+  const after = mdSrc.value.slice(end);
+  const lead = before ? (before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n") : "";
+  const tail = after ? (after.startsWith("\n") ? "" : "\n\n") : "";
+  const blockStart = start + lead.length;
+  const selectedAt = selectText ? block.indexOf(selectText) : -1;
+  const selectStart = selectedAt >= 0 ? blockStart + selectedAt : blockStart + block.length;
+  const selectEnd = selectedAt >= 0 ? selectStart + selectText.length : selectStart;
+  setEditorSpan(start, end, lead + block + tail, selectStart, selectEnd);
+}
+
+function insertCodeBlock() {
+  const { start, end } = currentEditorRange();
+  const selected = mdSrc.value.slice(start, end) || "在此输入代码";
+  insertBlock("```\n" + selected + "\n```", selected);
+}
+
+function parseMdUrl(value) {
+  return /^(?:https?:\/\/|\/|\.{1,2}\/|mailto:)/i.test(value.trim());
+}
+
+function openMdInsert(kind) {
+  const { start, end } = currentEditorRange();
+  const selected = mdSrc.value.slice(start, end).trim();
+  const selectedIsUrl = parseMdUrl(selected) || /^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(selected);
+  mdInsert = { kind, range: { start, end } };
+
+  $("#md-insert-title").textContent = kind === "image" ? "插入图片" : "插入链接";
+  $("#md-insert-text-label").textContent = kind === "image" ? "图片说明" : "显示文字";
+  $("#md-insert-text").placeholder = kind === "image" ? "例如：驱动器接线示意" : "例如：查看完整维护手册";
+  $("#md-insert-text").value = selectedIsUrl ? "" : selected;
+  $("#md-insert-url").value = selectedIsUrl ? selected : "";
+  $("#md-insert-url").placeholder = kind === "image"
+    ? "https://… 或 /static/图片.png" : "https://…、mailto:… 或以 / 开头的站内路径";
+  $("#md-insert-hint").textContent = kind === "image"
+    ? "图片地址需能被浏览器访问，支持 http(s) 地址或以 / 开头的站内路径。"
+    : "支持 http(s)、mailto 地址，或以 / 开头的站内路径。";
+  $("#md-insert-error").textContent = "";
+  $("#md-insert-file-row").style.display = kind === "image" ? "block" : "none";
+  $("#md-insert-file-hint").textContent = "选择图片后自动上传到知识库并填入地址；也可以直接复制图片，在编辑区按 Ctrl+V 粘贴。";
+  $("#md-insert-mask").classList.add("show");
+  requestAnimationFrame(() => {
+    const target = $("#md-insert-text").value ? $("#md-insert-url") : $("#md-insert-text");
+    target.focus();
+  });
+}
+
+function closeMdInsert() {
+  $("#md-insert-mask").classList.remove("show");
+  $("#md-insert-file").value = "";
+}
+
+function syncInsertFileHint() {
+  $("#md-insert-file-hint").textContent = "选择图片后自动上传到知识库并填入地址；也可以直接复制图片，在编辑区按 Ctrl+V 粘贴。";
+}
+
+function submitMdInsert(event) {
+  event.preventDefault();
+  const kind = mdInsert.kind;
+  const rawUrl = $("#md-insert-url").value.trim();
+  const label = $("#md-insert-text").value.trim().replace(/[\[\]\n]/g, " ");
+  const error = $("#md-insert-error");
+
+  if (!rawUrl) { error.textContent = "请填写地址"; $("#md-insert-url").focus(); return; }
+  if (/\s|[()<>"]/.test(rawUrl)) {
+    error.textContent = "地址不能包含空格、括号或引号";
+    $("#md-insert-url").focus();
+    return;
+  }
+  if (!safeUrl(rawUrl, kind === "image")) {
+    error.textContent = "地址格式不安全，请使用 http(s)、站内路径或 mailto";
+    $("#md-insert-url").focus();
+    return;
+  }
+
+  const title = label || (kind === "image" ? "图片说明" : "链接");
+  const markdown = kind === "image" ? `![${title}](${rawUrl})` : `[${title}](${rawUrl})`;
+  const range = mdInsert.range;
+  closeMdInsert();
+  if (kind === "image") {
+    // 图片按独立块插入，避免直接拼在标题或段落后导致排版混在一起
+    insertBlock(markdown);
+  } else {
+    setEditorSpan(range.start, range.end, markdown, range.start + markdown.length, range.start + markdown.length);
+  }
+}
+
+function runMdCommand(command) {
+  if (command === "bold") wrapInline("**", "**", "粗体文字");
+  else if (command === "italic") wrapInline("*", "*", "斜体文字");
+  else if (command === "inline-code") wrapInline("`", "`", "代码");
+  else if (command === "ul" || command === "ol" || command === "quote") applyLineMarker(command);
+  else if (command === "link") openMdInsert("link");
+  else if (command === "image") openMdInsert("image");
+  else if (command === "doc-ref") openDocRef();
+  else if (command === "codeblock") insertCodeBlock();
+  else if (command === "table") toggleTablePop();
+  else if (command === "hr") insertBlock("---");
+}
+
+/* ---------- 引用文档库文档：选择浮层 + 修改历史 ---------- */
+
+let docRefDocuments = [];
+function docRefPool() {
+  const seen = new Set();
+  return docRefDocuments.filter((d) => {
+    if (!d || !d.id || d.id === editingId || d.status !== "ready" || seen.has(d.id)) return false;
+    seen.add(d.id);
+    return true;
+  });
+}
+
+let docRefRange = { start: 0, end: 0 };
+async function openDocRef() {
+  docRefRange = currentEditorRange();
+  const pop = $("#doc-ref-pop");
+  const search = $("#doc-ref-search");
+  search.value = "";
+  renderDocRefList("");
+  pop.hidden = false;
+  search.focus();
+  $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">正在读取文档…</div>';
+  try {
+    const resp = await fetch("/api/documents");
+    if (!resp.ok) throw new Error("读取失败");
+    const data = await resp.json();
+    docRefDocuments = data.documents || [];
+    renderDocRefList(search.value);
+  } catch {
+    $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">文档读取失败，请关闭后重试</div>';
+  }
+}
+
+function renderDocRefList(kw) {
+  const key = String(kw || "").trim().toLowerCase();
+  const items = docRefPool()
+    .filter((d) => !key || String(d.name || "").toLowerCase().includes(key))
+    .slice(0, 60);
+  $("#doc-ref-list").innerHTML = items.length
+    ? items.map((d) =>
+        `<button type="button" class="doc-pop-item" data-ref-id="${escapeAttr(d.id)}" data-ref-name="${escapeAttr(String(d.name || ""))}">` +
+        `<span>${escapeHtml(String(d.name || "未命名"))}</span>` +
+        `<span class="doc-pop-kind">${d.doc_type === "record" ? "运维记录" : escapeHtml(catName(d.category))}</span></button>`).join("")
+    : '<div class="doc-pop-empty">没有匹配的文档</div>';
+}
+
+$("#doc-ref-search").addEventListener("input", (e) => renderDocRefList(e.target.value));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("#doc-ref-pop").hidden = true;
+});
+$("#doc-ref-close").addEventListener("click", () => { $("#doc-ref-pop").hidden = true; });
+$("#doc-ref-pop").addEventListener("click", (e) => {
+  const item = e.target.closest("[data-ref-id]");
+  if (!item) {
+    if (e.target === $("#doc-ref-pop")) $("#doc-ref-pop").hidden = true;
+    return;
+  }
+  const refId = item.dataset.refId;
+  const refName = item.dataset.refName || "文档";
+  $("#doc-ref-pop").hidden = true;
+  const name = refName.replace(/[\[\]\r\n]/g, " ");
+  const label = name.includes("《") ? name : `《${name}》`;
+  setEditorSpan(docRefRange.start, docRefRange.end, `[${label}](doc-ref://${refId})`);
+  if (editorMode === "preview") {
+    // 重渲染后恢复到新引用后方，继续输入仍在原段落中。
+    const target = mdSrc.selectionEnd;
+    const chip = Array.from(mdPreview.querySelectorAll(".doc-ref")).find((node) => {
+      const offset = Array.from(node.parentNode.childNodes).indexOf(node) + 1;
+      return serializePreview({ node: node.parentNode, offset }).caret === target;
+    });
+    if (chip) {
+      mdPreview.focus();
+      const range = document.createRange();
+      range.setStartAfter(chip);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+});
+
+/* ---------- 修改记录页：全库编辑溯源 ---------- */
+
+async function loadEditsLog() {
+  const box = $("#edits-log");
+  if (!box) return;
+  box.innerHTML = '<div class="muted">读取中…</div>';
+  try {
+    const resp = await fetch("/api/edits");
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "读取失败");
+    const edits = data.edits || [];
+    box.innerHTML = edits.length
+      ? edits.map((it) => {
+          const who = it.editor_name || it.editor || "未知";
+          const name = it.doc_name || "（记录已删除）";
+          return `<div class="edits-row"><span class="edits-action">${escapeHtml(it.action || "修改")}</span>` +
+            `<span class="doc-link" data-pv="${escapeAttr(it.doc_id || "")}" title="点击预览">${escapeHtml(name)}</span>` +
+            `<span class="doc-pop-kind">${it.doc_type === "record" ? "运维记录" : "基础文档"}</span>` +
+            `<span>${escapeHtml(who)}</span>` +
+            `<span class="doc-pop-kind">${escapeHtml(it.edited_at || "")}</span></div>`;
+        }).join("")
+      : '<div class="muted">暂无修改记录（功能上线后的编辑才会追溯）。</div>';
+  } catch (err) {
+    box.innerHTML = `<div class="muted">${escapeHtml(String(err.message || err))}</div>`;
+  }
+}
+
+$("#edits-refresh").addEventListener("click", loadEditsLog);
+
+// 正文预览与来源列表里的文档引用：点击直接打开预览
+document.addEventListener("click", (e) => {
+  const ref = e.target.closest("[data-doc-pv]");
+  if (ref) { openPreview(ref.dataset.docPv); }
+});
+
+function normalizeMdFilename() {
+  let name = mdName.value.trim();
+  if (!name) return "";
+  // 记录名称不带后缀显示；后端默认按 .md 保存
+  if (/\.(?:md|txt)$/i.test(name)) name = name.slice(0, -4).trim();
+  if (mdName.value !== name) mdName.value = name;
+  setEditorTitle();
+  return name;
+}
+
+function renderEditorPreview() {
+  const text = mdSrc.value;
+  if (editorMode === "preview") {
+    mdPreview.innerHTML = text.trim() ? renderMarkdown(text) : "";
+  } else {
+    mdPreview.innerHTML = text.trim() ? renderMarkdown(text) : '<p class="muted">（预览区）</p>';
+  }
+}
+
+/* ---------- 预览模式：渲染结果 ↔ Markdown 互转 ---------- */
+function previewCaretStop() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  if (!mdPreview.contains(range.startContainer)) return null;
+  return { node: range.startContainer, offset: range.startOffset };
+}
+
+function consumeStop(node, st) {
+  if (node.nodeType === 3 && st.stop.offset > 0) st.md += node.data.slice(0, st.stop.offset);
+  st.done = true;
+  st.caret = st.md.length;
+}
+
+function appendInline(node, st) {
+  const children = Array.from(node.childNodes);
+  for (let i = 0; i < children.length; i++) {
+    if (st.done) return;
+    const child = children[i];
+    if (st.stop && st.stop.node === node && i === st.stop.offset) { consumeStop(node, st); return; }
+    if (st.stop && child === st.stop.node) { consumeStop(child, st); return; }
+    if (child.nodeType === 3) { st.md += child.data; continue; }
+    if (child.nodeType !== 1) continue;
+    const tag = child.tagName.toLowerCase();
+    if (tag === "span" && child.classList.contains("doc-ref")) {
+      const refId = child.getAttribute("data-doc-pv") || "";
+      if (refId) { st.md += `[${child.textContent}](${child.getAttribute("data-ref-scheme") || "doc"}://${refId})`; continue; }
+    }
+    if (tag === "br") { st.md += "\n"; continue; }
+    if (tag === "img") {
+      const src = child.getAttribute("src") || "";
+      if (src) st.md += `![${child.getAttribute("alt") || ""}](${src})`;
+      continue;
+    }
+    if (tag === "a") {
+      const href = child.getAttribute("href") || "";
+      const label = (child.textContent || href).replace(/[\[\]\n]/g, " ");
+      st.md += href ? `[${label}](${href})` : label;
+      continue;
+    }
+    if (tag === "code") { st.md += "`" + child.textContent + "`"; continue; }
+    if (tag === "strong" || tag === "b" || tag === "em" || tag === "i" || tag === "del" || tag === "s") {
+      const mark = tag === "strong" || tag === "b" ? "**" : tag === "em" || tag === "i" ? "*" : "~~";
+      st.md += mark;
+      appendInline(child, st);
+      if (!st.done) st.md += mark;
+      continue;
+    }
+    appendInline(child, st);   // span 等未知行内标签展开为内容
+  }
+}
+
+function tableToMarkdown(table, st) {
+  // 光标落在表格内时无法精确映射，按整块处理
+  if (st.stop && !st.done && (st.stop.node === table || table.contains(st.stop.node))) st.stop = null;
+  const cellMd = (cell) => {
+    const one = { md: "", done: false, caret: -1, stop: null };
+    appendInline(cell, one);
+    return one.md.replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|").trim();
+  };
+  const rows = [];
+  const head = table.querySelector("thead");
+  if (head && head.rows.length) rows.push(Array.from(head.rows[0].cells).map(cellMd));
+  const body = table.querySelector("tbody") || table;
+  Array.from(body.rows).forEach((tr) => rows.push(Array.from(tr.cells).map(cellMd)));
+  if (!rows.length) return "";
+  const cols = Math.max(...rows.map((r) => r.length), 1);
+  const norm = rows.map((r) => { while (r.length < cols) r.push(""); return r.slice(0, cols); });
+  const out = ["| " + norm[0].join(" | ") + " |", "| " + Array(cols).fill("---").join(" | ") + " |"];
+  norm.slice(1).forEach((r) => out.push("| " + r.join(" | ") + " |"));
+  return out.join("\n") + "\n\n";
+}
+
+function appendBlocks(container, st, prefix) {
+  const children = Array.from(container.childNodes);
+  for (let i = 0; i < children.length; i++) {
+    if (st.done) return;
+    const child = children[i];
+    if (st.stop && st.stop.node === container && i === st.stop.offset) { consumeStop(container, st); return; }
+    if (st.stop && child === st.stop.node) { consumeStop(child, st); return; }
+    if (child.nodeType === 3) {
+      const text = child.data.replace(/\s+/g, " ").trim();
+      if (text) st.md += prefix + text + "\n\n";
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const tag = child.tagName.toLowerCase();
+    if (/^h[1-6]$/.test(tag)) {
+      st.md += prefix + "#".repeat(Number(tag.slice(1))) + " ";
+      appendInline(child, st);
+      if (!st.done) st.md += "\n\n";
+      continue;
+    }
+    if (tag === "p") {
+      st.md += prefix;
+      const mark = st.md.length;
+      appendInline(child, st);
+      if (!st.done) {
+        const content = st.md.slice(mark).replace(/\s*\n\s*/g, " ").trim();
+        st.md = content ? st.md.slice(0, mark) + content + "\n\n" : st.md.slice(0, mark);
+      }
+      continue;
+    }
+    if (tag === "ul" || tag === "ol") {
+      let index = 0;
+      Array.from(child.children).forEach((li) => {
+        if (st.done || li.tagName.toLowerCase() !== "li") return;
+        index += 1;
+        st.md += prefix + (tag === "ol" ? index + ". " : "- ");
+        appendInline(li, st);
+        if (!st.done) st.md += "\n";
+      });
+      if (!st.done) st.md += "\n";
+      continue;
+    }
+    if (tag === "blockquote") { appendBlocks(child, st, prefix + "> "); continue; }
+    if (tag === "pre") {
+      if (st.stop && !st.done && (st.stop.node === child || child.contains(st.stop.node))) st.stop = null;
+      const code = child.querySelector("code");
+      const lang = ((code && code.className) || "").match(/language-([\w+#.-]+)/);
+      const body = (code || child).textContent.replace(/\n$/, "");
+      st.md += prefix + "```" + (lang ? lang[1] : "") + "\n" + body + "\n```\n\n";
+      continue;
+    }
+    if (tag === "hr") { st.md += prefix + "---\n\n"; continue; }
+    if (tag === "table") {
+      const md = tableToMarkdown(child, st);
+      if (md) st.md += prefix + md;
+      continue;
+    }
+    if (tag === "img") {
+      const src = child.getAttribute("src") || "";
+      if (src) st.md += prefix + `![${child.getAttribute("alt") || ""}](${src})` + "\n\n";
+      continue;
+    }
+    // div / span 等：内部有块级内容就展开，否则按段落处理
+    const hasBlock = child.childElementCount > 0 &&
+      child.querySelector("p,div,ul,ol,table,pre,blockquote,h1,h2,h3,h4,h5,h6,hr");
+    if (hasBlock) { appendBlocks(child, st, prefix); continue; }
+    st.md += prefix;
+    const mark = st.md.length;
+    appendInline(child, st);
+    if (!st.done) {
+      const content = st.md.slice(mark).replace(/\s*\n\s*/g, " ").trim();
+      st.md = content ? st.md.slice(0, mark) + content + "\n\n" : st.md.slice(0, mark);
+    }
+  }
+}
+
+function serializePreview(stop) {
+  const st = { md: "", done: false, caret: -1, stop: stop || null };
+  appendBlocks(mdPreview, st, "");
+  if (st.stop && !st.done) st.caret = st.md.length;   // 表格 / 代码块内无法精确映射时退到末尾
+  return st;
+}
+
+function trimMarkdown(md) {
+  return md.replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
+function syncFromPreview() {
+  const next = trimMarkdown(serializePreview(null).md);
+  if (mdSrc.value === next) return;
+  mdPushUndo({ text: mdSrc.value, start: lastEditorRange.start, end: lastEditorRange.end }, true);
+  mdSrc.value = next;   // 预览输入进行中，不能 focus 打断书写，直接赋值（撤销走自管栈）
+}
+
+/* ---------- 编辑模式 / 图片 / 表格工具 ---------- */
+function focusPreviewEnd() {
+  if (editorMode !== "preview") return;
+  mdPreview.focus();
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(mdPreview);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function applyEditorMode() {
+  const preview = editorMode === "preview";
+  document.querySelectorAll(".md-mode-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mode === editorMode);
+  });
+  document.querySelector(".editor-split").classList.toggle("single", preview);
+  mdPreview.setAttribute("contenteditable", preview ? "true" : "false");
+  mdPreview.spellcheck = false;
+  renderEditorPreview();
+}
+
+async function uploadImageFile(file) {
+  if (file.size > 10 * 1024 * 1024) throw new Error("图片不能超过 10MB");
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch("/api/images", { method: "POST", body: form });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.detail || "上传失败");
+  return data.url;
+}
+
+function insertImageMarkdown(url, alt) {
+  insertBlock(`![${String(alt || "图片").replace(/[\[\]\n]/g, " ")}](${url})`);
+}
+
+async function handleImagePaste(event) {
+  const files = RecordAttachments.clipboardFiles(event.clipboardData);
+  if (files.some((file) => !/^image\//.test(file.type))) {
+    event.preventDefault();
+    recordAttachmentQueue.add(files);
+    return;
+  }
+  const items = Array.from((event.clipboardData && event.clipboardData.items) || []);
+  const imageItem = items.find((it) => it.kind === "file" && /^image\//.test(it.type));
+  if (!imageItem) return;   // 纯文本或富文本粘贴交给浏览器默认处理
+  event.preventDefault();
+  if (!isAdmin) { toast("查询端不支持上传图片"); return; }
+  const file = imageItem.getAsFile();
+  if (!file) return;
+  mdStatus.textContent = "图片上传中…";
+  try {
+    const url = await uploadImageFile(file);
+    insertImageMarkdown(url, file.name.replace(/\.[^.]+$/, ""));
+    mdStatus.textContent = "图片已插入：" + url;
+  } catch (err) {
+    mdStatus.textContent = "";
+    toast("图片上传失败：" + String(err.message || err));
+  }
+}
+
+const tablePop = $("#md-table-pop");
+const tableGrid = $("#md-table-grid");
+
+(function buildTableGrid() {
+  for (let r = 1; r <= 8; r++) {
+    for (let c = 1; c <= 8; c++) {
+      const cell = document.createElement("span");
+      cell.className = "md-table-cell";
+      cell.dataset.r = r;
+      cell.dataset.c = c;
+      cell.addEventListener("mousedown", (event) => event.preventDefault());
+      cell.addEventListener("mouseenter", () => highlightTableGrid(r, c));
+      cell.addEventListener("click", () => { toggleTablePop(false); insertTable(c, r); });
+      tableGrid.appendChild(cell);
+    }
+  }
+})();
+
+function highlightTableGrid(rows, cols) {
+  tableGrid.querySelectorAll(".md-table-cell").forEach((cell) => {
+    cell.classList.toggle("on", Number(cell.dataset.r) <= rows && Number(cell.dataset.c) <= cols);
+  });
+  $("#md-table-size").textContent = `${cols} 列 × ${rows} 行，首行为表头`;
+}
+
+function toggleTablePop(force) {
+  const show = force === undefined ? tablePop.hidden : force;
+  tablePop.hidden = !show;
+  if (show) highlightTableGrid(3, 3);
+}
+
+function insertTable(cols, rows) {
+  const header = ["字段"].concat(Array(Math.max(cols - 1, 0)).fill(""));
+  const lines = [
+    "| " + header.join(" | ") + " |",
+    "| " + Array(cols).fill("---").join(" | ") + " |",
+  ];
+  for (let r = 1; r < rows; r++) lines.push("| " + Array(cols).fill("").join(" | ") + " |");
+  insertBlock(lines.join("\n"), "字段");
+}
+
+function renderTrackingParent() {
+  const card = $("#tracking-parent-card");
+  card.hidden = !trackingParent;
+  $("#tracking-parent-preview").textContent = trackingParent ? trackingParent.name : "";
+}
+
+function clearTracking() {
+  if (trackingParent && !recordAttachmentQueue.prepareContextChange()) return false;
+  const refLine = trackingRefLine();
+  trackingParent = null;
+  // 用户尚未改动正文时，取消追踪顺带移除自动插入的引用行
+  if (refLine && mdSrc.value.startsWith(refLine)) {
+    mdSrc.value = mdSrc.value.slice(refLine.length).replace(/^\s*\n/, "");
+    renderEditorPreview();
+  }
+  renderTrackingParent();
+  setEditorTitle();
+  return true;
+}
+
+function trackingRefLine() {
+  if (!trackingParent) return "";
+  const name = trackingParent.name.includes("《") ? trackingParent.name : `《${trackingParent.name}》`;
+  return `> 参考：[${name}](doc://${trackingParent.id})`;
+}
+
+function startTracking(event) {
+  if (!enterpriseCanWrite(event) || !event.doc_id || event.category === "常识库" || event.doc_type === "doc") return;
+  if (resetEditor() === false) return;
+  trackingParent = { id: event.doc_id, name: event.doc_name || event.brief || "未命名问题" };
+  enterpriseRenderScope("record", { ...event, visibility: "department", shared_department_ids: [] });
+  renderTrackingParent();
+  const category = DOC_CATEGORY_ORDER.includes(event.category) ? event.category : "";
+  const tags = (event.categories || []).filter((t) => t !== "常识库");   // 追踪预填：多标签直接带入
+  const prefill = tags.length ? tags : (category === "常识库" ? [] : [category]);
+  mdPicker.set(prefill);
+  recPicker.set(prefill);
+  if (event.vendor && vendorList.includes(event.vendor)) {
+    mdPicker.setSub("厂商系统", event.vendor);
+    recPicker.setSub("厂商系统", event.vendor);
+  }
+  maybeApplyTemplate();
+  // 追加记录：正文开头自动引用被追加的那份记录（点击可预览）
+  const refLine = trackingRefLine();
+  if (refLine) {
+    tplBase = tplBase ? `${refLine}\n\n${tplBase}` : tplBase;
+    mdPushUndo(mdSnapshot());
+    mdSrc.value = `${refLine}\n\n${mdSrc.value}`;
+    lastEditorRange = { start: 0, end: 0 };
+    renderEditorPreview();
+  }
+  switchTo("editor", { preserveEditor: true });
+  setEditorTitle();
+  $("#tracking-parent-card").scrollIntoView({ block: "nearest" });
+}
+
+$("#tracking-parent-preview").addEventListener("click", () => { if (trackingParent) openPreview(trackingParent.id); });
+$("#tracking-cancel").addEventListener("click", clearTracking);
+
+function setEditorTitle() {
+  $("#editor-title").textContent = editingId ? `编辑处理记录：${mdName.value || "未命名"}` : trackingParent ? "新增问题追踪记录" : "新建运维处理记录";
+  $("#md-save").textContent = editingId ? "保存修改" : "保存并入知识库";
+}
+
+function resetEditor({ force = false } = {}) {
+  if (!recordAttachmentQueue.prepareContextChange({ force })) return false;
+  trackingParent = null;
+  renderTrackingParent();
+  recPicker.set([]);
+  mdPicker.set([]);
+  $("#rec-resolved").value = "unresolved";
+  $("#rec-date").value = todayValue();   // 上传日期默认今天
+  $("#rec-operator").value = currentDisplayName || currentUser || "";
+  editorRequest += 1;
+  editingId = "";
+  editingChunks = 0;
+  mdSrc.value = "";
+  mdResetHistory();   // 新记录从空撤销栈开始，不能撤回上一份记录内容
+  lastEditorRange = { start: 0, end: 0 };
+  tplBase = "";   // 退出模板同步状态
+  tplTitle = "";
+  mdName.value = "";
+  mdTime.value = todayValue();   // 新建默认当天日期
+  mdResolved.value = "unresolved";
+  mdStatus.textContent = "";
+  enterpriseRenderScope("record");
+  $("#md-restored").style.display = "none";
+  renderEditorPreview();
+  setEditorTitle();
+  return true;
+}
+
+async function loadEditable(id) {
+  if (!isAdmin) return;
+  if (!id) { resetEditor(); return; }
+  if (!recordAttachmentQueue.prepareContextChange()) return;
+  clearTracking();
+  const requestId = ++editorRequest;
+  const doc = recDocs.find((d) => d.id === id) || docDocs.find((d) => d.id === id);
+  if (doc && !enterpriseCanWrite(doc)) { toast("没有修改此文档的权限"); return; }
+  enterpriseRenderScope("record", doc, true);
+  editingId = id;
+  editingChunks = doc ? doc.chunks : 0;
+  tplBase = "";   // 编辑已有记录，不参与模板标题同步
+  tplTitle = "";
+  mdName.value = doc ? doc.name : "";
+  mdPicker.set(doc ? docCats(doc).filter((t) => t !== "其他") : []);   // 编辑已有记录：带入全部标签
+  if (doc?.vendor && vendorList.includes(doc.vendor)) mdPicker.setSub("厂商系统", doc.vendor);
+  mdResolved.value = doc ? (doc.resolved || "unresolved") : "unresolved";
+  mdSrc.value = "";
+  mdResetHistory();   // 加载已有记录后从零开始撤销
+  lastEditorRange = { start: 0, end: 0 };
+  mdStatus.textContent = "读取原文中…";
+  $("#md-restored").style.display = "none";
+  renderEditorPreview();
+  setEditorTitle();
+  try {
+    const resp = await fetch("/api/documents/" + encodeURIComponent(id) + "/source");
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "读取失败");
+    if (requestId !== editorRequest) return;
+    mdSrc.value = typeof data.content === "string" ? data.content : "";
+    mdResetHistory();   // 回填内容后撤销栈从零开始
+    mdTime.value = timeToInput(mdSrc.value) || todayValue();   // 回填记录里的时间
+    lastEditorRange = { start: 0, end: 0 };
+    mdName.value = data.name;
+    recordAttachmentQueue.bind({ id, name: data.name });
+    mdStatus.textContent = "";
+    $("#md-restored").style.display = data.restored ? "block" : "none";
+    renderEditorPreview();
+    setEditorTitle();
+  } catch (err) {
+    if (requestId === editorRequest) mdStatus.textContent = String(err.message || err);
+  }
+}
+
+async function loadRecordList() {
+  if (!isAdmin) return;
+  try {
+    const resp = await fetch("/api/documents?doc_type=record");
+    const data = await resp.json();
+    recDocs = data.documents || [];
+  } catch {
+    return;
+  }
+  if (editingId && !recDocs.some((d) => d.id === editingId) && !docDocs.some((d) => d.id === editingId)) resetEditor();
+  renderRecList();
+}
+
+let recCatFilter = "";
+const recCatFilterBox = $("#rec-cat-filter");
+
+function renderRecCatFilter() {
+  if (!recCatFilterBox) return;
+  const counts = new Map();
+  recDocs.forEach((d) => {
+    for (const name of docCats(d)) counts.set(name, (counts.get(name) || 0) + 1);   // 多标签逐个计数
+  });
+  const chips = [{ name: "", label: "全部", count: recDocs.length }].concat(
+    [...DOC_CATEGORY_ORDER, ...[...counts.keys()].filter((name) => !DOC_CATEGORY_ORDER.includes(name))].filter((n) => counts.get(n)).map((n) => ({ name: n, label: n, count: counts.get(n) }))
+  );
+  recCatFilterBox.innerHTML = chips.map((chip) => {
+    const active = (chip.name || "") === recCatFilter;
+    return `<button type="button" class="cat-chip${active ? " active" : ""}" data-rec-cat-filter="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
+  }).join("");
+}
+
+function renderRecList() {
+  renderRecCatFilter();
+  const rows = $("#rec-rows");
+  if (!rows) return;
+  const docs = recCatFilter ? recDocs.filter((d) => docCats(d).includes(recCatFilter)) : recDocs;
+  if (!docs.length) {
+    rows.innerHTML = `<tr><td colspan="7" class="muted">${recCatFilter
+      ? `「${escapeHtml(recCatFilter)}」分类下暂无运维问题记录`
+      : "暂无运维问题记录：在「运维处理问题上传」页上传记录文件或在线写入处理记录"}</td></tr>`;
+    return;
+  }
+  rows.innerHTML = docs.map(docRowHtml).join("");
+}
+
+recCatFilterBox.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-rec-cat-filter]");
+  if (!chip) return;
+  const value = chip.dataset.recCatFilter || "";
+  recCatFilter = value === recCatFilter ? "" : value;   // 再点一次取消筛选
+  renderRecList();
+});
+
+const recRows = $("#rec-rows");
+bindDocTable(recRows, loadRecordList);
+
+// 本地文件的修改时间（File.lastModified），格式化为 YYYY-MM-DD HH:MM:SS 供后端作为上传时间
+function fileTimeValue(file) {
+  try {
+    const d = new Date(Number(file.lastModified || 0));
+    if (!Number(file.lastModified) || isNaN(d.getTime())) return "";
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  } catch { return ""; }
+}
+
+const recordAttachmentQueue = RecordAttachments.mount({
+  root: $("#record-attachments"),
+  canAdd: () => isAdmin,
+  notify: toast,
+  onUploaded: (result, target) => {
+    if (result.count) toast(`已向《${target.name}》添加 ${result.count} 个附件`);
+    loadRecordList();
+  },
+});
+
+// 保存记录后才绑定附件；失败保留队列与目标记录，重试不会重新创建记录。
+async function uploadRecordAttachments(doc) {
+  if (!doc?.id || !recordAttachmentQueue.entries.length) return "";
+  recordAttachmentQueue.bind(doc);
+  const result = await recordAttachmentQueue.upload();
+  return result.count ? `，附件 ${result.count} 个` : "";
+}
+
+async function uploadRecordFiles(files) {
+  files = Array.from(files || []);
+  if (!isAdmin || !files.length) return;
+  if (recordAttachmentQueue.saving || recordAttachmentQueue.busy) { toast("正在保存记录或附件，请稍候"); return; }
+  if (recordAttachmentQueue.target && recordAttachmentQueue.entries.length) {
+    toast("当前附件已关联已保存的记录，请先上传或清空附件，再新建记录");
+    return;
+  }
+  if (editingId) { toast("当前正在编辑已有记录，请先进入新建记录再上传文件"); return; }
+  const status = $("#rec-upload-status");
+  const parentId = trackingParent?.id || "";
+  const requestVersion = editorRequest;
+  let succeeded = 0;
+  let firstSavedDoc = null;
+  let attachmentFailed = false;
+  recordAttachmentQueue.saving = true;
+  try {
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    status.textContent = `分析并入库 ${i + 1}/${files.length}：${f.name}`;
+    const form = new FormData();
+    form.append("file", f);
+    form.append("file_time", fileTimeValue(f));
+    form.append("doc_type", "record");
+    try { enterpriseAppendScope(form, "record"); } catch (error) { toast(error.message); return; }
+    const cats = recPicker.selected();
+    const vendor = recPicker.subValue("厂商系统");
+    const date = $("#rec-date").value;
+    const missingSub = cats.find((c) => CATEGORY_SUBS[c]?.required && !recPicker.subValue(c));
+    if (missingSub) {
+      status.textContent = "";
+      toast(`问题类型为「${missingSub}」时请先选择${CATEGORY_SUBS[missingSub].label}`);
+      return;
+    }
+    if (cats.length) form.append("categories", cats.join("|"));
+    if (vendor) form.append("vendor", vendor);
+    if (date) form.append("date", date);
+    form.append("resolved", $("#rec-resolved").value);
+    form.append("operator_name", $("#rec-operator").value.trim());
+    if (parentId) form.append("parent_id", parentId);
+    try {
+      const resp = await fetch("/api/documents", { method: "POST", body: form });
+      const data = await resp.json();
+      if (!resp.ok) toast(`${f.name}：${data.detail || "上传失败"}`);
+      else if (data.duplicated) toast(`${f.name}：内容重复，已跳过`);
+      else {
+        succeeded += 1;
+        firstSavedDoc = firstSavedDoc || data.doc;
+        toast(`运维记录已入库：${f.name}，${data.doc.chunks} 个检索单元`);
+      }
+    } catch {
+      toast(`${f.name}：网络异常`);
+    }
+  }
+  if (succeeded) {
+    try {
+      const attachNote = await uploadRecordAttachments(firstSavedDoc);
+      if (attachNote) toast(`附件已挂到第一条成功入库的记录《${firstSavedDoc.name}》${attachNote}`);
+    } catch (error) {
+      attachmentFailed = true;
+      toast("记录已保存，附件上传失败。请在附件区域直接重试");
+    }
+  }
+  status.textContent = attachmentFailed ? "记录已入库，附件待重试" : "上传完成";
+  if (!attachmentFailed && !recordAttachmentQueue.entries.length && succeeded === files.length && parentId && trackingParent?.id === parentId && editorRequest === requestVersion) resetEditor({ force: true });
+  loadRecordList();
+  refreshTimelineIfVisible();
+  } finally {
+    recordAttachmentQueue.saving = false;
+    recordAttachmentQueue.changed();
+  }
+}
+
+const recDrop = $("#rec-drop");
+const recFile = $("#rec-file");
+$("#rec-date").value = todayValue();   // 上传文件的日期默认当前时间，可手改
+recDrop.addEventListener("click", () => recFile.click());
+recFile.addEventListener("change", () => { uploadRecordFiles(recFile.files); recFile.value = ""; });
+["dragenter", "dragover"].forEach((ev) => recDrop.addEventListener(ev, (e) => { e.preventDefault(); recDrop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => recDrop.addEventListener(ev, (e) => { e.preventDefault(); recDrop.classList.remove("over"); }));
+recDrop.addEventListener("drop", (e) => uploadRecordFiles(e.dataTransfer.files));
+
+mdSrc.addEventListener("beforeinput", (event) => {
+  const type = event.inputType || "";
+  const typing = type.startsWith("insert") || type.startsWith("delete");
+  mdPushUndo(mdSnapshot(), typing);   // 打字合并为一条撤销记录，命令逐条记录
+});
+["click", "keyup", "mouseup", "select", "blur"].forEach((event) => mdSrc.addEventListener(event, syncEditorRange));
+function syncTitleToBody() {
+  // 正文仍是未编辑的模板时，标题跟随记录名称；一旦用户改过正文即不再同步
+  if (!tplBase) return;
+  const title = mdName.value.trim();
+  if (mdSrc.value === withTitle(tplBase, tplTitle)) {
+    replaceEditorText(withTitle(tplBase, title));
+    renderEditorPreview();
+  }
+  tplTitle = title;
+}
+
+mdName.addEventListener("input", (event) => {
+  setEditorTitle();
+  if (event.isComposing) return;   // 输入法组合中不同步，等 compositionend 一次性写入
+  syncTitleToBody();
+});
+mdName.addEventListener("compositionend", syncTitleToBody);
+mdName.addEventListener("blur", normalizeMdFilename);
+
+document.querySelectorAll("[data-md]").forEach((button) => {
+  button.addEventListener("mousedown", (event) => event.preventDefault());
+  button.addEventListener("click", () => runMdCommand(button.dataset.md));
+});
+
+$("#md-heading").addEventListener("change", (event) => {
+  const level = Number(event.target.value);
+  if (event.target.value !== "") applyHeading(level);
+  event.target.value = "";
+});
+
+mdSrc.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const key = event.key.toLowerCase();
+  if (key === "b") { event.preventDefault(); runMdCommand("bold"); }
+  else if (key === "i") { event.preventDefault(); runMdCommand("italic"); }
+  else if (key === "k") { event.preventDefault(); runMdCommand("link"); }
+});
+
+// 撤销 / 恢复统一接管（源码输入框与预览编辑区都生效）：
+// 浏览器原生撤销栈会被程序化写回破坏，这里走编辑器自管的撤销栈
+[mdSrc, mdPreview].forEach((el) => el.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing) return;
+  const key = event.key.toLowerCase();
+  if (key !== "z" && key !== "y") return;
+  event.preventDefault();
+  if (key === "y" || event.shiftKey) mdRedo();
+  else mdUndo();
+}));
+
+$("#md-insert-form").addEventListener("submit", submitMdInsert);
+$("#md-insert-close").addEventListener("click", closeMdInsert);
+$("#md-insert-cancel").addEventListener("click", closeMdInsert);
+$("#md-insert-mask").addEventListener("click", (event) => {
+  if (event.target === $("#md-insert-mask")) closeMdInsert();
+});
+
+// 预览模式下直接书写：每次输入把渲染结果序列化回 Markdown（不重绘，避免光标跳动）
+mdPreview.addEventListener("input", syncFromPreview);
+mdPreview.addEventListener("blur", syncFromPreview);
+mdSrc.addEventListener("paste", handleImagePaste);
+mdPreview.addEventListener("paste", handleImagePaste);
+
+document.querySelectorAll(".md-mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (editorMode === btn.dataset.mode) return;
+    if (editorMode === "preview") syncFromPreview();   // 离开预览前同步一次
+    editorMode = btn.dataset.mode;
+    applyEditorMode();
+    if (editorMode === "source") mdSrc.focus();
+  });
+});
+
+$("#md-insert-file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  const error = $("#md-insert-error");
+  error.textContent = "";
+  if (!isAdmin) { error.textContent = "查询端不支持上传图片"; return; }
+  $("#md-insert-file-hint").textContent = "上传中…";
+  try {
+    const url = await uploadImageFile(file);
+    $("#md-insert-url").value = url;
+    if (!$("#md-insert-text").value.trim()) {
+      $("#md-insert-text").value = file.name.replace(/\.[^.]+$/, "");
+    }
+    $("#md-insert-file-hint").textContent = `已上传 ${file.name}，点击「插入」完成`;
+  } catch (err) {
+    syncInsertFileHint();
+    error.textContent = "上传失败：" + String(err.message || err);
+  }
+});
+
+// 表格行列面板：点击外部或按 Esc 关闭
+document.addEventListener("click", (event) => {
+  if (!tablePop.hidden && !event.target.closest(".md-table-wrap")) toggleTablePop(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !tablePop.hidden) toggleTablePop(false);
+});
+
+applyEditorMode();
+
+$("#md-save").addEventListener("click", async () => {
+  if (!isAdmin || recordAttachmentQueue.saving || recordAttachmentQueue.busy) return;
+  if (recordAttachmentQueue.target && recordAttachmentQueue.entries.length && recordAttachmentQueue.target.id !== editingId) {
+    toast("附件已关联已保存的记录，请在附件区域完成上传或清空后再新建记录");
+    return;
+  }
+  if (editorMode === "preview") syncFromPreview();   // 预览模式下先取最新序列化结果
+  const content = mdSrc.value;
+  if (!content.trim()) { toast("内容为空，未保存"); return; }
+  const mdCats = mdPicker.selected();
+  const mdVendorValue = mdPicker.subValue("厂商系统");
+  const missingSub = mdCats.find((c) => CATEGORY_SUBS[c]?.required && !mdPicker.subValue(c));
+  if (missingSub) {
+    toast(`问题类型为「${missingSub}」时必须选择${CATEGORY_SUBS[missingSub].label}`);
+    return;
+  }
+  const filename = normalizeMdFilename();
+  const btn = $("#md-save");
+  btn.disabled = true;
+  recordAttachmentQueue.saving = true;
+  mdStatus.textContent = "保存中…";
+  try {
+    const url = editingId ? "/api/documents/" + encodeURIComponent(editingId) : "/api/documents/markdown";
+    const resp = await fetch(url, {
+      method: editingId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, filename, categories: mdCats.join("|"), vendor: mdVendorValue, resolved: mdResolved.value,
+        ...(editingId ? {} : { ...enterpriseScope("record"), uploaded_by_name: $("#rec-operator").value.trim(), parent_id: trackingParent?.id || "" }) }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "保存失败");
+    if (data.duplicated) {
+      toast(`内容与已有文档《${data.doc.name}》完全相同，未重复入库`);
+      mdStatus.textContent = "内容重复，已跳过";
+      return;
+    }
+    const action = data.created ? "已新建" : "已更新";
+    const category = catName(data.doc.category);
+    const savedName = data.doc.name;
+    const savedChunks = data.doc.chunks;
+    // 先记住已创建的记录。即使附件失败，再次保存也只更新该记录。
+    editingId = data.doc.id;
+    editingChunks = savedChunks;
+    trackingParent = null;
+    renderTrackingParent();
+    enterpriseRenderScope("record", data.doc, true);
+    setEditorTitle();
+    let attachNote = "";
+    try {
+      attachNote = await uploadRecordAttachments(data.doc);
+    } catch (error) {
+      mdStatus.textContent = "记录已保存；附件尚未上传，请在附件区域重试";
+      toast(`《${savedName}》已保存，附件上传失败，请直接重试附件`);
+      loadDocuments(); loadRecordList(); refreshTimelineIfVisible();
+      return;
+    }
+    if (!recordAttachmentQueue.entries.length) resetEditor({ force: true });
+    mdStatus.textContent = `${action}：${savedChunks} 个分块，分类「${category}」${attachNote}，索引已重建`;
+    toast(`${action}《${savedName}》，${savedChunks} 个分块 · ${category}`);
+    loadDocuments();
+    loadRecordList();
+    refreshTimelineIfVisible();
+  } catch (err) {
+    mdStatus.textContent = String(err.message || err);
+    toast("保存失败：" + String(err.message || err));
+  } finally {
+    btn.disabled = false;
+    recordAttachmentQueue.saving = false;
+    recordAttachmentQueue.changed();
+  }
+});
+
+async function uploadFiles(files) {
+  if (!isAdmin || !files.length) return;
+  const status = $("#upload-status");
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    status.textContent = `分析并上传 ${i + 1}/${files.length}：${f.name}`;
+    const form = new FormData();
+    form.append("file", f);
+    form.append("file_time", fileTimeValue(f));
+    try {
+      enterpriseAppendScope(form, "doc");
+      // 文档即常识库：统一按「常识库」分类入库，文档管理页可预览 / 下载 / 删除
+      const resp = await fetch("/api/knowledge", { method: "POST", body: form });
+      const data = await resp.json();
+      if (!resp.ok) toast(`${f.name}：${data.detail || "上传失败"}`);
+      else if (data.duplicated) toast(`${f.name}：内容重复，已跳过`);
+      else toast(`已入库：${f.name}，${data.doc.chunks} 个检索单元（常识库）`);
+    } catch {
+      toast(`${f.name}：网络异常`);
+    }
+  }
+  status.textContent = "上传完成";
+  loadDocuments();
+  refreshTimelineIfVisible();
+}
+
+function startReplace(id) {
+  if (!isAdmin) return;
+  replaceTargetId = id;
+  const input = $("#replace-file");
+  input.value = "";
+  input.click();
+}
+
+$("#replace-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  const doc = docDocs.find((d) => d.id === replaceTargetId) || recDocs.find((d) => d.id === replaceTargetId);
+  if (!isAdmin || !file || !doc) return;
+  const form = new FormData();
+  form.append("file", file);
+  $("#upload-status").textContent = `正在分析并替换《${doc.name}》…`;
+  try {
+    const resp = await fetch("/api/documents/" + encodeURIComponent(doc.id) + "/replace", {
+      method: "PUT", body: form,
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "替换失败");
+    toast(`已替换《${data.doc.name}》，重新生成 ${data.doc.chunks} 个检索单元 · ${catName(data.doc.category)}`);
+    await loadDocuments();
+    refreshTimelineIfVisible();
+  } catch (err) {
+    toast("替换失败：" + String(err.message || err));
+  } finally {
+    $("#upload-status").textContent = "";
+    replaceTargetId = "";
+    e.target.value = "";
+  }
+});
+
+const drop = $("#drop");
+const fileInput = $("#file");
+drop.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => { uploadFiles(fileInput.files); fileInput.value = ""; });
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files));
+
+$("#rebuild").addEventListener("click", async () => {
+  if (!isSuperAdmin) return;
+  const btn = $("#rebuild");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/documents/rebuild", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "重建失败");
+    toast(`已重建：${data.chunks} 个分块 / ${data.documents} 份文档`);
+    loadDocuments();
+  } catch (err) { toast(String(err.message || err)); }
+  finally { btn.disabled = false; }
+});
+
+async function initPage() {
+  try {
+    const resp = await fetch("/api/mode");
+    if (!resp.ok) throw new Error("无法读取账号状态");
+    const data = await resp.json();
+    portal = data.portal || (data.admin ? "admin" : "search");
+    authEnabled = data.auth === true;
+    const authenticated = data.authenticated === true || data.admin === true;
+    if (!authenticated) { window.location.replace("/login"); return; }
+    isAdmin = portal === "admin" && data.can_write === true;
+    isSuperAdmin = portal === "admin" && data.role === "admin";
+    isAccountAdmin = portal === "admin" && data.can_manage_users === true;
+    applyRoleVisibility();
+    loadTopQuestions();
+    currentUser = String(data.account || data.user || "");
+    currentDisplayName = String(data.display_name || data.username || currentUser);
+    if (data.must_change_password === true) { window.location.replace("/change-password"); return; }
+    await enterpriseInitialize(data);
+  } catch {
+    $("#stats").textContent = "无法读取企业权限信息，请刷新重试";
+    return;
+  }
+  document.body.classList.toggle("search-mode", portal === "search");
+  document.body.classList.toggle("admin-portal", portal === "admin");
+  document.body.classList.toggle("admin-mode", isAdmin);
+  document.body.classList.toggle("account-admin", isAccountAdmin);
+  $("#account-summary").hidden = !currentUser;
+  const readableUser = currentDisplayName && currentDisplayName !== currentUser ? `${currentDisplayName}（${currentUser}）` : currentUser;
+  $("#current-user").textContent = readableUser;
+  $("#current-user").title = readableUser;
+  $("#current-role").textContent = enterpriseIdentity?.role === "admin" ? "平台管理员" : isAccountAdmin ? "部门管理员" : isAdmin ? "文档编辑者" : "只读成员";
+  $("#upload-account").textContent = readableUser || "—";
+  const operatorInput = $("#rec-operator");
+  if (operatorInput && !operatorInput.value) operatorInput.value = currentDisplayName || currentUser || "";
+  $("#change-password-link").hidden = !currentUser;
+  const badge = $("#mode-badge");
+  badge.textContent = "退出登录";
+  badge.className = "mode-badge " + (isAdmin ? "admin" : "search");
+  badge.title = "退出当前账号";
+  $("#docs-tab-btn").textContent = portal === "search" ? "文档检索" : "文档管理";
+  await loadCategories();   // 问题类型清单：内置 + 后台自定义，选择窗体用
+  await loadDocuments();
+  sendBtn.disabled = false;
+  if (isAdmin) {
+    await loadVendors();
+    await loadTemplates();
+    syncTplEditor();
+    renderVendorList();
+    const restored = lastTab();
+    // 只恢复当前账号有权使用的页签。
+    switchTo(canAccessTab(restored) ? restored : "chat");
+  } else { switchTo(PUBLIC_TABS.includes(lastTab()) ? lastTab() : "chat"); }
+}
+
+document.querySelectorAll("#drop, #rec-drop").forEach((area) => {
+  area.tabIndex = 0;
+  area.setAttribute("role", "button");
+  area.setAttribute("aria-label", "选择要上传的文档，也可拖入文件");
+  area.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); area.click(); }
+  });
+});
+
+initPage();

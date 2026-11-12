@@ -55,7 +55,8 @@ class BM25Index:
         df = self._df.get(term, 0)
         return math.log(1 + (n - df + 0.5) / (df + 0.5))
 
-    def search(self, question: str, top_k: int = 6) -> list[ScoredChunk]:
+    def search(self, question: str, top_k: int = 6,
+               allowed_doc_ids: set[str] | None = None) -> list[ScoredChunk]:
         if not self.chunks:
             return []
         # 覆盖率按 idf 加权，而不是简单计数：「检测」这类通用词 idf 很低，单独命中不等于 100% 覆盖；
@@ -70,6 +71,9 @@ class BM25Index:
 
         results: list[ScoredChunk] = []
         for i, tf in enumerate(self._tf):
+            # 在候选评分及 top-k 之前限定范围，不能先取全库前几条再删掉无权记录。
+            if allowed_doc_ids is not None and self.chunks[i].doc_id not in allowed_doc_ids:
+                continue
             matched = [t for t in terms if t in tf]
             if not matched:
                 continue

@@ -1,9 +1,9 @@
-"""管理端登录：内存会话 + 账号体系（MongoDB users 集合）。
+"""企业登录：MongoDB 持久化会话与账号体系。
 
-- 会话：登录成功后发放随机 token，写入 HttpOnly cookie，服务重启即全部失效。
-- 账号：pbkdf2 加盐哈希存储，管理端始终验证登录；角色实时从数据库读取。
+- 会话：随机 token 写入 HttpOnly cookie，数据库只存令牌哈希，支持两个端口共享会话。
+- 账号：pbkdf2 加盐哈希存储，两端始终验证登录；部门和角色实时从数据库读取。
 - admin 可注册普通 user；首次未配置管理员密码时生成本机初始化凭据文件。
-查询端不挂 auth_router，不受影响。
+本进程保留内存缓存供受控测试使用，实际请求以数据库会话为准。
 """
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ import secrets
 import threading
 import time
 import unicodedata
+from datetime import datetime, timezone
+from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
@@ -30,6 +32,15 @@ _ACCOUNT = re.compile(r"[a-z][a-z0-9_.-]{0,31}\Z")
 _DISPLAY_NAME = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9][\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_.-]{0,31}\Z")
 
 
+def _session_collection():
+    db = mongo.db()
+    return db.auth_sessions if isinstance(db, Database) else None
+
+
+def _token_id(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def create_session(username: str = "", password_version: int = 0) -> str:
     """签发新会话 token，并顺手清掉已过期的旧会话。"""
     token = secrets.token_hex(24)
@@ -38,6 +49,11 @@ def create_session(username: str = "", password_version: int = 0) -> str:
         for expired in [t for t, s in _sessions.items() if s["expires"] < now]:
             _sessions.pop(expired, None)
         _sessions[token] = {"expires": now + SESSION_TTL, "user": username, "password_version": password_version}
+    collection = _session_collection()
+    if collection is not None:
+        collection.create_index("expire_at", expireAfterSeconds=0)
+        collection.insert_one({"_id": _token_id(token), **_sessions[token],
+                               "expire_at": datetime.fromtimestamp(now + SESSION_TTL, timezone.utc)})
     return token
 
 
@@ -49,6 +65,12 @@ def verify(token: str | None) -> bool:
 def _active_session(token: str | None) -> dict | None:
     if not token:
         return None
+    collection = _session_collection()
+    if collection is not None:
+        row = collection.find_one({"_id": _token_id(token)})
+        if row is None or row["expires"] < time.time():
+            return None
+        return row
     with _lock:
         session = _sessions.get(token)
         if session is None:
@@ -61,6 +83,9 @@ def _active_session(token: str | None) -> dict | None:
 
 def revoke(token: str | None) -> None:
     if token:
+        collection = _session_collection()
+        if collection is not None:
+            collection.delete_one({"_id": _token_id(token)})
         with _lock:
             _sessions.pop(token, None)
 
@@ -112,8 +137,13 @@ def _row_identity(row: dict) -> dict:
             {"_id": username, "password_hash": row.get("password_hash"), "must_change_password": None},
             {"$set": {"must_change_password": must_change}},
         )
+    departments = list(row.get("department_ids", ["operations"]))
+    roles = row.get("department_roles", {"operations": "editor"} if "department_ids" not in row else {})
+    roles = {key: value for key, value in roles.items()
+             if key in departments and value in {"admin", "editor", "member"}}
     return {"username": username, "role": role, "must_change_password": bool(must_change),
-            "display_name": row.get("display_name") or username, "password_version": _password_version(row)}
+            "display_name": row.get("display_name") or username, "password_version": _password_version(row),
+            "department_ids": departments, "department_roles": roles}
 
 
 # ---------- 账号体系 ----------
@@ -161,12 +191,15 @@ def _user_document(username: str, password: str, role: str, display_name: str | 
             "login_names": sorted({_login_name(username), _login_name(display_name or username)})}
 
 
-def create_user(username: str, password: str = "", role: str = "user", *, display_name: str | None = None) -> None:
+def create_user(username: str, password: str = "", role: str = "user", *, display_name: str | None = None,
+                department_ids: list[str] | None = None, department_roles: dict[str, str] | None = None) -> None:
     """仅创建账号，重名由数据库唯一主键拒绝，绝不重置已有密码。"""
     if role not in {"admin", "user"}:
         raise ValueError("无效的账号角色")
     users = mongo.db().users
     document = _user_document(username, password, role, display_name)
+    document["department_ids"] = department_ids if department_ids is not None else ["operations"]
+    document["department_roles"] = department_roles if department_roles is not None else {"operations": "editor"}
     _ensure_login_names_available(users, document)
     users.insert_one(document)
 
@@ -295,6 +328,11 @@ def delete_user(username: str) -> None:
     if row.get("role") == "admin":
         raise ValueError("管理员账号不可删除")
     users.delete_one({"_id": username})
+    collection = _session_collection()
+    if collection is not None:
+        collection.delete_many({"user": username})
+        mongo.db().chat_sessions.delete_many({"user": username})
+        database.bump_access_revision()
     with _lock:
         for token in [token for token, session in _sessions.items() if session.get("user") == username]:
             _sessions.pop(token, None)
