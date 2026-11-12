@@ -750,7 +750,7 @@ function renderAnswerOrigin(data) {
 }
 
 function renderSourceMetrics(source) {
-  if (source.kind === "web" || source.scoring_method === "web") return "";
+  if (source.kind === "web" || ["web", "reference"].includes(source.scoring_method)) return "";
   if (source.scoring_method === "context") {
     return '<div class="source-metrics"><span class="source-metric context" title="该片段用于补全台账上下文，未单独参与检索评分。">台账上下文（未单独评分）</span></div>';
   }
@@ -794,19 +794,19 @@ function renderSources(sources) {
     const uploadDay = String(s.uploaded_at || "").slice(0, 10);   // 年月日
     return `<div class="source">
       <button type="button" class="who source-name" data-src-pv="${id}" title="点击预览">${name}</button>
-      <span class="source-kind">知识库</span>
+      <span class="source-kind">${s.scoring_method === "reference" ? "引用文档" : "知识库"}</span>
       <span class="where">${escapeHtml(String(s.location || "全文"))}</span>
       ${uploadDay ? `<span class="where" title="来源文档上传时间">${uploadDay}</span>` : ""}
       ${renderSourceMetrics(s)}
       ${s.summary ? `<div class="sum">摘要：${escapeHtml(String(s.summary).split("\n")[0])}</div>` : ""}
-      <div class="snip">${snippet}</div>
+      ${snippet ? `<div class="snip">${snippet}</div>` : ""}
     </div>`;
   }).join("");
   return `<details class="sources"><summary>查看参考来源（${sources.length}）</summary>${items}</details>`;
 }
 
 // 来源条目「预览 / 下载」：复用文档管理页的预览弹窗与下载逻辑
-log.addEventListener("click", (e) => {
+document.addEventListener("click", (e) => {
   const pv = e.target.closest("[data-src-pv]");
   if (pv) { openPreview(pv.dataset.srcPv); return; }
   const dl = e.target.closest("[data-src-dl]");
@@ -819,13 +819,15 @@ function renderChatAnswer(bubble, data, question, started, rejected = []) {
   const cat = data.category ? `<div class="muted" style="font-size:12px;margin-bottom:6px">已解析模块：${escapeHtml(data.category)}</div>` : "";
   const seconds = (performance.now() - started) / 1000;
   const elapsed = `<div class="answer-elapsed">耗时 ${seconds < 1 ? seconds.toFixed(2) : seconds.toFixed(1)} 秒</div>`;
-  const kbDocs = [...new Set((data.sources || []).map((s) => String(s.doc_id || "")).filter(Boolean))];
+  const kbDocs = [...new Set((data.sources || [])
+    .filter((s) => s.kind !== "web" && !["web", "reference"].includes(s.scoring_method))
+    .map((s) => String(s.doc_id || "")).filter(Boolean))];
   let reAsk = "";
   if (kbDocs.length && data.status !== "guide") {
     bubble.dataset.question = question;
     bubble.dataset.reject = JSON.stringify(rejected);
     bubble.dataset.kbdocs = JSON.stringify(kbDocs);
-    reAsk = `<div class="re-ask"><button class="ghost" type="button" data-reask title="把以上来源计入惩罚参数并重新检索：本次排除这些文档，后续提问也会降低它们的权重">答案不对？排除以上来源重新回答</button></div>`;
+    reAsk = `<div class="re-ask"><button class="ghost" type="button" data-reask title="把命中来源计入惩罚参数并重新检索：本次排除直接命中的文档，后续提问也会降低它们的权重">答案不对？排除命中来源重新回答</button></div>`;
   }
   bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + renderMarkdown(data.answer) + renderSources(data.sources) + elapsed + reAsk;
 }
@@ -943,7 +945,7 @@ async function ask(question, userLabel) {
         answer: String(data.answer || ""),
         origin: data.answer_origin || "",
         solution_found: data.solution_found === true,
-        sources: (data.sources || []).slice(0, 3),
+        sources: data.sources || [],
         time: Date.now(),
       });
     }

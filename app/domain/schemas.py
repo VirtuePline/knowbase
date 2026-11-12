@@ -33,7 +33,7 @@ class Chunk:
     table: list[list[str]] | None = None
     summary: str = ""
     category: str = ""          # 所属文档分类，随分块保存，便于后续按分类过滤检索
-    references: list[str] = field(default_factory=list)  # 仅供命中后的模型分析，不参与评分
+    references: list[str] = field(default_factory=list)  # 命中后补充来源与模型材料，不参与评分
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,7 +91,7 @@ class SourceRef:
     summary: str = ""
     kind: str = "knowledge_base"  # "knowledge_base" | "web"
     url: str = ""                # 联网参考的原始 HTTP(S) 地址
-    scoring_method: str = ""       # rrf / web / context；空表示旧来源未注明
+    scoring_method: str = ""       # rrf / web / context / reference；空表示旧来源未注明
     uploaded_at: str = ""          # 来源文档的上传时间（YYYY-MM-DD HH:MM:SS）；展示取年月日
     rrf_score: float | None = None
     keyword_coverage: float | None = None

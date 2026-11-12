@@ -73,6 +73,8 @@ class InlineReferencesTest(unittest.TestCase):
     def test_only_model_path_expands_references_after_retrieval(self):
         config = replace(service.settings, llm_api_key="test-key")
         with patch.object(service, "settings", config), \
+                patch.object(service, "uploaded_dates", return_value={}), \
+                patch.object(references.database, "get", return_value=None), \
                 patch.object(service, "_top_hits", return_value=[hit(["manual"])]) as search, \
                 patch.object(service, "extract_solutions", return_value=[]), \
                 patch.object(service, "append_references", return_value="【记录 1】补充材料") as expand, \

@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.config import settings
 from app.core.answer.context import is_stats_question, render_excerpts, render_hits, source_snippet, table_to_markdown
 from app.core.answer.solutions import extract_solutions, render_solutions
-from app.core.answer.references import append_references
+from app.core.answer.references import append_references, reference_sources
 from app.core.ingest.chunker import is_title_row
 from app.core.retrieval.relevance import filter_fault_hits
 from app.core.llm.client import (
@@ -41,7 +41,7 @@ def _source_metrics(hit: ScoredChunk | None) -> dict:
 
 def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
     uploads = uploaded_dates([hit.chunk.doc_id for hit in hits])
-    return [
+    sources = [
         SourceRef(
             doc_id=hit.chunk.doc_id,
             doc_name=hit.chunk.doc_name,
@@ -55,6 +55,7 @@ def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
         )
         for hit in hits
     ]
+    return sources + reference_sources(hits, sources)
 
 
 # 统计类问题单次交给模型的台账行数上限；超出截断并在提示与说明中注明
@@ -127,6 +128,7 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
         table=chunk.table, summary=chunk.summary,
         **_source_metrics(scored_by_id.get(chunk.id)),
     ) for chunk in peers]
+    sources.extend(reference_sources([anchor], sources))
     return AnswerResponse(
         status="ok", answer=reply, category=category, sources=sources,
         llm_used=True, answer_origin="knowledge_base", solution_found=False,

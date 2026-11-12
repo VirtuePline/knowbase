@@ -1,9 +1,39 @@
-"""检索完成后按引用关系读取补充材料；不召回、不评分、不递归展开。"""
+"""检索完成后按引用关系补充来源与模型材料；不召回、不评分、不递归展开。"""
+from pymongo.errors import PyMongoError
+
 from app.config import settings
 from app.core.answer.context import table_to_markdown
 from app.core.ingest.loaders import LoaderError, load_blocks
-from app.domain.schemas import ScoredChunk
+from app.domain.schemas import ScoredChunk, SourceRef
 from app.services import database
+
+
+def reference_sources(hits: list[ScoredChunk], sources: list[SourceRef]) -> list[SourceRef]:
+    """将回答所用记录的直接引用列为可预览来源，不读取附件正文或改变检索结果。"""
+    seen = {source.doc_id for source in sources} | {hit.chunk.doc_id for hit in hits}
+    parents: dict[str, list[str]] = {}
+    for hit in hits:
+        for ref_id in hit.chunk.references:
+            if not ref_id or ref_id in seen:
+                continue
+            names = parents.setdefault(ref_id, [])
+            if hit.chunk.doc_name not in names:
+                names.append(hit.chunk.doc_name)
+    references = []
+    for ref_id, names in parents.items():
+        try:
+            doc = database.get(ref_id)
+        except PyMongoError:
+            continue  # 补充来源不可用时仍可返回主记录
+        if doc is None or doc.status != "ready":
+            continue
+        references.append(SourceRef(
+            doc_id=ref_id, doc_name=doc.name,
+            location="；".join(f"《{name}》" for name in names) + "的引用文档",
+            score=0.0, snippet="", summary=doc.summary,
+            uploaded_at=doc.uploaded_at, scoring_method="reference",
+        ))
+    return references
 
 
 def append_references(context: str, hits: list[ScoredChunk]) -> str:
