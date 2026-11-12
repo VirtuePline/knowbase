@@ -6,10 +6,11 @@ admin_router  — 读写：上传、替换、编辑、删除、重建。只挂�
 from __future__ import annotations
 
 import secrets
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -133,9 +134,23 @@ def list_templates() -> dict:
 
 
 @search_router.get("/timeline")
-def timeline() -> dict:
-    """按分类的问题时间线：何时遇到什么问题、何时解决了什么问题。"""
-    return timeline_service.build()
+def timeline(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    category: str = "",
+    vendor: str = "",
+    status: str = Query(default="", pattern=r"^(?:yes|no|improving|temporary)?$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> dict:
+    """按时间段、分类和状态分页查询时间线，默认返回最近 30 条。"""
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    return timeline_service.build(
+        start_date=start_date.isoformat() if start_date else "",
+        end_date=end_date.isoformat() if end_date else "",
+        category=category, vendor=vendor, status=status, offset=offset, limit=limit,
+    )
 
 
 @search_router.get("/documents/{doc_id}")

@@ -298,6 +298,11 @@ def list_all() -> list[DocRecord]:
     return [_row_to_doc(d) for d in _docs().find({}).sort("uploaded_at", DESCENDING)]
 
 
+def timeline_page(pipeline: list[dict]) -> dict:
+    """时间线在数据库中筛选、统计和分页，只取回当前页及计数。"""
+    return next(_docs().aggregate(pipeline, allowDiskUse=True), {})
+
+
 def get(doc_id: str) -> DocRecord | None:
     row = _docs().find_one({"_id": doc_id})
     return _row_to_doc(row) if row else None

@@ -1,15 +1,14 @@
-"""按分类的问题时间线：每份已入库文档一条事件记录，与文档管理页数量一致。
+"""问题时间线：每份已入库文档一条事件，按时间段和分类分页查询。
 
 全文摘要由文档分析阶段按「时间 → 问题 → 尝试办法 → 结果 → 是否解决 → 原因」的事件记录式生成；
-时间线从每份文档的全文摘要中提取事件日期（提取不到时回退文档上传时间），按分类分组、按时间排序，
-直观呈现每个分类下何时遇到什么问题、何时解决了什么问题。
+时间线从摘要提取事件日期（提取不到时回退上传时间），数据库完成筛选、排序和统计，
+每次仅返回当前页的事件，避免读取全部文档到应用内存。
 """
 from __future__ import annotations
 
 import re
-from collections import Counter
 
-from app.domain.taxonomy import DOC_CATEGORY_ORDER, normalize_doc_category, record_categories
+from app.domain.taxonomy import all_doc_categories
 from app.services import database
 
 # 摘要中的日期写法 → 归一化为 YYYY-MM-DD；只写年月时归一化为 YYYY-MM
@@ -50,49 +49,165 @@ def _extract_date(text: str) -> str:
     return f"{match.group(1)}-{int(match.group(2)):02d}" if match else ""
 
 
-def build() -> dict:
-    """每份 ready 状态的文档生成一条事件，按时间倒序（最新在前）返回。
+def _padded_capture(match: str, index: int) -> dict:
+    capture = {"$arrayElemAt": [f"{match}.captures", index]}
+    return {"$cond": [{"$eq": [{"$strLenCP": capture}, 1]}, {"$concat": ["0", capture]}, capture]}
 
-    与文档管理页同步：登记表里仍存在的文档才进入时间线，文档删除时其事件状态一并清理。
-    人工标记以文档 ID 为粒度，复用 chunk_id 字段作为键，接口格式保持不变。
-    """
-    manual = database.get_event_status_map()
-    events: list[dict] = []
-    records = database.list_all()
-    by_id = {record.id: record for record in records}
-    children = Counter(record.parent_id for record in records if record.parent_id)
-    for record in records:
-        if record.status != "ready":
-            continue
-        summary = (record.summary or "").strip()
-        if not summary:
-            continue
-        category = normalize_doc_category(record.category or "其他")
-        tags = record_categories(record)   # 多标签记录的全部分类；主分类始终包含在内
-        status = manual.get(record.id, "") or record.resolved
+
+def _date_expression() -> dict:
+    """与 _extract_date 相同的摘要日期规则，留在 MongoDB 中供排序和筛选。"""
+    year = lambda match: {"$arrayElemAt": [f"{match}.captures", 0]}
+    return {"$cond": [
+        {"$ne": ["$_tl_full_date", None]},
+        {"$concat": [year("$_tl_full_date"), "-", _padded_capture("$_tl_full_date", 1),
+                     "-", _padded_capture("$_tl_full_date", 2)]},
+        {"$cond": [
+            {"$ne": ["$_tl_month_date", None]},
+            {"$concat": [year("$_tl_month_date"), "-", _padded_capture("$_tl_month_date", 1)]},
+            {"$substrCP": [{"$ifNull": ["$uploaded_at", ""]}, 0, 10]},
+        ]},
+    ]}
+
+
+def _status_stages() -> list[dict]:
+    """人工状态只在需要的筛选维度或当前页关联，不把全库状态读入 Python。"""
+    return [
+        {"$lookup": {"from": "event_status", "localField": "_id", "foreignField": "_id",
+                     "pipeline": [{"$project": {"status": 1}}], "as": "_tl_manual"}},
+        {"$set": {"_tl_status": {"$let": {
+            "vars": {"manual": {"$ifNull": [{"$arrayElemAt": ["$_tl_manual.status", 0]}, ""]}},
+            "in": {"$cond": [{"$ne": ["$$manual", ""]}, "$$manual", {"$ifNull": ["$resolved", ""]}]},
+        }}}},
+        {"$set": {"_tl_effective": {"$switch": {
+            "branches": [
+                {"case": {"$eq": ["$_tl_status", "resolved"]}, "then": "yes"},
+                {"case": {"$eq": ["$_tl_status", "improving"]}, "then": "improving"},
+                {"case": {"$eq": ["$_tl_status", "temporary"]}, "then": "temporary"},
+            ], "default": "no",
+        }}}},
+    ]
+
+
+def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
+              status: str, offset: int, limit: int) -> list[dict]:
+    allowed_categories = all_doc_categories()
+    stages = [
+        {"$match": {"status": "ready", "summary": {"$type": "string"}}},
+        {"$project": {"name": 1, "summary": {"$trim": {"input": "$summary"}}, "uploaded_at": 1,
+                      "category": 1, "categories": 1, "resolved": 1, "vendor": 1,
+                      "doc_type": 1, "parent_id": 1, "root_id": 1,
+                      "uploaded_by": 1, "uploaded_by_name": 1}},
+        {"$match": {"summary": {"$ne": ""}}},
+        {"$set": {
+            "_tl_full_date": {"$regexFind": {"input": "$summary", "regex": _DATE_FULL.pattern}},
+            "_tl_month_date": {"$regexFind": {"input": "$summary", "regex": _DATE_MONTH.pattern}},
+            "_tl_category": {"$let": {
+                "vars": {"name": {"$trim": {"input": {"$ifNull": ["$category", ""]}}}},
+                "in": {"$cond": [{"$in": ["$$name", allowed_categories]}, "$$name", "其他"]},
+            }},
+        }},
+        {"$set": {
+            "_tl_date": _date_expression(),
+            "_tl_categories": {"$cond": [
+                {"$gt": [{"$size": {"$cond": [{"$isArray": "$categories"}, "$categories", []]}}, 0]},
+                "$categories", ["$_tl_category"],
+            ]},
+        }},
+    ]
+    if start_date or end_date:
+        # 只有月份的记录覆盖整月，与选择的日期段有交集即可纳入；展示仍保留年月精度。
+        stages.append({"$set": {
+            "_tl_range_start": {"$cond": [{"$eq": [{"$strLenCP": "$_tl_date"}, 7]},
+                                             {"$concat": ["$_tl_date", "-01"]}, "$_tl_date"]},
+            "_tl_range_end": {"$cond": [{"$eq": [{"$strLenCP": "$_tl_date"}, 7]},
+                                           {"$concat": ["$_tl_date", "-31"]}, "$_tl_date"]},
+        }})
+        date_match: dict = {"_tl_date": {"$ne": ""}}
+        if start_date:
+            date_match["_tl_range_end"] = {"$gte": start_date}
+        if end_date:
+            date_match["_tl_range_start"] = {"$lte": end_date}
+        stages.append({"$match": date_match})
+
+    category_match = {"_tl_categories": category} if category else {"_tl_categories": {"$ne": "常识库"}}
+    selection = [{"$match": category_match}]
+    if vendor:
+        selection.append({"$match": {"vendor": vendor}})
+    filtered = list(selection)
+    if status:
+        filtered += [{"$match": {"_tl_categories": {"$ne": "常识库"}}}, *_status_stages(),
+                     {"$match": {"_tl_effective": status}}]
+    page = [*filtered, {"$sort": {"_tl_date": -1, "name": -1, "_id": -1}},
+            {"$skip": offset}, {"$limit": limit}]
+    if not status:
+        page += _status_stages()
+    # 先分页再补父名称与追踪数；失败/处理中的子记录也计入追踪数，与删除保护规则一致。
+    page += [
+        {"$lookup": {"from": "documents", "localField": "parent_id", "foreignField": "_id",
+                     "pipeline": [{"$project": {"name": 1}}], "as": "_tl_parent"}},
+        {"$lookup": {"from": "documents", "let": {"parent": "$_id"}, "pipeline": [
+            {"$match": {"$expr": {"$eq": ["$parent_id", "$$parent"]}}}, {"$count": "count"},
+        ], "as": "_tl_children"}},
+        {"$set": {
+            "_tl_parent_name": {"$ifNull": [{"$arrayElemAt": ["$_tl_parent.name", 0]}, ""]},
+            "_tl_child_count": {"$ifNull": [{"$arrayElemAt": ["$_tl_children.count", 0]}, 0]},
+        }},
+        {"$unset": ["_tl_full_date", "_tl_month_date", "_tl_manual", "_tl_parent", "_tl_children",
+                     "_tl_range_start", "_tl_range_end"]},
+    ]
+    stages.append({"$facet": {
+        "events": page,
+        "total": [*filtered, {"$count": "count"}],
+        "categories": [{"$unwind": "$_tl_categories"},
+                       {"$group": {"_id": "$_tl_categories", "count": {"$sum": 1}}}],
+        "issue_count": [{"$match": {"_tl_categories": {"$ne": "常识库"}}}, {"$count": "count"}],
+        "vendors": [{"$match": category_match}, {"$match": {"vendor": {"$nin": ["", None]}}},
+                    {"$group": {"_id": "$vendor", "count": {"$sum": 1}}}, {"$sort": {"_id": 1}}],
+        "status_counts": [*selection, {"$match": {"_tl_categories": {"$ne": "常识库"}}},
+                          *_status_stages(), {"$group": {"_id": "$_tl_effective", "count": {"$sum": 1}}}],
+    }})
+    return stages
+
+
+def build(*, start_date: str = "", end_date: str = "", category: str = "", vendor: str = "",
+          status: str = "", offset: int = 0, limit: int = 30) -> dict:
+    """每次只返回最新一页；时间段和各项筛选、计数都在数据库中完成。"""
+    if offset < 0 or not 1 <= limit <= 100:
+        raise ValueError("分页参数无效")
+    if status not in {"", "yes", "no", "improving", "temporary"}:
+        raise ValueError("完成状态无效")
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("开始日期不能晚于结束日期")
+    result = database.timeline_page(_pipeline(
+        start_date=start_date, end_date=end_date, category=category, vendor=vendor,
+        status=status, offset=offset, limit=limit,
+    ))
+    events = []
+    for row in result.get("events", []):
+        record = database._row_to_doc(row)
+        event_status = row.get("_tl_status", "")
         events.append({
-            "chunk_id": record.id,
-            "date": _extract_date(summary) or record.uploaded_at[:10],
-            "category": category,
-            "categories": tags,
-            "doc_id": record.id,
-            "doc_name": record.name,
-            "doc_type": record.doc_type,
-            "vendor": record.vendor,
-            "uploaded_by": record.uploaded_by,
-            "uploaded_by_name": record.uploaded_by_name,
-            "parent_id": record.parent_id,
-            "root_id": record.root_id or record.id,
-            "parent_name": by_id[record.parent_id].name if record.parent_id in by_id else "",
-            "child_count": children[record.id],
-            "brief": _brief(summary),
-            "heading": "",
-            "summary": summary,
-            # 解决状态：时间线上的人工标记优先，其次录入时选择的「是否解决」，最后默认未解决
-            "resolved": "yes" if status == "resolved" else "no",
-            "status": status,
+            "chunk_id": record.id, "date": row["_tl_date"],
+            "category": row["_tl_category"], "categories": row["_tl_categories"],
+            "doc_id": record.id, "doc_name": record.name, "doc_type": record.doc_type,
+            "vendor": record.vendor, "uploaded_by": record.uploaded_by,
+            "uploaded_by_name": record.uploaded_by_name, "parent_id": record.parent_id,
+            "root_id": record.root_id or record.id, "parent_name": row.get("_tl_parent_name", ""),
+            "child_count": row.get("_tl_child_count", 0), "brief": _brief(record.summary),
+            "heading": "", "summary": record.summary,
+            "resolved": "yes" if event_status == "resolved" else "no", "status": event_status,
         })
-    events.sort(key=lambda e: (e["date"], e["doc_name"]), reverse=True)
-    counts = Counter(tag for event in events for tag in event["categories"])   # 多标签逐个计数
-    categories = [{"name": name, "count": counts[name]} for name in DOC_CATEGORY_ORDER if counts[name]]
-    return {"events": events, "categories": categories}
+    counts = {row["_id"]: row["count"] for row in result.get("categories", []) if row.get("_id")}
+    category_order = all_doc_categories() + sorted(set(counts) - set(all_doc_categories()))
+    total = next((row["count"] for row in result.get("total", [])), 0)
+    statuses = {name: 0 for name in ("yes", "no", "improving", "temporary")}
+    statuses.update({row["_id"]: row["count"] for row in result.get("status_counts", [])})
+    next_offset = offset + len(events)
+    return {
+        "events": events,
+        "categories": [{"name": name, "count": counts[name]} for name in category_order if counts.get(name)],
+        "issue_count": next((row["count"] for row in result.get("issue_count", [])), 0),
+        "vendors": [{"name": row["_id"], "count": row["count"]} for row in result.get("vendors", [])],
+        "status_counts": {"": sum(statuses.values()), **statuses},
+        "total": total, "has_more": next_offset < total, "next_offset": next_offset,
+    }

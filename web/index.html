@@ -144,8 +144,21 @@
         <h2>问题时间线</h2>
         <span class="muted" style="font-size:13px">按分类汇总各文档摘要中的事件记录：何时遇到什么问题、何时解决了什么问题</span>
       </div>
+      <form class="tl-range" id="tl-range-form">
+        <label>开始日期<input type="date" id="tl-start-date" aria-label="时间线开始日期" /></label>
+        <span class="tl-range-separator" aria-hidden="true">至</span>
+        <label>结束日期<input type="date" id="tl-end-date" aria-label="时间线结束日期" /></label>
+        <button type="submit" class="ghost">查询</button>
+        <button type="button" class="ghost" id="tl-clear-range">清除时间段</button>
+        <span class="tl-range-hint">默认显示最近 30 条，向下滚动按需加载</span>
+      </form>
       <div class="cat-filter" id="tl-cat-filter"></div>
       <div id="tl-body"><div class="tl-empty">加载中…</div></div>
+      <div class="tl-pagination" aria-live="polite">
+        <span id="tl-load-state" class="muted"></span>
+        <button type="button" class="ghost" id="tl-load-more" hidden>加载更多</button>
+      </div>
+      <div id="tl-sentinel" aria-hidden="true"></div>
     </div>
   </section>
 
@@ -1509,10 +1522,26 @@ $("#time-save").addEventListener("click", async () => {
 /* ---------- 问题时间线 ---------- */
 const tlBody = $("#tl-body");
 const tlCatFilterEl = $("#tl-cat-filter");
-let tlData = null;                 // /api/timeline 的返回缓存
+const tlStartDateInput = $("#tl-start-date");
+const tlEndDateInput = $("#tl-end-date");
+const tlLoadMoreButton = $("#tl-load-more");
+const tlLoadState = $("#tl-load-state");
+const tlSentinel = $("#tl-sentinel");
+const TL_PAGE_SIZE = 30;
+let tlData = null;                 // 当前筛选条件下已加载的分页数据
 let tlCatFilter = "";              // 当前筛选的分类，空串为全部
 let tlVendorFilter = "";           // 二级筛选：厂商（厂商系统类记录的厂商），空串为全部
 let tlStatusFilter = "";           // 状态筛选："yes" 已解决 | "no" 未解决 | 空串为全部（常识库不受状态筛选影响）
+let tlStartDate = "";
+let tlEndDate = "";
+let tlLoading = false;
+let tlHasMore = false;
+let tlNextOffset = 0;
+let tlError = "";
+let tlRequestId = 0;
+let tlRequestController = null;
+let tlSentinelVisible = false;
+let tlAutoLoadReady = false;
 const tlCollapsed = new Set();     // 收起的分类，重渲染后保持
 
 function tlDateLabel(date) {
@@ -1570,22 +1599,9 @@ function tlItemHtml(event) {
 
 function renderTimeline() {
   if (!tlData) return;
-  let events = tlData.events || [];
-  if (tlCatFilter) {
-    events = events.filter((e) => docCats(e).includes(tlCatFilter));
-  } else {
-    // 「全部」只放运维问题，常识库台账类事件不混入（点「常识库」分类可单独查看）；
-    // 多标签记录按文档去重，同一记录在「全部」里只出现一次
-    const seen = new Set();
-    events = events.filter((e) => !docCats(e).includes("常识库") && !seen.has(e.doc_id) && seen.add(e.doc_id));
-  }
-  if (tlVendorFilter) events = events.filter((e) => (e.vendor || "") === tlVendorFilter);   // 二级厂商筛选
-  if (tlStatusFilter) {
-    // 状态筛选：已解决 / 未解决；常识库台账无解决状态，不参与
-    events = events.filter((e) => !docCats(e).includes("常识库") && tlEffective(e) === tlStatusFilter);
-  }
+  const events = tlData.events || [];  // 所有筛选在服务端执行，再返回本页
   if (!events.length) {
-    tlBody.innerHTML = '<div class="tl-empty">暂无事件记录。上传运维记录后，摘要中提取的事件会按时间展示在这里</div>';
+    tlBody.innerHTML = '<div class="tl-empty">当前时间段和筛选条件下暂无事件记录</div>';
     return;
   }
   // 按天分组：一天可以有多个问题，每天一个分组、可折叠
@@ -1611,27 +1627,25 @@ function renderTimeline() {
 }
 
 function renderTimelineFilter() {
-  const events = tlData ? tlData.events || [] : [];
-  // 「全部」的计数与视图一致：不含常识库（常识库单独一个分类可点选）
-  const issueCount = events.filter((e) => !docCats(e).includes("常识库")).length;
-  const chips = [{ name: "", label: "全部", count: issueCount }].concat(
-    tlData ? tlData.categories.map((item) => ({ name: item.name, label: item.name, count: item.count })) : []
+  // 计数来自服务端完整筛选范围，不能由当前已加载的 30 条推算。
+  const chips = [{ name: "", label: "全部", count: tlData?.issue_count || 0 }].concat(
+    (tlData?.categories || []).map((item) => ({ name: item.name, label: item.name, count: item.count }))
   );
+  if (tlCatFilter && !chips.some((chip) => chip.name === tlCatFilter)) {
+    chips.push({ name: tlCatFilter, label: tlCatFilter, count: 0 });
+  }
   let html = chips.map((chip) => {
     const active = chip.name === tlCatFilter;
     return `<button type="button" class="cat-chip${active ? " active" : ""}" data-tl-filter="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
   }).join("");
   // 二级分类（厂商）：只有点选「厂商系统」分类时才显示厂商二级筛选行
-  const vendors = new Map();
-  if (tlCatFilter === "厂商系统") {
-    for (const event of events) {
-      const vendor = String(event.vendor || "").trim();
-      if (vendor) vendors.set(vendor, (vendors.get(vendor) || 0) + 1);
+  const vendors = tlCatFilter === "厂商系统" ? tlData?.vendors || [] : [];
+  if (vendors.length || tlVendorFilter) {
+    const vendorChips = [{ name: "", label: "全部厂商", count: vendors.reduce((sum, vendor) => sum + vendor.count, 0) }]
+      .concat(vendors.map(({ name, count }) => ({ name, label: name, count })));
+    if (tlVendorFilter && !vendorChips.some((chip) => chip.name === tlVendorFilter)) {
+      vendorChips.push({ name: tlVendorFilter, label: tlVendorFilter, count: 0 });
     }
-  }
-  if (vendors.size) {
-    const vendorChips = [{ name: "", label: "全部厂商", count: [...vendors.values()].reduce((a, b) => a + b, 0) }]
-      .concat([...vendors.entries()].map(([name, count]) => ({ name, label: name, count })));
     html += `<div style="flex-basis:100%;height:0"></div>` + vendorChips.map((chip) => {
       const active = chip.name === tlVendorFilter;
       return `<button type="button" class="cat-chip${active ? " active" : ""}" data-tl-vendor="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
@@ -1639,13 +1653,13 @@ function renderTimelineFilter() {
   }
   // 状态筛选（右侧）：已解决 / 未解决；常识库台账无解决状态，选中常识库分类时整组隐藏
   if (tlCatFilter !== "常识库") {
-    const issueEvents = events.filter((e) => !docCats(e).includes("常识库"));
+    const counts = tlData?.status_counts || {};
     const statusChips = [
-      { name: "", label: "全部状态", count: issueEvents.length },
-      { name: "yes", label: "已解决", count: issueEvents.filter((e) => tlEffective(e) === "yes").length },
-      { name: "improving", label: "改善中", count: issueEvents.filter((e) => tlEffective(e) === "improving").length },
-      { name: "temporary", label: "临时解决", count: issueEvents.filter((e) => tlEffective(e) === "temporary").length },
-      { name: "no", label: "未解决", count: issueEvents.filter((e) => tlEffective(e) === "no").length },
+      { name: "", label: "全部状态", count: counts[""] || 0 },
+      { name: "yes", label: "已解决", count: counts.yes || 0 },
+      { name: "improving", label: "改善中", count: counts.improving || 0 },
+      { name: "temporary", label: "临时解决", count: counts.temporary || 0 },
+      { name: "no", label: "未解决", count: counts.no || 0 },
     ];
     html += statusChips.map((chip) => {
       const active = chip.name === tlStatusFilter;
@@ -1655,37 +1669,136 @@ function renderTimelineFilter() {
   tlCatFilterEl.innerHTML = html;
 }
 
-async function loadTimeline() {
-  // 每次进入页面都重新取数；文档增删改后也会调用本函数刷新，保证时间线只显示当前存在的文档
-  try {
-    const resp = await fetch("/api/timeline");
-    tlData = await resp.json();
-  } catch (err) {
-    tlBody.innerHTML = '<div class="tl-empty">时间线加载失败</div>';
-    return;
+function updateTimelinePagination() {
+  const loaded = tlData?.events?.length || 0;
+  const total = Number(tlData?.total || 0);
+  tlLoadState.textContent = tlError || (tlLoading
+    ? (loaded ? `已加载 ${loaded} 条，正在加载…` : "正在加载最近的记录…")
+    : tlData ? `已加载 ${loaded} / ${total} 条${tlHasMore ? "，每次加载 30 条" : ""}` : "");
+  tlLoadMoreButton.hidden = !tlError && (!tlHasMore || !tlData);
+  tlLoadMoreButton.disabled = tlLoading;
+  tlLoadMoreButton.textContent = tlError ? "重试" : tlLoading ? "加载中…" : "加载更多";
+  tlBody.setAttribute("aria-busy", tlLoading ? "true" : "false");
+}
+
+async function loadTimeline({ append = false } = {}) {
+  if (append && (tlLoading || !tlData || !tlHasMore || !$("#tab-timeline").classList.contains("active"))) return;
+  if (!append) {
+    tlRequestController?.abort();
+    tlRequestId += 1;
+    tlData = null;
+    tlHasMore = false;
+    tlNextOffset = 0;
+    tlError = "";
+    tlAutoLoadReady = false;
+    tlBody.innerHTML = '<div class="tl-empty">加载中…</div>';
   }
-  renderTimelineFilter();
-  renderTimeline();
+  const requestId = tlRequestId;
+  const offset = tlNextOffset;
+  const controller = new AbortController();
+  tlRequestController = controller;
+  tlLoading = true;
+  tlError = "";
+  tlAutoLoadReady = false;
+  updateTimelinePagination();
+  const params = new URLSearchParams({ offset: String(offset), limit: String(TL_PAGE_SIZE) });
+  for (const [name, value] of Object.entries({ start_date: tlStartDate, end_date: tlEndDate,
+    category: tlCatFilter, vendor: tlVendorFilter, status: tlStatusFilter })) {
+    if (value) params.set(name, value);
+  }
+  try {
+    const resp = await fetch(`/api/timeline?${params}`, { signal: controller.signal });
+    if (!resp.ok) throw new Error("时间线加载失败，请重试");
+    const data = await resp.json();
+    if (requestId !== tlRequestId) return;
+    const page = Array.isArray(data.events) ? data.events : [];
+    const events = append ? [...tlData.events] : [];
+    const seen = new Set(events.map((event) => event.doc_id));
+    for (const event of page) {
+      if (!seen.has(event.doc_id)) { events.push(event); seen.add(event.doc_id); }
+    }
+    tlData = { ...data, events };
+    tlNextOffset = Number.isInteger(data.next_offset) ? data.next_offset : offset + page.length;
+    tlHasMore = data.has_more === true && page.length > 0 && tlNextOffset > offset;
+    renderTimelineFilter();
+    renderTimeline();
+  } catch (err) {
+    if (requestId !== tlRequestId || err.name === "AbortError") return;
+    tlError = "时间线加载失败，请重试";
+    if (!tlData) tlBody.innerHTML = '<div class="tl-empty">时间线加载失败，点击下方重试</div>';
+  } finally {
+    if (requestId === tlRequestId) {
+      tlLoading = false;
+      tlRequestController = null;
+      updateTimelinePagination();
+    }
+  }
 }
 
 function refreshTimelineIfVisible() {
-  if (tlData) tlData = null;                    // 丢弃缓存
+  tlRequestController?.abort();
+  tlRequestId += 1;
+  tlData = null;
+  tlLoading = false;
+  tlHasMore = false;
+  tlAutoLoadReady = false;
   if ($("#tab-timeline").classList.contains("active")) loadTimeline();
 }
+
+$("#tl-range-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!tlStartDateInput.reportValidity() || !tlEndDateInput.reportValidity()) return;
+  if (tlStartDateInput.value && tlEndDateInput.value && tlStartDateInput.value > tlEndDateInput.value) {
+    toast("开始日期不能晚于结束日期");
+    return;
+  }
+  tlStartDate = tlStartDateInput.value;
+  tlEndDate = tlEndDateInput.value;
+  loadTimeline();
+});
+
+$("#tl-clear-range").addEventListener("click", () => {
+  tlStartDateInput.value = tlEndDateInput.value = "";
+  tlStartDate = tlEndDate = "";
+  loadTimeline();
+});
+
+tlLoadMoreButton.addEventListener("click", () => loadTimeline({ append: !!tlData }));
+
+function maybeLoadTimelineMore() {
+  if (tlAutoLoadReady && tlSentinelVisible && !tlError) loadTimeline({ append: true });
+}
+
+if (typeof IntersectionObserver !== "undefined") {
+  new IntersectionObserver((entries) => {
+    tlSentinelVisible = entries.some((entry) => entry.isIntersecting);
+    maybeLoadTimelineMore();
+  }, { rootMargin: "200px 0px" }).observe(tlSentinel);
+}
+
+// 每次浏览动作最多追加一页，避免折叠日期后短列表在视口内连续加载所有记录。
+document.addEventListener("scroll", (e) => {
+  const timelineTab = $("#tab-timeline");
+  if (tlLoading || !timelineTab.classList.contains("active")) return;
+  // 预览弹窗、侧栏等区域的滚动不应加载背景时间线。
+  if (e.target !== document && e.target !== document.scrollingElement && !e.target?.contains?.(timelineTab)) return;
+  tlAutoLoadReady = true;
+  const rect = tlSentinel.getBoundingClientRect();
+  tlSentinelVisible = rect.top <= window.innerHeight + 200 && rect.bottom >= 0;
+  maybeLoadTimelineMore();
+}, { passive: true, capture: true });
 
 tlCatFilterEl.addEventListener("click", (e) => {
   const vendorChip = e.target.closest("[data-tl-vendor]");
   if (vendorChip) {
     tlVendorFilter = vendorChip.dataset.tlVendor === tlVendorFilter ? "" : vendorChip.dataset.tlVendor;  // 再点一次取消筛选
-    renderTimelineFilter();
-    renderTimeline();
+    loadTimeline();
     return;
   }
   const statusChip = e.target.closest("[data-tl-status-filter]");
   if (statusChip) {
     tlStatusFilter = statusChip.dataset.tlStatusFilter === tlStatusFilter ? "" : statusChip.dataset.tlStatusFilter;  // 再点一次取消筛选
-    renderTimelineFilter();
-    renderTimeline();
+    loadTimeline();
     return;
   }
   const chip = e.target.closest("[data-tl-filter]");
@@ -1693,8 +1806,7 @@ tlCatFilterEl.addEventListener("click", (e) => {
   tlCatFilter = chip.dataset.tlFilter === tlCatFilter ? "" : chip.dataset.tlFilter;  // 再点一次取消筛选
   tlVendorFilter = "";   // 切换一级分类时清空厂商筛选，避免组合后看不到结果
   if (tlCatFilter === "常识库") tlStatusFilter = "";   // 常识库无状态筛选，清掉残留条件以免滤空台账
-  renderTimelineFilter();
-  renderTimeline();
+  loadTimeline();
 });
 
 tlBody.addEventListener("change", async (e) => {
@@ -1713,9 +1825,7 @@ tlBody.addEventListener("change", async (e) => {
       const data = await resp.json().catch(() => ({}));
       throw new Error(data.detail || "标记失败");
     }
-    const event = (tlData.events || []).find((item) => item.chunk_id === chunkId);
-    if (event) event.status = status;
-    renderTimeline();
+    await loadTimeline();
     toast(status ? "完成情况已标记" : "已恢复按内容判定");
   } catch (err) {
     toast(String(err.message || err));
