@@ -250,7 +250,13 @@
   .tl-range label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
   .tl-range input { border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; background: var(--panel); color: var(--text); font: inherit; min-width: 145px; }
   .tl-range input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
-  .tl-range-separator { align-self: flex-end; padding-bottom: 8px; color: var(--muted); font-size: 12px; }
+  .tl-range .tl-date-wrap { position: relative; display: inline-block; }
+.tl-range .tl-date-wrap input { color: transparent; caret-color: transparent; min-width: 150px; }
+.tl-range .tl-date-wrap input::-webkit-calendar-picker-indicator { opacity: 1; color: var(--muted); }
+.tl-range .tl-date-wrap input:focus-visible { outline: 2px solid var(--accent-soft); }
+.tl-range .tl-date-display { position: absolute; inset: 1px; display: flex; align-items: center; padding: 7px 32px 7px 12px; font-size: 13px; color: var(--text); pointer-events: none; white-space: nowrap; }
+.tl-range .tl-date-display.empty { color: var(--muted); }
+.tl-range-separator { align-self: flex-end; padding-bottom: 8px; color: var(--muted); font-size: 12px; }
   .tl-range-hint { align-self: flex-end; padding-bottom: 8px; color: var(--muted); font-size: 12px; }
   .tl-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 0 4px; font-size: 12px; }
   #tl-load-more[hidden] { display: none; }

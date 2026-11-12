@@ -145,9 +145,15 @@
         <span class="muted" style="font-size:13px">按分类汇总各文档摘要中的事件记录：何时遇到什么问题、何时解决了什么问题</span>
       </div>
       <form class="tl-range" id="tl-range-form">
-        <label>开始日期<input type="text" id="tl-start-date" placeholder="如 2026年11月5日" inputmode="numeric" autocomplete="off" aria-label="时间线开始日期" /></label>
+        <label>开始日期<span class="tl-date-wrap">
+          <input type="date" id="tl-start-date" aria-label="时间线开始日期" />
+          <span class="tl-date-display" aria-hidden="true"></span>
+        </span></label>
         <span class="tl-range-separator" aria-hidden="true">至</span>
-        <label>结束日期<input type="text" id="tl-end-date" placeholder="如 2026年11月12日" inputmode="numeric" autocomplete="off" aria-label="时间线结束日期" /></label>
+        <label>结束日期<span class="tl-date-wrap">
+          <input type="date" id="tl-end-date" aria-label="时间线结束日期" />
+          <span class="tl-date-display" aria-hidden="true"></span>
+        </span></label>
         <button type="submit" class="ghost">查询</button>
         <button type="button" class="ghost" id="tl-clear-range">清除时间段</button>
         <span class="tl-range-hint">默认显示最近 30 条，向下滚动按需加载</span>
@@ -1745,32 +1751,30 @@ function refreshTimelineIfVisible() {
   if ($("#tab-timeline").classList.contains("active")) loadTimeline();
 }
 
-// 解析中文/数字日期：2026年11月5日、2026-11-05、2026/11/5 → ISO；失败返回 null
-function parseTlDate(raw) {
-  const text = String(raw || "").trim().replace(/\s+/g, "");
-  if (!text) return "";
-  if (!/^(?:20\d{2})[年./\-]\d{1,2}[月./\-]\d{1,2}[日]?$/.test(text)) return null;
-  const [y, mo, d] = text.split(/[年月日./\-]+/).map(Number);
-  if (mo < 1 || mo > 12) return null;
-  const daysInMonth = new Date(y, mo, 0).getDate();   // 该月天数（本地日历，无时区转换）
-  if (d < 1 || d > daysInMonth) return null;
-  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+// 日期选择控件：原生选择器不变，显示文字覆盖为中文（2026年11月5日）
+function refreshTlDateDisplay() {
+  document.querySelectorAll(".tl-date-wrap").forEach((wrap) => {
+    const input = wrap.querySelector("input[type=date]");
+    const display = wrap.querySelector(".tl-date-display");
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.value || "");
+    display.textContent = m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : "年 / 月 / 日";
+    display.classList.toggle("empty", !m);
+  });
 }
+refreshTlDateDisplay();
+document.addEventListener("change", (e) => {
+  if (e.target.matches(".tl-date-wrap input[type=date]")) refreshTlDateDisplay();
+});
 
 $("#tl-range-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const start = parseTlDate(tlStartDateInput.value);
-  const end = parseTlDate(tlEndDateInput.value);
-  if (start === null || end === null) {
-    toast("日期格式：2026年11月5日，也支持 2026-11-05");
-    return;
-  }
-  if (start && end && start > end) {
+  if (!tlStartDateInput.reportValidity() || !tlEndDateInput.reportValidity()) return;
+  if (tlStartDateInput.value && tlEndDateInput.value && tlStartDateInput.value > tlEndDateInput.value) {
     toast("开始日期不能晚于结束日期");
     return;
   }
-  tlStartDate = start;
-  tlEndDate = end;
+  tlStartDate = tlStartDateInput.value;
+  tlEndDate = tlEndDateInput.value;
   loadTimeline();
 });
 
