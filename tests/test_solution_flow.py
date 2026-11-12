@@ -84,7 +84,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.assertFalse(response.solution_found)
         self.assertEqual(response.status, "not_found")
         self.assertEqual(response.answer_origin, "knowledge_base")
-        self.assertIn("【记录 1】", response.answer)
+        self.assertIn("](doc://", response.answer)   # 记录标题已转为可点击引用
         self.assertIn("箱签格式不正确", response.answer)
         self.assertEqual(response.sources[0].doc_id, "d1")
 
@@ -99,7 +99,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.assertFalse(response.llm_used)
         self.assertEqual(response.answer_origin, "knowledge_base")
         self.assertIn("快速模式", response.notice)
-        self.assertIn("【记录 1】", response.answer)
+        self.assertIn("](doc://", response.answer)   # 记录标题已转为可点击引用
 
     def test_fast_mode_skips_rerank_in_retrieval(self):
         """快速模式检索不跑 Cross-Encoder 精排。"""
@@ -253,7 +253,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.assertEqual(response.status, "not_found")
         self.assertFalse(response.llm_used)
         self.assertEqual(response.answer_origin, "knowledge_base")
-        self.assertIn("【记录 1】", response.answer)
+        self.assertIn("](doc://", response.answer)   # 记录标题已转为可点击引用
         self.assertEqual(len(response.sources), 2)               # 摘录来源为两个窗口块
         self.search.assert_not_called()
 
@@ -303,7 +303,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.search.assert_not_called()
         self.assertFalse(response.solution_found)
         self.assertEqual(response.answer_origin, "knowledge_base")
-        self.assertIn("【记录 1】", response.answer)
+        self.assertIn("](doc://", response.answer)   # 记录标题已转为可点击引用
 
     def test_llm_qa_answers_ledger_questions_without_solution_steps(self):
         """台账统计类问题没有处理步骤可提取：问答模式基于记录直接回答。"""
@@ -344,7 +344,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.assertFalse(response.llm_used)
         self.assertEqual(response.status, "not_found")
         self.assertEqual(response.answer_origin, "knowledge_base")
-        self.assertIn("【记录 1】", response.answer)
+        self.assertIn("](doc://", response.answer)   # 记录标题已转为可点击引用
 
     def test_invalid_source_number_cannot_be_presented_as_solution(self):
         with patch.object(service, "settings", replace(self.config, llm_api_key="llm-test")), \
@@ -355,7 +355,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.assertFalse(response.solution_found)
         self.assertNotIn("凭空方案", response.answer)
         self.search.assert_not_called()
-        self.assertIn("【记录 1】", response.answer)
+        self.assertIn("](doc://", response.answer)   # 记录标题已转为可点击引用
 
     def test_stats_question_recalls_table_below_threshold(self):
         """统计类问题的关键词不在台账正文里，低于门槛时放行分数最高的表格块兜底。"""

@@ -148,7 +148,7 @@ class ReferenceSourcesFlowTest(unittest.TestCase):
             response = service.answer("交换机丢包", fast_mode=True)
         self.assertEqual(response.status, "not_found")
         self.assertIn("交换机丢包", response.answer)
-        self.assertNotIn("交换机记录.md", response.answer)
+        self.assertIn("[交换机记录.md](doc://d1)", response.answer)   # 摘录标题为可点击文档名
         self.assertNotIn("来源", response.answer)
         self.assertEqual([source.doc_id for source in response.sources], ["d1"])
         self.assertEqual([ref.doc_id for ref in response.sources[0].references], ["manual"])

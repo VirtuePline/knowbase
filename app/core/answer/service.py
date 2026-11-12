@@ -1,6 +1,8 @@
 """方案优先：知识库处理方案 → 模型提取原文步骤 → 联网参考 → 明确缺失。"""
 from __future__ import annotations
 
+import re
+
 from app.config import settings
 from app.core.answer.context import is_stats_question, render_excerpts, render_hits, source_snippet, table_to_markdown
 from app.core.answer.solutions import extract_solutions, render_solutions
@@ -60,6 +62,30 @@ def _sources(hits: list[ScoredChunk], question: str = "") -> list[SourceRef]:
 
 # 统计类问题单次交给模型的台账行数上限；超出截断并在提示与说明中注明
 _STATS_MAX_ROWS = 300
+
+
+# ---------- 正文中的【记录 N】占位转可点击文档引用 ----------
+
+_RECORD_REF = re.compile(r"【记录\s*(\d+)】")
+
+
+def _link_kb_records(text: str, hits: list[ScoredChunk]) -> str:
+    """把回答正文里的【记录 N】占位替换为文档名引用（doc://，web 端可点击打开预览）。
+
+    编号与模型上下文 render_hits/render_excerpts 的记录序号一致；越界编号原样保留。
+    """
+    if not text or "【记录" not in text or not hits:
+        return text
+
+    def repl(match: re.Match) -> str:
+        index = int(match.group(1))
+        if not 1 <= index <= len(hits):
+            return match.group(0)
+        chunk = hits[index - 1].chunk
+        name = (chunk.doc_name or "").strip() or "未命名记录"
+        return f"[{name}](doc://{chunk.doc_id})"
+
+    return _RECORD_REF.sub(repl, text)
 
 
 def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
@@ -130,7 +156,7 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
     ) for chunk in peers]
     sources = attach_reference_sources([anchor], sources)
     return AnswerResponse(
-        status="ok", answer=reply, category=category, sources=sources,
+        status="ok", answer=_link_kb_records(reply, [anchor]), category=category, sources=sources,
         llm_used=True, answer_origin="knowledge_base", solution_found=False,
         notice=(f"已按{anchor_chunk.heading}完整台账（{scope}）统计；"
                 "「未登记」指台账中该字段为空，不代表设备实际状态。"),
@@ -246,7 +272,7 @@ def _kb_excerpts(question: str, category: str, hits: list[ScoredChunk], notice: 
     设备/字段）比原话更容易命中数据行。
     """
     return AnswerResponse(
-        status="not_found", answer=render_excerpts(hits, question=focus_question or question),
+        status="not_found", answer=_link_kb_records(render_excerpts(hits, question=focus_question or question), hits),
         category=category,
         sources=_sources(hits, question), llm_used=False, answer_origin="knowledge_base",
         notice=notice)
@@ -432,7 +458,7 @@ def answer(question: str, history: list[dict] | None = None,
             selected = [hits[ref - 1] for ref in plan.source_records]
             sources = _sources(selected, text)
             return AnswerResponse(
-                status="ok", answer=_render_plan(plan), category=category,
+                status="ok", answer=_link_kb_records(_render_plan(plan), hits), category=category,
                 sources=sources, llm_used=True, solution_found=True,
                 notice=CONFLICT_NOTICE if conflict_risk(selected) else "")
         if not model_failed:
@@ -446,7 +472,7 @@ def answer(question: str, history: list[dict] | None = None,
                 reply = ""
             if reply and "NO_ANSWER" not in reply.upper()[:200]:
                 return AnswerResponse(
-                    status="ok", answer=reply, category=category,
+                    status="ok", answer=_link_kb_records(reply, hits), category=category,
                     sources=_sources(hits, text), llm_used=True,
                     answer_origin="knowledge_base", solution_found=False,
                     notice=_notice("以下回答由模型基于知识库相关记录整理；"
