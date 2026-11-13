@@ -163,3 +163,24 @@ def permission_stamp(identity: dict) -> str:
 
 def feedback_scope() -> str:
     return "" if is_internal() else "user:" + str((current_identity() or {}).get("username", "anonymous"))
+
+
+def question_context(department_id: str = "") -> dict:
+    """常见问题只在当前选中的部门或公共入口内共享，与个人问答历史分开。"""
+    if is_internal():
+        return {"scope": "internal", "department_id": "", "departments": []}
+    actor = current_identity() or {}
+    if actor.get("public_only"):
+        return {"scope": "public", "department_id": "", "departments": []}
+    if not actor or actor.get("must_change_password"):
+        return {"scope": "none", "department_id": "", "departments": []}
+    from app.services import database
+    directory = {row["id"]: row for row in database.list_departments()}
+    memberships = [key for key in actor.get("department_ids", []) if key in directory]
+    options = list(directory.values()) if is_platform_admin() else [directory[key] for key in memberships]
+    requested = department_id.strip()
+    allowed = {row["id"] for row in options}
+    if requested and requested not in allowed:
+        raise HTTPException(status_code=403, detail="无权访问该部门的常见问题")
+    selected = requested or next(iter(memberships), "") or (options[0]["id"] if options else "")
+    return {"scope": "department" if selected else "none", "department_id": selected, "departments": options}

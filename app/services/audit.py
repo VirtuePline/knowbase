@@ -24,6 +24,7 @@ _ACTION_RULES: tuple[tuple[str, str, str], ...] = (
     ("PUT", "/api/weekly-report/my-settings", "保存本人周报设置"),
     ("PUT", "/api/weekly-report/settings", "保存统一周报设置"),
     ("POST", "/api/weekly-reports/generate", "生成工作周报"),
+    ("POST", "/api/external-apis", "调整外部接口开关"),
     ("POST", "/api/documents", "上传文档"),
     ("PUT", "/api/documents/{id}/replace", "替换文档"),
     ("DELETE", "/api/documents/{id}", "删除文档"),

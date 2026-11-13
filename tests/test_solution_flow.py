@@ -1,6 +1,7 @@
 """方案优先与联网兜底回归，全部使用内存数据，不调用真实模型或搜索服务。"""
 import json
 import unittest
+from tests.network_test_support import online_api_test
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -43,6 +44,7 @@ def ledger_anchor(peers: list[Chunk]) -> ScoredChunk:
     ), score=1.0, coverage=1.0)
 
 
+@online_api_test
 class SolutionFlowTest(unittest.TestCase):
     def setUp(self):
         self.config = replace(service.settings, llm_api_key="", web_search_enabled=True,
@@ -516,6 +518,7 @@ class SolutionFlowTest(unittest.TestCase):
         self.search.assert_not_called()
 
 
+@online_api_test
 class SolutionProtocolTest(unittest.TestCase):
     def test_rewrite_query_uses_reply_and_falls_back_on_bad_output(self):
         from app.core.llm.client import rewrite_query

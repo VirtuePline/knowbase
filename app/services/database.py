@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from threading import RLock
 from uuid import uuid4
 
@@ -55,6 +56,7 @@ def init_db() -> None:
     mongo.db().event_status.create_index([("doc_id", ASCENDING)])
     _docs().create_index([("department_id", ASCENDING), ("visibility", ASCENDING)])
     _docs().create_index("shared_department_ids")
+    mongo.db().question_stats.create_index([("scope", ASCENDING), ("last_at", DESCENDING), ("count", DESCENDING)])
     initialize_enterprise()
 
 
@@ -152,6 +154,15 @@ def set_runtime_setting(key: str, value: str) -> None:
 def web_search_runtime_enabled() -> bool:
     """联网搜索运行时开关：默认关闭（知识库优先）；管理端开启后立即生效，无需重启。"""
     return get_runtime_setting("web_search", "off") == "on"
+
+
+def external_apis_enabled() -> bool:
+    """缺省允许外部接口；持久化状态无法读取时拒绝出站，避免离线开关失效。"""
+    try:
+        row = mongo.db().app_settings.find_one({"_id": "external_apis"})
+    except Exception:
+        return False
+    return row is None or row.get("value") == "on"
 
 
 def fast_mode_enabled() -> bool:
@@ -414,31 +425,44 @@ def now_iso() -> str:
 
 # ---------- 提问频率统计（最近 N 天热门问题，驱动首页快捷问题） ----------
 
-def record_question(question: str) -> None:
-    """记录一次提问：按归一化文本累加计数并刷新最后提问时间。"""
+def _question_scope(department_id: str) -> str | None:
+    from app.services import access
+    context = access.question_context(department_id)
+    if context["scope"] == "none":
+        return None
+    return "department:" + context["department_id"] if context["scope"] == "department" else context["scope"]
+
+
+def record_question(question: str, department_id: str = "", *, expected_revision: int | None = None) -> None:
+    """同一问题在部门内累加；公共访客共用独立公共池，旧个人数据不混入。"""
     q = "".join(str(question or "").split())[:40]
     if not q:
         return
-    from app.services import access
-    query = {"question": q}
-    if not access.is_internal():
-        query["scope"] = access.feedback_scope()
-    mongo.db().question_stats.update_one(
-        query,
-        {"$inc": {"count": 1}, "$set": {"last_at": now_iso()}},
-        upsert=True,
-    )
+    with department_mutation_lock:
+        if expected_revision is not None and access_revision() != expected_revision:
+            return
+        scope = _question_scope(department_id)
+        if scope is None:
+            return
+        key = sha256((scope + "\0" + q).encode("utf-8")).hexdigest()
+        update = {"$inc": {"count": 1}, "$set": {"last_at": now_iso()},
+                  "$setOnInsert": {"question": q, "scope": scope}}
+        collection = mongo.db().question_stats
+        try:
+            collection.update_one({"_id": key}, update, upsert=True)
+        except DuplicateKeyError:
+            collection.update_one({"_id": key}, update)
 
 
-def top_questions(days: int = 7, limit: int = 4) -> list[dict]:
+def top_questions(days: int = 7, limit: int = 4, department_id: str = "") -> list[dict]:
     """最近 days 天内提问次数最多的问题（按计数倒序）。"""
     since = (datetime.now(CN_TZ) - timedelta(days=max(1, days))).strftime("%Y-%m-%d %H:%M:%S")
-    from app.services import access
-    query = {"last_at": {"$gte": since}}
-    if not access.is_internal():
-        query["scope"] = access.feedback_scope()
+    scope = _question_scope(department_id)
+    if scope is None:
+        return []
+    query = {"last_at": {"$gte": since}, "scope": scope}
     rows = (mongo.db().question_stats.find(query, {"_id": 0})
-            .sort("count", DESCENDING).limit(max(1, limit)))
+            .sort([("count", DESCENDING), ("last_at", DESCENDING), ("question", ASCENDING)]).limit(max(1, limit)))
     return [{"question": r.get("question", ""), "count": r.get("count", 0)} for r in rows]
 
 
@@ -596,6 +620,7 @@ def delete_department(department_id: str, target_department_id: str = "") -> dic
             users.update_many({"department_ids": {"$exists": False}},
                               {"$set": {"department_ids": [], "department_roles": {}}})
         mongo.db().departments.delete_one({"_id": department_id})
+        mongo.db().question_stats.delete_many({"scope": "department:" + department_id})
         bump_access_revision()
         return {"deleted": True, "department_id": department_id, "target_department_id": target,
                 "moved_documents": moved, "removed_memberships": removed,

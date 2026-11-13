@@ -1,5 +1,6 @@
 """引用文档嵌套在所属命中来源下；全部使用内存替身，不连接数据库或模型。"""
 import unittest
+from tests.network_test_support import online_api_test
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,6 +26,7 @@ def document(doc_id="manual", name="设备手册.md", **kwargs):
     )
 
 
+@online_api_test
 class ReferenceSourcesTest(unittest.TestCase):
     def test_shared_reference_is_nested_once_under_each_parent(self):
         records = [
@@ -108,6 +110,7 @@ class ReferenceSourcesTest(unittest.TestCase):
         get.assert_not_called()
 
 
+@online_api_test
 class ReferenceSourcesFlowTest(unittest.TestCase):
     def setUp(self):
         config = replace(service.settings, llm_api_key="test-key")

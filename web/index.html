@@ -57,12 +57,9 @@
         <div class="overview-item"><span class="overview-icon amber" aria-hidden="true">✓</span><div><strong class="overview-word">原文溯源</strong><span>答案附带参考依据</span></div></div>
       </div>
     </div>
-    <div class="hints" id="hints" aria-label="试试这些问题">
-      <div class="hints-heading">从一个问题开始<span>选择常见问题，快速查询</span></div>
-      <button class="hint" type="button">网页打不开</button>
-      <button class="hint" type="button">音响没声音</button>
-      <button class="hint" type="button">华智剔废乱剔</button>
-      <button class="hint" type="button">箱签出不来</button>
+    <div class="hints" id="hints" aria-label="常见问题">
+      <div class="hints-heading"><strong id="question-hints-title">常见问题</strong><span id="question-hints-scope"></span><label class="question-department-control" id="question-department-control" hidden>所属部门<select id="question-department" aria-label="常见问题所属部门" title="切换部门将开始新对话，历史记录保留"></select></label></div>
+      <p class="hints-state" id="question-hints-state" role="status">正在加载常见问题…</p>
     </div>
     <div id="chat-log" role="log" aria-label="问答记录" aria-live="polite" aria-relevant="additions text"></div>
     <div class="composer">
@@ -379,6 +376,17 @@
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">
         记录分类选「厂商系统」时必须选择厂商；删除厂商不影响已保存记录上已填的厂商。
+      </div>
+    </div>
+    <div class="panel-card super-admin-only" id="external-apis-panel">
+      <h2>外围接口开关</h2>
+      <div class="row" style="align-items:center;margin-bottom:8px">
+        <button class="ghost" type="button" id="external-apis-toggle" aria-pressed="true">关闭外围接口</button>
+        <span class="muted" id="external-apis-status" style="font-size:13px"></span>
+      </div>
+      <div class="muted" style="font-size:12px">
+        控制大模型问答、联网搜索与图片识别等外部 API 调用。关闭后系统进入<b>全离线查询</b>：
+        仅使用本地知识库检索与规则回答，外部接口一律停用；重新开启后立即恢复联网能力。
       </div>
     </div>
   </section>
@@ -774,6 +782,11 @@ const history = [];
 let historyConversationId = "";
 let chatSessionVersion = 0;
 const chatRequests = new Set();
+let questionDepartmentId = "";
+let questionScope = "none";
+let questionDepartments = [];
+let questionOptionsReady = false;
+let topQuestionsRequestId = 0;
 
 function addMessage(role, html, raw) {
   const wrap = document.createElement("div");
@@ -939,6 +952,7 @@ async function reaskAnswer(e) {
   const started = performance.now();
   const llmOn = !fmState.enabled && llmState.enabled;
   const version = chatSessionVersion;
+  const departmentId = currentQuestionDepartment();
   const controller = new AbortController();
   chatRequests.add(controller);
   try {
@@ -948,6 +962,7 @@ async function reaskAnswer(e) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question,
+        department_id: departmentId,
         history: [],
         fast_mode: fmState.enabled,
         llm_polish: llmOn,
@@ -984,6 +999,7 @@ async function ask(question, userLabel) {
   }
 
   const version = chatSessionVersion;
+  const departmentId = currentQuestionDepartment();
   const controller = new AbortController();
   chatRequests.add(controller);
   const image = pendingImage;
@@ -1048,6 +1064,7 @@ async function ask(question, userLabel) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question: q,
+        department_id: departmentId,
         history: contextOn ? history : [],
         conversation_id: contextOn && history.length ? historyConversationId : "",
         fast_mode: fastOn,
@@ -1089,6 +1106,11 @@ async function ask(question, userLabel) {
 }
 
 const hintsBox = $("#hints");
+const questionDepartmentSelect = $("#question-department");
+const questionDepartmentControl = $("#question-department-control");
+const questionHintsTitle = $("#question-hints-title");
+const questionHintsScope = $("#question-hints-scope");
+const questionHintsState = $("#question-hints-state");
 
 // 输入第一个字符后隐藏预设问题（本次会话不再出现）
 questionBox.addEventListener("input", () => {
@@ -1108,15 +1130,88 @@ hintsBox.addEventListener("click", (e) => {
   ask(el.textContent);
 });
 
-// 首页快捷问题：展示最近 7 天提问最多的 4 个问题；无数据时保留默认
+function currentQuestionDepartment() {
+  return typeof portal !== "undefined" && portal === "search" ? "" : questionDepartmentId;
+}
+
+function clearQuestionHints(message) {
+  hintsBox.querySelectorAll(".hint").forEach((button) => button.remove());
+  questionHintsState.textContent = message;
+  questionHintsState.hidden = !message;
+}
+
+function renderQuestionDepartment() {
+  const isPublic = typeof portal !== "undefined" && portal === "search";
+  const selected = questionDepartments.find((department) => department.id === questionDepartmentId);
+  questionHintsTitle.textContent = isPublic || questionScope === "public" ? "公共常见问题"
+    : selected ? `${selected.name}常见问题` : "常见问题";
+  questionHintsScope.textContent = isPublic || questionScope === "public" ? "最近 7 天公共提问"
+    : questionScope === "department" ? "最近 7 天本部门提问" : "未分配部门";
+  questionDepartmentControl.hidden = isPublic || questionScope !== "department" || questionDepartments.length < 2;
+  questionDepartmentSelect.disabled = questionDepartmentControl.hidden;
+  questionDepartmentSelect.innerHTML = "";
+  if (!isPublic && questionScope === "department") {
+    for (const department of questionDepartments) {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      questionDepartmentSelect.appendChild(option);
+    }
+    questionDepartmentSelect.value = questionDepartmentId;
+  }
+}
+
+async function changeQuestionDepartment() {
+  if (typeof portal !== "undefined" && portal === "search") return;
+  const departmentId = questionDepartmentSelect.value;
+  if (departmentId === questionDepartmentId || !questionDepartments.some((department) => department.id === departmentId)) return;
+  questionDepartmentId = departmentId;
+  questionScope = "department";
+  startNewChat({ focus: false });
+  await loadTopQuestions();
+}
+questionDepartmentSelect.addEventListener("change", changeQuestionDepartment);
+
+// 热门问题只使用当前部门或公共端的独立统计，无数据时不借用其他范围的问题。
 async function loadTopQuestions() {
+  const requestId = ++topQuestionsRequestId;
+  const isPublic = typeof portal !== "undefined" && portal === "search";
+  const departmentId = currentQuestionDepartment();
+  if (isPublic) {
+    questionDepartmentId = "";
+    questionDepartments = [];
+    questionScope = "public";
+  }
+  questionOptionsReady = false;
+  clearQuestionHints("正在加载常见问题…");
+  renderQuestionDepartment();
+  hintsBox.setAttribute("aria-busy", "true");
   try {
-    const resp = await fetch("/api/questions/top");
-    if (!resp.ok) return;
+    const url = departmentId ? `/api/questions/top?department_id=${encodeURIComponent(departmentId)}` : "/api/questions/top";
+    const resp = await fetch(url);
     const data = await resp.json();
-    const qs = (data.questions || []).filter((q) => q.question).slice(0, 4);
-    if (!qs.length) return;
-    hintsBox.querySelectorAll(".hint").forEach((b) => b.remove());
+    if (requestId !== topQuestionsRequestId) return;
+    if (!resp.ok || (isPublic && data.scope !== "public") ||
+        (departmentId && data.department_id !== departmentId)) throw new Error("常见问题加载失败");
+    const scope = isPublic ? "public" : data.scope === "department" ? "department" : "none";
+    const selectedDepartment = scope === "department" ? String(data.department_id || "") : "";
+    const departments = scope === "department" && Array.isArray(data.departments)
+      ? data.departments.filter((department) => department && typeof department.id === "string" && department.id)
+        .map((department) => ({ id: department.id, name: String(department.name || "未命名部门") })) : [];
+    if (scope === "department" && !departments.some((department) => department.id === selectedDepartment)) {
+      throw new Error("常见问题所属部门无效");
+    }
+    questionScope = scope;
+    questionDepartmentId = selectedDepartment;
+    questionDepartments = departments;
+    questionOptionsReady = true;
+    renderQuestionDepartment();
+    const qs = questionScope === "none" ? [] : (Array.isArray(data.questions) ? data.questions : [])
+      .filter((question) => question && typeof question.question === "string" && question.question.trim()).slice(0, 4);
+    const empty = questionScope === "public" ? "公共端暂无常见问题，可直接输入问题查询。"
+      : questionScope === "department" ? "本部门暂无常见问题，可直接输入问题查询。"
+      : "当前账号尚未分配部门，可直接输入问题查询。";
+    clearQuestionHints(qs.length ? "" : empty);
     for (const q of qs) {
       const btn = document.createElement("button");
       btn.className = "hint";
@@ -1124,7 +1219,12 @@ async function loadTopQuestions() {
       btn.textContent = q.question;
       hintsBox.appendChild(btn);
     }
-  } catch { /* 网络异常时保留默认快捷问题 */ }
+  } catch {
+    if (requestId !== topQuestionsRequestId) return;
+    clearQuestionHints("常见问题暂时无法加载，请稍后重试。");
+  } finally {
+    if (requestId === topQuestionsRequestId) hintsBox.setAttribute("aria-busy", "false");
+  }
 }
 
 /* ---------- 图片提问：图片先挂在输入框，用户可补描述，发送时才识别 ----------
@@ -2586,7 +2686,49 @@ async function refreshSettings() {
   await loadTemplates();
   syncTplEditor();
   renderVendorList();
+  await refreshExternalApis();
 }
+
+/* ---------- 外围接口开关：关闭后全离线查询（仅平台管理员） ---------- */
+
+function renderExternalApis(enabled) {
+  const toggle = $("#external-apis-toggle");
+  toggle.textContent = enabled ? "关闭外围接口" : "开启外围接口";
+  toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+  $("#external-apis-status").textContent = enabled
+    ? "当前联网：可调用大模型、联网搜索与图片识别"
+    : "当前全离线：外部接口全部停用，仅本地知识库检索";
+}
+
+async function refreshExternalApis() {
+  if (!isSuperAdmin) return;
+  try {
+    const resp = await fetch("/api/admin/external-apis");
+    if (!resp.ok) throw new Error("状态读取失败");
+    renderExternalApis((await resp.json()).enabled === true);
+  } catch (err) {
+    $("#external-apis-status").textContent = String(err.message || err);
+  }
+}
+
+async function toggleExternalApis() {
+  if (!isSuperAdmin) return;
+  const enable = $("#external-apis-toggle").getAttribute("aria-pressed") !== "true";
+  try {
+    const resp = await fetch("/api/admin/external-apis", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: enable }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) { toast(data.detail || "设置失败，请稍后重试"); return; }
+    renderExternalApis(data.enabled === true);
+    toast(data.enabled ? "外围接口已开启，恢复联网能力" : "已切换为全离线查询模式");
+  } catch {
+    toast("设置失败：网络异常");
+  }
+}
+$("#external-apis-toggle").addEventListener("click", toggleExternalApis);
+
 
 /* ---------- 工作周报：个人排程 + 平台统一排程 + 周报列表 ---------- */
 

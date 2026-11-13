@@ -17,6 +17,7 @@ import time
 from uuid import uuid4
 
 from app.core.llm import client as llm_client
+from app.core import network_policy
 from fastapi import HTTPException
 from app.services import access, auth, database, kb, mongo
 
@@ -201,6 +202,8 @@ def _record_content(doc_id: str) -> str:
 
 def summarize(person: str, week: str, items: list[dict]) -> str:
     """LLM 阅读本周全部记录正文后的小结；无记录或调用失败返回空串（由清单兜底）。"""
+    if not network_policy.external_apis_enabled():
+        return ""
     entries = []
     for it in items:
         content = _record_content(it.get("doc_id", ""))

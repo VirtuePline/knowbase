@@ -15,6 +15,9 @@ _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 class ChatImageTest(unittest.TestCase):
     def setUp(self):
+        policy = patch.object(routes.database, "external_apis_enabled", return_value=True)
+        policy.start()
+        self.addCleanup(policy.stop)
         guest = {"username": "guest:image-test", "role": "guest", "public_only": True,
                  "department_ids": [], "department_roles": {}, "must_change_password": False}
         session = patch.object(auth, "public_identity", return_value=guest)

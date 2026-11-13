@@ -1,6 +1,7 @@
 """行内引用：索引隔离、保存往返与检索后的模型上下文。"""
 import tempfile
 import unittest
+from tests.network_test_support import online_api_test
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ def hit(refs=None):
                              references=refs or []), score=1, coverage=1)
 
 
+@online_api_test
 class InlineReferencesTest(unittest.TestCase):
     def test_reference_is_removed_without_removing_surrounding_text(self):
         with tempfile.TemporaryDirectory() as tmp:

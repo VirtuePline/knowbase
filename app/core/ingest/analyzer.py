@@ -18,6 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 
 from app.config import settings
+from app.core import network_policy
 from app.core.ingest.chunker import _split_text, is_title_row
 from app.core.llm.client import LLMError, chat
 from app.domain.schemas import Block
@@ -432,7 +433,7 @@ def _llm_doc_summary(doc_name: str, sections: list[Block]) -> str:
 
 
 def _use_llm() -> bool:
-    return settings.analysis_use_llm and settings.llm_available
+    return settings.analysis_use_llm and settings.llm_available and network_policy.external_apis_enabled()
 
 
 # ---------- 文档分类 ----------
@@ -498,6 +499,8 @@ def analyze(blocks: list[Block], doc_name: str) -> DocAnalysis:
     if _use_llm():
         candidates = [(i, b) for i, b in enumerate(prepared) if i not in noise and not b.table]
         for batch in _batches(candidates):
+            if not _use_llm():
+                break
             try:
                 decisions.update(_analyze_batch(doc_name, batch))
                 method = "llm"
@@ -521,7 +524,7 @@ def analyze(blocks: list[Block], doc_name: str) -> DocAnalysis:
         sections.append(replace(block, summary=summary or fallback))
 
     summary = ""
-    if method == "llm":
+    if method == "llm" and _use_llm():
         try:
             summary = _llm_doc_summary(doc_name, sections)
         except (LLMError, ValueError):

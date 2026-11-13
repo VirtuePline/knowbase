@@ -15,6 +15,7 @@ import re
 import threading
 
 from app.config import settings
+from app.core import network_policy
 from app.core.ingest.pipeline import rebuild_index
 from app.core.retrieval.bm25 import BM25Index
 from app.core.retrieval.embeddings import EmbeddingError, get_embedder
@@ -243,7 +244,9 @@ class RetrievalService:
         index = self.index
         allowed = allowed_document_ids()
         chunks = index.chunks if allowed is None else [c for c in index.chunks if c.doc_id in allowed]
-        if settings.llm_available:
+        if not network_policy.external_apis_enabled():
+            llm = "已停用（离线查询）"
+        elif settings.llm_available:
             llm = settings.llm_model
         else:
             llm = "未配置（仅返回检索摘录）"

@@ -1,5 +1,6 @@
 """故障匹配与来源指标回归：不连接数据库、不加载模型、不调用搜索。"""
 import unittest
+from tests.network_test_support import online_api_test
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
@@ -19,6 +20,7 @@ def audio_hit():
                        semantic=0.95, bm25_used=True, semantic_used=True)
 
 
+@online_api_test
 class FaultAnswerFlowTest(unittest.TestCase):
     def setUp(self):
         patcher = patch.object(service, "settings", replace(service.settings, llm_api_key="fake"))
@@ -61,6 +63,7 @@ class FaultAnswerFlowTest(unittest.TestCase):
         draft.assert_not_called()
 
 
+@online_api_test
 class SourceMetricTest(unittest.TestCase):
     def test_zero_negative_and_missing_metrics_are_distinct(self):
         hit = audio_hit()

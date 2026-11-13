@@ -144,8 +144,10 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
                     "authenticated": False, "admin": False, "user": "", "account": "", "username": "访客",
                     "display_name": "公共访问", "role": "guest", "can_write": False, "can_manage_users": False,
                     "can_register": False, "department_ids": [], "department_roles": {}, "departments": [],
-                    "must_change_password": False, "permission_stamp": access.permission_stamp(identity)}
-        return {"mode": mode, "portal": mode, **identity_payload(auth.session_identity(admin_session))}
+                    "must_change_password": False, "permission_stamp": access.permission_stamp(identity),
+                    "external_apis_enabled": database.external_apis_enabled()}
+        return {"mode": mode, "portal": mode, **identity_payload(auth.session_identity(admin_session)),
+                "external_apis_enabled": database.external_apis_enabled()}
 
     def readable_identity(admin_session: str | None = Cookie(default=None)):
         return access.current_identity() if mode == "search" else require_login(admin_session)

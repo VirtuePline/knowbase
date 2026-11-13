@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 from app.config import settings
+from app.core import network_policy
 
 
 class EmbeddingError(Exception):
@@ -35,7 +36,8 @@ class LocalEmbedder:
                         # 缓存固定到项目内 data/models/fastembed：预下载后本机与
                         # Docker 镜像共用同一离线模型，运行时不再联网下载
                         cache_dir = str(settings.base_dir / "data" / "models" / "fastembed")
-                        self._model = TextEmbedding(settings.embedding_model, cache_dir=cache_dir)
+                        self._model = TextEmbedding(settings.embedding_model, cache_dir=cache_dir,
+                                                    local_files_only=not network_policy.external_apis_enabled())
                     except Exception as exc:   # 模型下载失败、依赖缺失等
                         raise EmbeddingError(f"本地向量模型加载失败：{type(exc).__name__}: {exc}") from exc
         return self._model
@@ -62,6 +64,8 @@ class ApiEmbedder:
     """OpenAI 兼容 embeddings 接口。"""
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not network_policy.external_apis_enabled():
+            raise EmbeddingError("外部接口已关闭，API 向量服务已停用")
         if not settings.embedding_api_key:
             raise EmbeddingError("未配置 embedding.api_key")
         url = f"{settings.embedding_base_url}/embeddings"
@@ -72,6 +76,8 @@ class ApiEmbedder:
         payload = {"model": settings.embedding_model, "input": texts}
         request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
         try:
+            if not network_policy.external_apis_enabled():
+                raise EmbeddingError("外部接口已关闭，API 向量服务已停用")
             with urllib.request.urlopen(request, timeout=settings.embedding_timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
             rows = sorted(data["data"], key=lambda item: item["index"])
@@ -90,7 +96,8 @@ _embedder_lock = threading.Lock()
 def get_embedder():
     """按配置返回嵌入器单例；embedding.enabled = false 时返回 None。"""
     global _embedder
-    if not settings.embedding_enabled:
+    if not settings.embedding_enabled or (settings.embedding_provider != "local"
+                                          and not network_policy.external_apis_enabled()):
         return None
     if _embedder is None:
         with _embedder_lock:

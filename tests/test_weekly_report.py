@@ -1,6 +1,7 @@
 """工作周报：设置校验、本周记录收集与定时生成幂等。"""
 import datetime
 import unittest
+from tests.network_test_support import online_api_test
 from unittest.mock import patch
 
 from app.domain.schemas import DocRecord
@@ -16,6 +17,7 @@ def make_record(doc_id: str, name: str, owner: str, uploaded_at: str,
     )
 
 
+@online_api_test
 class WeeklySettingsTest(unittest.TestCase):
     """周报设置：缺省值、非法输入与持久化。"""
 
@@ -40,6 +42,7 @@ class WeeklySettingsTest(unittest.TestCase):
                 weekly.save_settings(True, 5, "25:00", [])
 
 
+@online_api_test
 class WeeklyCollectTest(unittest.TestCase):
     """本周记录收集：按账号与日期过滤，标题完整保留并带解决状态。"""
 
@@ -63,6 +66,7 @@ class WeeklyCollectTest(unittest.TestCase):
         self.assertEqual(weekly.week_start(datetime.date(2026, 11, 11)), "2026-11-09")
 
 
+@online_api_test
 class WeeklyScheduleTest(unittest.TestCase):
     """定时生成：到点触发、未到点跳过。"""
 

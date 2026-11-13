@@ -34,6 +34,7 @@ class ChatRequest(BaseModel):
     question: str = Field(default="", description="用户提问")
     history: list[dict] = Field(default_factory=list, description="预留的上下文轮次")
     conversation_id: str = Field(default="", max_length=128)
+    department_id: str = Field(default="", max_length=48, description="常见问题统计所属部门，须为当前账号可选部门")
     fast_mode: bool | None = Field(default=None, description="本次是否快速问答；缺省用服务端全局设置")
     llm_polish: bool = Field(default=False, description="是否用大模型整理答案；默认只用精排与规则提取")
     web_search: bool | None = Field(default=None, description="本次是否允许联网搜索；缺省用服务端全局设置")
@@ -43,6 +44,8 @@ class ChatRequest(BaseModel):
 @search_router.post("/chat")
 def chat(req: ChatRequest) -> dict:
     try:
+        context = access.question_context(req.department_id)
+        question_revision = database.access_revision()
         rejected = [doc_id for doc_id in req.reject_doc_ids
                     if (doc := database.get(doc_id)) is not None and access.can_read(doc)]
         history = conversations.load(req.conversation_id, use_history=bool(req.history))
@@ -56,7 +59,7 @@ def chat(req: ChatRequest) -> dict:
         # 提问频率统计（用于首页「从一个问题开始」展示最近 7 天热门问题）
         if result.get("status") != "error":
             try:
-                database.record_question(req.question)
+                database.record_question(req.question, context["department_id"], expected_revision=question_revision)
             except Exception:   # noqa: BLE001
                 pass
         if rejected:
@@ -91,6 +94,8 @@ async def chat_image(image: UploadFile = File(...)) -> dict:
     mime = (image.content_type or "").lower()
     if not mime.startswith("image/"):
         raise HTTPException(status_code=400, detail="请上传图片文件（png / jpg / webp 等）")
+    if not await run_in_threadpool(database.external_apis_enabled):
+        raise HTTPException(status_code=400, detail="离线查询模式不支持图片识别，请使用文字提问")
     data = await _read_upload(image, MAX_IMAGE_BYTES, "图片超过 10MB，请压缩后再上传")
     if not data:
         raise HTTPException(status_code=400, detail="图片内容为空")
@@ -106,9 +111,11 @@ async def chat_image(image: UploadFile = File(...)) -> dict:
 
 
 @search_router.get("/questions/top")
-def questions_top(limit: int = 4, days: int = 7) -> dict:
+def questions_top(limit: int = 4, days: int = 7, department_id: str = "") -> dict:
     """最近 days 天提问最多的问题（首页快捷问题数据源）。"""
-    return {"questions": database.top_questions(max(1, min(days, 90)), max(1, min(limit, 8)))}
+    context = access.question_context(department_id)
+    return {**context, "questions": database.top_questions(
+        max(1, min(days, 90)), max(1, min(limit, 8)), context["department_id"])}
 
 
 @search_router.get("/health")
@@ -509,6 +516,21 @@ def update_document_time(doc_id: str, req: TimeRequest) -> dict:
 
 class WebSearchRequest(BaseModel):
     enabled: bool = Field(description="true 开启联网搜索，false 关闭；立即生效")
+
+
+class ExternalApisRequest(BaseModel):
+    enabled: bool
+
+
+@admin_router.get("/external-apis")
+def external_apis_status() -> dict:
+    return {"enabled": database.external_apis_enabled()}
+
+
+@admin_router.post("/external-apis", dependencies=[Depends(require_super_admin)])
+def set_external_apis(req: ExternalApisRequest) -> dict:
+    database.set_runtime_setting("external_apis", "on" if req.enabled else "off")
+    return {"enabled": database.external_apis_enabled()}
 
 
 @admin_router.get("/web-search")

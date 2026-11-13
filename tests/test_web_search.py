@@ -2,6 +2,7 @@
 import io
 import json
 import unittest
+from tests.network_test_support import online_api_test
 import urllib.error
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,7 @@ from app.config import settings
 from app.core.search import client
 
 
+@online_api_test
 class WebSearchTest(unittest.TestCase):
     def setUp(self):
         self.config = replace(settings, web_search_enabled=True, web_search_provider="tavily",

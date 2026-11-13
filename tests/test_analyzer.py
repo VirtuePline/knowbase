@@ -1,5 +1,6 @@
 import re
 import unittest
+from tests.network_test_support import online_api_test
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from app.core.ingest.pipeline import Ingester
 from app.domain.schemas import Block
 
 
+@online_api_test
 class AnalyzerTest(unittest.TestCase):
     def test_noise_is_skipped_and_main_section_is_summarized(self):
         blocks = [

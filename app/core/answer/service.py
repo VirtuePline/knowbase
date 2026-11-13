@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from app.config import settings
+from app.core import network_policy
 from app.core.answer.context import is_stats_question, render_excerpts, render_hits, source_snippet, table_to_markdown
 from app.core.answer.solutions import extract_solutions, render_solutions
 from app.core.answer.references import append_references, attach_reference_sources
@@ -101,7 +102,7 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
     """
     hits = authorized_hits(hits)
     anchor = next((h for h in hits if h.chunk.table), None)
-    if anchor is None or not settings.llm_available:
+    if anchor is None or not settings.llm_available or not network_policy.external_apis_enabled():
         return None
     if not (is_stats_question(text) or is_stats_question(search_query)):
         return None
@@ -139,7 +140,7 @@ def _ledger_stats(text: str, hits: list[ScoredChunk], category: str,
         reply = llm_complete(guided, table_context, history).strip()
     except LLMError:
         reply = ""
-    if not reply or "NO_ANSWER" in reply.upper()[:200]:
+    if (not reply or "NO_ANSWER" in reply.upper()[:200]) and network_policy.external_apis_enabled():
         # 模型偶发对同一统计请求回答 NO_ANSWER（服务端波动），重试一次；
         # 完整台账已就绪，多花一次调用换来稳定的全表统计。
         try:
@@ -294,6 +295,11 @@ def _web_fallback(question: str, category: str, hits: list[ScoredChunk],
     回退展示知识库相关记录原文；缺省沿用服务端全局开关。
     """
     base = "知识库中未找到与当前问题直接对应的处理方案。"
+    if not network_policy.external_apis_enabled():
+        if hits:
+            return _kb_excerpts(question, category, hits, "离线查询：以下为本地知识库记录原文。")
+        return AnswerResponse(status="not_found", answer="本地知识库中未找到相关内容，请补充关键词或相关资料。",
+                              category=category, answer_origin="none", notice="当前为离线查询模式，未调用外部接口。")
     web_on = web_search_runtime_enabled() if web_enabled is None else web_enabled
     if not settings.web_search_available:
         if hits:
@@ -345,7 +351,7 @@ def _web_fallback(question: str, category: str, hits: list[ScoredChunk],
     if not sources:
         return AnswerResponse(status="not_found", answer=base + "未能取得足够的联网参考内容。",
                               category=category, answer_origin="none")
-    if settings.llm_available and not model_failed:
+    if settings.llm_available and not model_failed and network_policy.external_apis_enabled():
         try:
             plan = _draft(question, "\n\n".join(context_blocks), len(sources))
         except LLMError:
@@ -421,7 +427,8 @@ def _answer(question: str, history: list[dict] | None = None,
     fast = fast_mode_enabled() if fast_mode is None else fast_mode
     # 大模型整理：开启后才调用 LLM（方案整理 / 问答 / 结合上文改写 / 联网整理）；
     # 默认关闭——精排 + 规则提取直接出结果，快且稳定。
-    use_llm = bool(llm_polish) and not fast
+    offline = not network_policy.external_apis_enabled()
+    use_llm = bool(llm_polish) and not fast and not offline
 
     # 大模型整理开启时结合对话历史改写检索查询：上一轮聊过的设备/字段，追问里
     # 只有"那几台""它"这类指代，单看问题检不到目标记录。改写失败回退原问题，
@@ -481,7 +488,7 @@ def _answer(question: str, history: list[dict] | None = None,
                 status="ok", answer=_link_kb_records(_render_plan(plan), hits), category=category,
                 sources=sources, llm_used=True, solution_found=True,
                 notice=CONFLICT_NOTICE if conflict_risk(selected) else "")
-        if not model_failed:
+        if not model_failed and network_policy.external_apis_enabled():
             # 提取不到"处理方案"不等于无答案：台账统计（如"几台设备没有IP"）、
             # 参数查询这类问题没有操作步骤，但记录原文往往能直接回答。再让模型以
             # 问答模式基于同一批记录作答；记录不足时模型按协议输出 NO_ANSWER，
@@ -507,7 +514,9 @@ def _answer(question: str, history: list[dict] | None = None,
         # 知识库命中但没有可执行方案（如「某某的 IP 是多少」这类台账查询）：
         # 直接回相关记录原文，不转联网，避免把知识库里已有的信息盖掉。
         notice = "未找到与问题直接对应的处理方案，以下为知识库相关记录原文，请按需取用。"
-        if not ops:
+        if offline:
+            notice = "离线查询：以下为本地知识库记录原文，未调用外部接口。"
+        elif not ops:
             notice = "以下为当前账号可访问的知识库原文；可打开「大模型整理」获取基于文档的回答。"
         elif fast:
             notice = "快速模式：未整理处理步骤，以下为知识库原文，请按需取用。"

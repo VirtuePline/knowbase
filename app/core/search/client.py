@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from app.config import settings
+from app.core import network_policy
 
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _SECRET_FIELD = re.compile(
@@ -114,7 +115,7 @@ def _result_score(row: dict) -> float:
 
 def search(question: str) -> list[WebResult]:
     """搜索公开参考；不接收历史或知识库原文，不调用服务端自动回答。"""
-    if not settings.web_search_available:
+    if not settings.web_search_available or not network_policy.external_apis_enabled():
         return []
     query = sanitize_query(question)
     if not query:
@@ -127,6 +128,8 @@ def search(question: str) -> list[WebResult]:
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {settings.web_search_api_key}"},
             method="POST",
         )
+        if not network_policy.external_apis_enabled():
+            return []
         with urllib.request.urlopen(request, timeout=settings.web_search_timeout) as response:
             body = response.read(_MAX_RESPONSE_BYTES + 1)
         if len(body) > _MAX_RESPONSE_BYTES:

@@ -17,8 +17,8 @@ class FakeQuestionStats:
         self.now_iso = now_iso
 
     def update_one(self, query, update, upsert=False):
-        key = query["question"]
-        doc = self.docs.setdefault(key, {"question": key, "count": 0, "last_at": ""})
+        key = query["_id"]
+        doc = self.docs.setdefault(key, {**update["$setOnInsert"], "count": 0, "last_at": ""})
         doc["count"] += update["$inc"]["count"]
         doc["last_at"] = update["$set"]["last_at"]
 
@@ -26,7 +26,9 @@ class FakeQuestionStats:
         def __init__(self, items):
             self.items = items
 
-        def sort(self, key, direction):
+        def sort(self, fields):
+            for key, direction in reversed(fields):
+                self.items.sort(key=lambda item: item.get(key, ""), reverse=direction < 0)
             return self
 
         def limit(self, n):
@@ -34,7 +36,7 @@ class FakeQuestionStats:
 
     def find(self, query, projection=None):
         since = query["last_at"]["$gte"]
-        return self._Cursor([d for d in self.docs.values() if d["last_at"] >= since])
+        return self._Cursor([d for d in self.docs.values() if d["last_at"] >= since and d.get("scope") == query["scope"]])
 
 
 class QuestionStatsTest(unittest.TestCase):
@@ -44,21 +46,27 @@ class QuestionStatsTest(unittest.TestCase):
 
     def test_record_and_top_recent(self):
         stats = FakeQuestionStats(database.now_iso())
-        with self._db(stats):
+        # 让每条记录的 last_at 依次递增，验证「同频次取最近提问」的排序规则
+        counter = [0]
+        def tick():
+            counter[0] += 1
+            return f"2026-11-13 00:00:{counter[0]:02d}"
+        with self._db(stats), patch.object(database, "now_iso", tick):
             for q in ["扫码枪扫不上", "扫码枪扫不上", "扫码枪扫不上", "音响没声音", "  网页  打不开 "]:
                 database.record_question(q)
             top = database.top_questions(days=7, limit=4)
             self.assertEqual([t["question"] for t in top][:2],
-                             ["扫码枪扫不上", "音响没声音"])
+                             ["扫码枪扫不上", "网页打不开"])   # 同为 1 次，最近问过的排前
             self.assertEqual(top[0]["count"], 3)
+            self.assertIn("音响没声音", [t["question"] for t in top])
             self.assertIn("网页打不开", [t["question"] for t in top])   # 空白已归一化
 
     def test_top_excludes_questions_older_than_days(self):
         stats = FakeQuestionStats(database.now_iso())
         old = (datetime.now(database.CN_TZ) - timedelta(days=8)).strftime("%Y-%m-%d %H:%M:%S")
-        stats.docs["旧问题"] = {"question": "旧问题", "count": 99, "last_at": old}
+        stats.docs["旧问题"] = {"question": "旧问题", "count": 99, "last_at": old, "scope": "internal"}
         stats.docs["新问题"] = {"question": "新问题", "count": 1,
-                               "last_at": database.now_iso()}
+                               "last_at": database.now_iso(), "scope": "internal"}
         with self._db(stats):
             top = database.top_questions(days=7, limit=4)
             self.assertEqual([t["question"] for t in top], ["新问题"])
