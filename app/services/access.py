@@ -87,7 +87,7 @@ def read_filter() -> dict:
     if actor.get("public_only"):
         return {"visibility": "public"}
     departments = actor.get("department_ids", [])
-    choices = [{"visibility": "public"}, {"department_id": {"$in": departments}},
+    choices = [{"visibility": "public"}, {"visibility": "all"}, {"department_id": {"$in": departments}},
                {"shared_department_ids": {"$in": departments}}]
     if OPERATIONS in departments:
         choices.append({"department_id": {"$in": ["", None]}})
@@ -103,7 +103,7 @@ def can_read(doc) -> bool:
     if actor.get("public_only"):
         return getattr(doc, "visibility", "department") == "public"
     departments = set(actor.get("department_ids", []))
-    return (getattr(doc, "visibility", "department") == "public"
+    return (getattr(doc, "visibility", "department") in {"public", "all"}
             or (getattr(doc, "department_id", "") or OPERATIONS) in departments
             or bool(departments.intersection(getattr(doc, "shared_department_ids", []))))
 
@@ -137,8 +137,8 @@ def creation_scope(department_id: str = "", visibility: str = "department",
     from app.services import database
     department_id = department_id.strip() or next(iter(sorted(writable_departments())), "") or database.default_department_id()
     shared = list(dict.fromkeys(str(value).strip() for value in shared_department_ids or [] if str(value).strip()))
-    if visibility not in {"department", "public"}:
-        raise HTTPException(status_code=400, detail="可见范围只能是 department / public")
+    if visibility not in {"department", "public", "all"}:
+        raise HTTPException(status_code=400, detail="可见范围只能是 department / public / all")
     if not is_platform_admin():
         if department_id not in writable_departments():
             raise HTTPException(status_code=403, detail="没有此部门的文档维护权限")
@@ -146,12 +146,14 @@ def creation_scope(department_id: str = "", visibility: str = "department",
             raise HTTPException(status_code=403, detail="公共文档由平台管理员发布")
         if shared and department_id not in managed_departments():
             raise HTTPException(status_code=403, detail="只有部门管理员可以授权跨部门共享")
+    if visibility == "all" and not is_platform_admin() and department_id not in managed_departments():
+        raise HTTPException(status_code=403, detail="只有部门管理员可以设置所有人共享")
     if not is_internal():
         existing = {row["id"] for row in database.list_departments()}
         if any(value not in existing for value in [department_id, *shared]):
             raise HTTPException(status_code=400, detail="部门不存在")
     return {"department_id": department_id, "visibility": visibility,
-            "shared_department_ids": [] if visibility == "public" else [d for d in shared if d != department_id]}
+            "shared_department_ids": [] if visibility in {"public", "all"} else [d for d in shared if d != department_id]}
 
 
 def permission_stamp(identity: dict) -> str:

@@ -221,6 +221,31 @@ test("public document labels use the supplied department name without a director
   assert.match(label, /企业公共/);
 });
 
+test("department managers can pick all-members sharing; public stays platform-admin only", () => {
+  const markup = shippedFunction(enterprise, "enterpriseScopeMarkup");
+  assert.match(markup, /<option value="all">所有人共享/, "下拉缺少「所有人共享」选项");
+  const render = shippedFunction(enterprise, "enterpriseRenderScope");
+  assert.match(render, /option\[value="all"\]'\)\.disabled = !canManageOwner\(owner\)/,
+    "部门管理员应能选择所有人共享");
+  assert.match(render, /option\[value="public"\]'\)\.disabled = enterpriseIdentity\?\.role !== "admin"/,
+    "企业公共文档仍仅平台管理员可发布");
+  const scope = shippedFunction(enterprise, "enterpriseScope");
+  assert.match(scope, /visibility !== "department"/, "全员共享时不应再选共享部门");
+  assert.match(shippedFunction(enterprise, "enterpriseDocumentLabel"), /所有人共享/, "列表标签缺少所有人共享");
+});
+
+test("all-members label renders for shared documents", () => {
+  const context = vm.createContext({
+    enterpriseIdentity: {},
+    enterpriseEscape: (value) => String(value).replace(/</g, "&lt;"),
+    enterpriseDepartmentName: () => "销售部",
+  });
+  vm.runInContext(shippedFunction(enterprise, "enterpriseDocumentLabel"), context);
+  const label = vm.runInContext('enterpriseDocumentLabel({ department_id: "sales", visibility: "all", shared_department_ids: [] })', context);
+  assert.match(label, /所有人共享/);
+  assert.doesNotMatch(label, /共享：/, "全员共享不应再列共享部门");
+});
+
 test("page terminology applies to general enterprise work", () => {
   for (const filename of fs.readdirSync(path.join(__dirname, "../web"))) {
     if (!/\.(html|js|css)$/.test(filename)) continue;

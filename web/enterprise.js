@@ -40,7 +40,7 @@ function enterpriseOptions(departments, selected = []) {
 function enterpriseScopeMarkup(prefix) {
   return `<div class="document-scope" data-scope="${prefix}">
     <label>所属部门<select id="${prefix}-department" required></select></label>
-    <label>可见范围<select id="${prefix}-visibility"><option value="department">部门文档</option><option value="public">企业公共文档（无需登录可访问）</option></select></label>
+    <label>可见范围<select id="${prefix}-visibility"><option value="department">部门文档</option><option value="all">所有人共享（登录成员可见）</option><option value="public">企业公共文档（无需登录可访问）</option></select></label>
     <label class="scope-shared">共享给其他部门<select id="${prefix}-shared" multiple aria-label="共享部门，可多选"></select><small>不选则仅本部门可见；共享仅授予阅读权限。</small></label>
   </div>`;
 }
@@ -55,20 +55,23 @@ function enterpriseRenderScope(prefix, doc = null, editing = false) {
   department.innerHTML = enterpriseOptions(options, [owner]);
   const visibility = document.getElementById(`${prefix}-visibility`);
   visibility.value = doc?.visibility || "department";
+  const canManageOwner = (deptId) => enterpriseIdentity?.role === "admin" || enterpriseIdentity?.department_roles?.[deptId] === "admin";
   visibility.querySelector('option[value="public"]').disabled = enterpriseIdentity?.role !== "admin";
+  visibility.querySelector('option[value="all"]').disabled = !canManageOwner(owner);
   const shared = document.getElementById(`${prefix}-shared`);
   shared.innerHTML = enterpriseOptions(enterpriseDepartments.filter((d) => d.id !== owner), doc?.shared_department_ids || []);
   container.querySelectorAll("select").forEach((select) => { select.disabled = editing; });
   container.classList.toggle("scope-locked", editing);
   container.title = editing ? "已有文档的归属与共享范围请在文档列表中使用“管理权限”修改" : "";
   const update = () => {
-    container.querySelector(".scope-shared").hidden = visibility.value === "public";
-    shared.disabled = editing || (enterpriseIdentity?.role !== "admin" && enterpriseIdentity?.department_roles?.[department.value] !== "admin");
+    container.querySelector(".scope-shared").hidden = visibility.value !== "department";
+    shared.disabled = editing || !canManageOwner(department.value);
   };
   visibility.onchange = update;
   department.onchange = () => {
     const selected = [...shared.selectedOptions].map((option) => option.value);
     shared.innerHTML = enterpriseOptions(enterpriseDepartments.filter((d) => d.id !== department.value), selected);
+    visibility.querySelector('option[value="all"]').disabled = !canManageOwner(department.value);
     update();
   };
   update();
@@ -79,7 +82,7 @@ function enterpriseScope(prefix) {
   const visibility = document.getElementById(`${prefix}-visibility`).value;
   const canShare = enterpriseIdentity?.role === "admin" || enterpriseIdentity?.department_roles?.[department.value] === "admin";
   return { department_id: department.value, visibility,
-    shared_department_ids: visibility === "public" || !canShare ? [] : [...document.getElementById(`${prefix}-shared`).selectedOptions].map((option) => option.value) };
+    shared_department_ids: visibility !== "department" || !canShare ? [] : [...document.getElementById(`${prefix}-shared`).selectedOptions].map((option) => option.value) };
 }
 function enterpriseAppendScope(form, prefix) {
   const scope = enterpriseScope(prefix);
@@ -89,7 +92,7 @@ function enterpriseAppendScope(form, prefix) {
 }
 function enterpriseDocumentLabel(doc) {
   const shared = doc.shared_department_ids || [];
-  return `<div class="document-access"><span>${enterpriseEscape(doc.department_name || enterpriseDepartmentName(doc.department_id || "operations"))}</span><span>${doc.visibility === "public" ? "企业公共" : "部门文档"}</span>${shared.length ? `<span>共享：${shared.map(enterpriseDepartmentName).map(enterpriseEscape).join("、")}</span>` : ""}</div>`;
+  return `<div class="document-access"><span>${enterpriseEscape(doc.department_name || enterpriseDepartmentName(doc.department_id || "operations"))}</span><span>${doc.visibility === "public" ? "企业公共" : doc.visibility === "all" ? "所有人共享" : "部门文档"}</span>${shared.length ? `<span>共享：${shared.map(enterpriseDepartmentName).map(enterpriseEscape).join("、")}</span>` : ""}</div>`;
 }
 async function enterpriseJson(url, options = {}) {
   const response = await fetch(url, options);

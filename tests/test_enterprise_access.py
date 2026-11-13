@@ -118,6 +118,34 @@ class EnterpriseAccessTest(unittest.TestCase):
         self.assertEqual(self.api.get("/api/documents/ops-doc").status_code, 404)
         self.assertNotEqual(self.api.get("/api/admin/session").json()["permission_stamp"], old)
 
+    def test_department_manager_can_share_with_all_logged_in_members(self):
+        """部门管理员可以把文档设为「所有人共享」：登录成员全员可读，匿名访客不可见。"""
+        self.login_as("manager")
+        response = self.api.patch("/api/documents/hr-doc/access", json={
+            "department_id": "hr", "visibility": "all", "shared_department_ids": []})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(database.get("hr-doc").visibility, "all")
+        self.login_as("ops")                                  # 其他部门登录成员可读
+        self.assertEqual(self.api.get("/api/documents/hr-doc").status_code, 200)
+        # 匿名公共端口不可见
+        self.assertEqual(self.search.get("/api/documents/hr-doc").status_code, 404)
+        # editor 不能设置所有人共享
+        self.login_as("hr")
+        response = self.api.patch("/api/documents/hr-doc/access", json={
+            "department_id": "hr", "visibility": "all", "shared_department_ids": []})
+        self.assertEqual(response.status_code, 403)
+        # 部门管理员看不到别的部门文档（404 防探测），自然无法改其权限
+        self.login_as("manager")
+        response = self.api.patch("/api/documents/ops-doc/access", json={
+            "department_id": "operations", "visibility": "all", "shared_department_ids": []})
+        self.assertEqual(response.status_code, 404)
+        # 上传时同样允许部门管理员直接选「所有人共享」
+        self.login_as("manager")
+        response = self.api.post("/api/documents", files={"file": ("all-share.md", "# 全员内容".encode("utf-8"), "text/markdown")},
+                                 data={"doc_type": "doc", "department_id": "hr", "visibility": "all",
+                                       "shared_department_ids": "[]"})
+        self.assertEqual(response.status_code, 200, response.text)
+
     def test_department_manager_cannot_change_other_department_roles(self):
         self.login_as("manager")
         response = self.api.patch("/api/admin/users/ops/departments", json={
