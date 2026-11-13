@@ -55,12 +55,12 @@ function createPage({ superAdmin = true, status = { enabled: true } } = {}) {
     isSuperAdmin: superAdmin,
     fetch: async (url, options = {}) => {
       requests.push({ url, options });
-      if (url === "/api/admin/external-apis" && options.method === "POST") {
+      if (url === "/api/external-apis" && options.method === "POST") {
         const body = JSON.parse(options.body);
         currentStatus = { enabled: body.enabled === true };
         return { ok: true, json: async () => currentStatus };
       }
-      if (url === "/api/admin/external-apis") return { ok: true, json: async () => currentStatus };
+      if (url === "/api/external-apis") return { ok: true, json: async () => currentStatus };
       throw new Error(`Unexpected request: ${url}`);
     },
   });
@@ -93,7 +93,7 @@ test("super admin sees current state and can switch to fully offline mode", asyn
   page.requests.length = 0;
   await page.run("toggleExternalApis()");
   assert.equal(page.requests.length, 1);
-  assert.equal(page.requests[0].url, "/api/admin/external-apis");
+  assert.equal(page.requests[0].url, "/api/external-apis");
   assert.deepEqual(JSON.parse(page.requests[0].options.body), { enabled: false });
   assert.equal(page.find("#external-apis-toggle").textContent, "开启外围接口");
   assert.equal(page.find("#external-apis-toggle").getAttribute("aria-pressed"), "false");

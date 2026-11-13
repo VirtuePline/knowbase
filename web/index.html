@@ -2703,7 +2703,7 @@ function renderExternalApis(enabled) {
 async function refreshExternalApis() {
   if (!isSuperAdmin) return;
   try {
-    const resp = await fetch("/api/admin/external-apis");
+    const resp = await fetch("/api/external-apis");
     if (!resp.ok) throw new Error("状态读取失败");
     renderExternalApis((await resp.json()).enabled === true);
   } catch (err) {
@@ -2715,7 +2715,7 @@ async function toggleExternalApis() {
   if (!isSuperAdmin) return;
   const enable = $("#external-apis-toggle").getAttribute("aria-pressed") !== "true";
   try {
-    const resp = await fetch("/api/admin/external-apis", {
+    const resp = await fetch("/api/external-apis", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: enable }),
     });
