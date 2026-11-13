@@ -5,12 +5,13 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from pymongo import MongoClient
 
 from app.api import routes
 from app.domain.schemas import DocRecord
 from app.main import search_app
-from app.services import auth, database, mongo, timeline
+from app.services import access, auth, database, mongo, timeline
 
 
 class TimelinePaginationTest(unittest.TestCase):
@@ -109,7 +110,7 @@ class TimelinePaginationTest(unittest.TestCase):
         self.assertFalse(result["has_more"])
         self.assertEqual(result["issue_count"], 45)
         self.assertEqual({item["name"]: item["count"] for item in result["categories"]},
-                         {"厂商系统": 5, "网络问题": 46, "常识库": 1})
+                         {"厂商系统": 5, "网络问题": 45})
         self.assertEqual({item["name"]: item["count"] for item in result["vendors"]},
                          {"华智": 4, "另一厂商": 1})
         self.assertEqual(result["status_counts"], {"": 4, "yes": 1, "no": 1, "improving": 1, "temporary": 1})
@@ -118,13 +119,85 @@ class TimelinePaginationTest(unittest.TestCase):
                 result = timeline.build(category="厂商系统", vendor="华智", status=status)
                 self.assertEqual([event["doc_id"] for event in result["events"]], [expected_id])
         general = timeline.build()
-        self.assertEqual(general["total"], 46)
-        self.assertEqual(general["event_count"], 46)
+        self.assertEqual(general["total"], 45)
+        self.assertEqual(general["event_count"], 45)
         self.assertEqual(len(general["events"]), 30)
-        # 通用时间线默认同时包含工作记录与基础文档。
-        self.assertIn("ledger", [event["doc_id"] for event in timeline.build(offset=30)["events"]])
+        # 文档库既不进入事件，也不影响任何时间线统计。
+        self.assertNotIn("ledger", [event["doc_id"] for event in timeline.build(offset=30)["events"]])
         knowledge = timeline.build(category="常识库")
-        self.assertEqual([event["doc_id"] for event in knowledge["events"]], ["ledger"])
+        self.assertEqual(knowledge["events"], [])
+
+    def test_document_type_excludes_library_and_legacy_knowledge_from_all_facets(self):
+        self.add("record", vendor="记录厂商")
+        self.add("document", doc_type="doc", vendor="文档厂商", category="硬件问题")
+        self.add("legacy-ledger", category="常识库", categories=["常识库", "网络问题"], doc_type="")
+        self.add("legacy-record", doc_type="")
+        self.db.documents.update_one({"_id": "legacy-record"}, {"$unset": {"doc_type": ""}})
+        self.db.documents.update_one({"_id": "legacy-ledger"}, {"$unset": {"doc_type": ""}})
+        result = timeline.build()
+        self.assertEqual({event["doc_id"] for event in result["events"]}, {"record", "legacy-record"})
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(result["issue_count"], 2)
+        self.assertEqual(result["categories"], [{"name": "网络问题", "count": 2}])
+        self.assertEqual(result["vendors"], [{"name": "记录厂商", "count": 1}])
+        self.assertEqual(result["status_counts"]["no"], 2)
+        self.assertEqual(sum(row["count"] for row in result["departments"]), 2)
+
+    def test_children_paginate_independently_and_include_failed_and_empty_records(self):
+        self.add("parent", summary="2026年1月1日，现象：报工失败。")
+        for number in range(25):
+            self.add(f"child-{number:02}", summary="2025年2月1日，现象：报工失败。",
+                     parent_id="parent", root_id="parent")
+        self.add("processing", summary="", status="processing", parent_id="parent", root_id="parent")
+        self.add("failed", summary="", status="failed", parent_id="parent", root_id="parent")
+        self.db.documents.update_one({"_id": "failed"}, {"$set": {"error": "解析失败"}})
+        self.add("grandchild", parent_id="child-00", root_id="parent")
+        database.set_event_status("child-00", "child-00", "resolved")
+        page_one = timeline.children("parent")
+        page_two = timeline.children("parent", offset=page_one["next_offset"])
+        self.assertEqual([len(page["events"]) for page in (page_one, page_two)], [20, 7])
+        self.assertTrue(page_one["has_more"])
+        self.assertFalse(page_two["has_more"])
+        self.assertEqual(page_two["next_offset"], 27)
+        self.assertEqual(page_one["total"], 27)
+        events = page_one["events"] + page_two["events"]
+        ids = [event["doc_id"] for event in events]
+        self.assertEqual(len(set(ids)), 27)
+        self.assertEqual(ids[:2], ["processing", "failed"])
+        self.assertNotIn("grandchild", ids)
+        by_id = {event["doc_id"]: event for event in events}
+        self.assertEqual(by_id["failed"]["ingest_status"], "failed")
+        self.assertEqual(by_id["failed"]["error"], "解析失败")
+        self.assertEqual(by_id["child-00"]["child_count"], 1)
+        self.assertEqual(by_id["child-00"]["status"], "resolved")
+        self.assertEqual(by_id["child-00"]["parent_name"], "parent")
+        nested = timeline.children("child-00")
+        self.assertEqual([event["doc_id"] for event in nested["events"]], ["grandchild"])
+
+    def test_children_require_visible_record_parent_and_filter_inaccessible_children(self):
+        self.add("parent")
+        self.add("visible-child", parent_id="parent", root_id="parent")
+        self.add("hidden-child", parent_id="parent", root_id="parent")
+        self.add("library", doc_type="doc")
+        self.add("corrupt-library-child", doc_type="doc", parent_id="parent")
+        for key in ("parent", "visible-child", "library", "corrupt-library-child"):
+            self.db.documents.update_one({"_id": key}, {"$set": {"visibility": "public"}})
+        guest = {"username": "guest:test", "role": "guest", "public_only": True,
+                 "department_ids": [], "department_roles": {}, "must_change_password": False}
+        with access.identity_scope(guest):
+            page = timeline.children("parent")
+            self.assertEqual([event["doc_id"] for event in page["events"]], ["visible-child"])
+            self.assertEqual(page["total"], 1)
+            parent = next(event for event in timeline.build()["events"] if event["doc_id"] == "parent")
+            self.assertEqual(parent["child_count"], 1)
+            for key in ("missing", "hidden-child", "library"):
+                with self.subTest(key=key), self.assertRaises(HTTPException) as error:
+                    timeline.children(key)
+                self.assertEqual(error.exception.status_code, 404)
+        for kwargs in ({"offset": -1}, {"limit": 0}, {"limit": 101}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                timeline.children("parent", **kwargs)
 
     def test_page_retains_parent_and_child_metadata_outside_the_date_range(self):
         self.add("parent", name="父问题", summary="2026年1月1日，现象：报工失败。")
@@ -181,6 +254,22 @@ class TimelineApiTest(unittest.TestCase):
         self.assertEqual(response.json(), payload)
         self.assertEqual(build.call_args.kwargs["limit"], 30)
         self.assertEqual(build.call_args.kwargs["offset"], 0)
+
+    def test_children_endpoint_forwards_parent_and_pagination(self):
+        payload = {"events": [], "has_more": False, "next_offset": 30, "total": 30}
+        with patch.object(routes.timeline_service, "children", return_value=payload) as children:
+            response = self.api.get("/api/timeline/parent-id/children", params={"offset": 20, "limit": 10})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), payload)
+        children.assert_called_once_with("parent-id", offset=20, limit=10)
+
+    def test_children_endpoint_rejects_invalid_page_parameters(self):
+        with patch.object(routes.timeline_service, "children") as children:
+            for params in ({"offset": -1}, {"limit": 0}, {"limit": 101}):
+                with self.subTest(params=params):
+                    response = self.api.get("/api/timeline/parent-id/children", params=params)
+                    self.assertEqual(response.status_code, 422, response.text)
+            children.assert_not_called()
 
     def test_date_and_filter_parameters_are_forwarded_to_server_pagination(self):
         with patch.object(routes.timeline_service, "build", return_value={"events": []}) as build:

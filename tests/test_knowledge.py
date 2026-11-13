@@ -1,4 +1,4 @@
-"""常识库：上传固定归类「常识库」、列表过滤与重复上传保持分类。"""
+"""文档库只按部门管理，旧上传入口与旧文档数据继续可用。"""
 import os
 import sys
 import tempfile
@@ -16,7 +16,7 @@ from app.config import settings
 from app.domain import taxonomy
 from app.domain.taxonomy import normalize_doc_category
 from app.main import admin_app
-from app.services import auth, mongo, retrieval_service
+from app.services import auth, database, kb, mongo, recordmeta, retrieval_service
 
 _MONGO_URI = os.environ.get("KB_TEST_MONGO", "mongodb://127.0.0.1:27017")
 
@@ -73,9 +73,12 @@ def temp_workspace():
 
 
 class TaxonomyTest(unittest.TestCase):
-    def test_knowledge_category_is_valid(self):
-        self.assertEqual(normalize_doc_category("常识库"), "常识库")
-        self.assertIn(taxonomy.KNOWLEDGE_CATEGORY, taxonomy.DOC_CATEGORIES)
+    def test_knowledge_category_is_retired_and_cannot_be_reintroduced(self):
+        taxonomy.register_custom_categories(["常识库"])
+        self.assertEqual(normalize_doc_category("常识库"), "其他")
+        self.assertNotIn("常识库", taxonomy.all_doc_categories())
+        with self.assertRaisesRegex(ValueError, "分类已取消"):
+            recordmeta.add_category("常识库")
 
 
 class KnowledgeUploadTest(unittest.TestCase):
@@ -86,39 +89,82 @@ class KnowledgeUploadTest(unittest.TestCase):
     def tearDown(self):
         self._ws.__exit__(None, None, None)
 
-    def test_upload_markdown_classified_as_knowledge(self):
+    def test_legacy_upload_endpoint_creates_department_document_without_category(self):
         with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
             api = self.api
             content = "# 电脑台账\n\n剔废机电脑 IP 10.10.1.50，使用人张三，MAC 11-22-33-44-55-66".encode()
             resp = api.post("/api/knowledge", files={"file": ("电脑台账.md", content, "text/markdown")})
             self.assertEqual(resp.status_code, 200)
             doc = resp.json()["doc"]
-            self.assertEqual(doc["category"], "常识库")
-            self.assertEqual(doc["doc_type"], "doc", "常识库属于基础文档")
+            self.assertEqual(doc["category"], "")
+            self.assertEqual(doc["categories"], [])
+            self.assertEqual(doc["doc_type"], "doc")
             self.assertEqual(doc["status"], "ready")
             self.assertEqual(doc["uploaded_by"], "knowledge-test")
             doc_id = doc["id"]
 
-            rows = api.get("/api/documents?category=常识库").json()["documents"]
-            self.assertIn(doc_id, {d["id"] for d in rows})
+            listing = api.get("/api/documents", params={"doc_type": "doc", "category": "网络问题"}).json()
+            self.assertIn(doc_id, {d["id"] for d in listing["documents"]})
+            self.assertEqual(listing["categories"], [])
+            self.assertEqual(listing["departments"][0]["count"], 1)
 
-    def test_duplicate_upload_keeps_knowledge_category(self):
+    def test_duplicate_document_upload_stays_unclassified(self):
         with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
             api = self.api
             content = "# 网段规划\n\n产线网段 10.20.0.0/16".encode()
             first = api.post("/api/knowledge", files={"file": ("网段规划.md", content, "text/markdown")})
-            self.assertEqual(first.json()["doc"]["category"], "常识库")
+            self.assertEqual(first.json()["doc"]["category"], "")
             second = api.post("/api/knowledge", files={"file": ("网段规划.md", content, "text/markdown")})
             self.assertTrue(second.json()["duplicated"])
-            self.assertEqual(second.json()["doc"]["category"], "常识库")
+            self.assertEqual(second.json()["doc"]["category"], "")
 
-    def test_regular_upload_keeps_auto_category(self):
+    def test_regular_document_upload_ignores_problem_category(self):
         with patch.object(sys.modules["app.services.kb"], "settings", self.tmp_settings):
             api = self.api
             content = "# 贴标机闪退\n\n处理：重启工控机。".encode()
-            resp = api.post("/api/documents", files={"file": ("贴标机闪退.md", content, "text/markdown")})
+            resp = api.post("/api/documents", files={"file": ("贴标机闪退.md", content, "text/markdown")},
+                            data={"category": "硬件问题", "categories": "常识库|网络问题"})
             self.assertEqual(resp.status_code, 200)
-            self.assertNotEqual(resp.json()["doc"]["category"], "常识库", "普通上传不应强制常识库")
+            self.assertEqual(resp.json()["doc"]["category"], "")
+            self.assertEqual(resp.json()["doc"]["categories"], [])
+
+    def test_legacy_document_keeps_its_type_when_reanalyzed_and_remains_listed(self):
+        content = "# 电脑台账\n\nIP 10.10.1.50 使用人张三".encode()
+        doc = self.api.post("/api/documents", files={"file": ("台账.md", content, "text/markdown")}).json()["doc"]
+        database._docs().update_one({"_id": doc["id"]}, {
+            "$unset": {"doc_type": ""}, "$set": {
+                "category": "常识库", "categories": ["常识库"], "attachments": [{"name": "原附件.txt"}]}})
+        self.assertEqual(database.get(doc["id"]).doc_type, "doc")
+        listing = self.api.get("/api/documents", params={"doc_type": "doc"}).json()
+        self.assertEqual(listing["documents"][0]["category"], "")
+        kb.reingest(doc["id"])
+        saved = database._docs().find_one({"_id": doc["id"]})
+        self.assertEqual(saved["doc_type"], "doc")
+        self.assertEqual(saved["category"], "")
+        self.assertEqual(saved["categories"], [])
+        self.assertEqual(saved["attachments"], [{"name": "原附件.txt"}])
+
+    def test_online_document_edit_keeps_document_type_and_no_problem_categories(self):
+        doc = self.api.post("/api/documents", files={
+            "file": ("考勤制度.md", "# 考勤制度\n\n员工考勤要求".encode(), "text/markdown")}).json()["doc"]
+        response = self.api.put(f"/api/documents/{doc['id']}", json={
+            "content": "# 考勤制度\n\n员工考勤与请假要求", "category": "流程问题", "categories": "流程问题|MES系统"})
+        self.assertEqual(response.status_code, 200)
+        updated = response.json()["doc"]
+        self.assertEqual(updated["doc_type"], "doc")
+        self.assertEqual(updated["category"], "")
+        self.assertEqual(updated["categories"], [])
+
+    def test_identical_document_and_work_record_have_separate_identity(self):
+        files = {"file": ("同内容.md", "# 网络断开\n\n处理：更换网线".encode(), "text/markdown")}
+        record = self.api.post("/api/documents", files=files, data={"doc_type": "record"}).json()["doc"]
+        document = self.api.post("/api/documents", files=files).json()["doc"]
+        self.assertNotEqual(record["id"], document["id"])
+        self.assertEqual(record["doc_type"], "record")
+        self.assertEqual(document["doc_type"], "doc")
+        repeated = self.api.post("/api/documents", files=files).json()
+        self.assertTrue(repeated["duplicated"])
+        self.assertEqual(repeated["doc"]["id"], document["id"])
 
 
 class DocTypeTest(unittest.TestCase):
@@ -215,7 +261,7 @@ class DocTypeTest(unittest.TestCase):
             recs = kb.list_documents(doc_type="record")
             self.assertEqual([d["name"] for d in recs], ["闪退记录"])
             counts = {c["name"]: c["count"] for c in kb.category_counts(doc_type="doc")}
-            self.assertEqual(sum(counts.values()), 1, "doc 视角的分类统计不含运维记录")
+            self.assertEqual(counts, {}, "文档库不提供问题分类统计")
 
 
 if __name__ == "__main__":

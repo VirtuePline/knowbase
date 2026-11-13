@@ -48,7 +48,8 @@ class DepartmentFilterTest(unittest.TestCase):
         data = self.get("/api/documents", doc_type="doc", department_id="operations")
         self.assertEqual({doc["id"] for doc in data["documents"]}, {"public-doc", "ops-shared"})
         self.assertEqual(data["stats"]["documents"], 2)
-        self.assertEqual(self.counts(data["categories"]), {"流程问题": 1, "网络问题": 1})
+        self.assertEqual(data["categories"], [])
+        self.assertTrue(all(doc["category"] == "" and doc["categories"] == [] for doc in data["documents"]))
         departments = self.departments(data)
         self.assertEqual({key: item["count"] for key, item in departments.items()}, {"operations": 2, "hr": 2})
         self.assertEqual(departments["operations"]["name"], "默认部门")
@@ -56,9 +57,9 @@ class DepartmentFilterTest(unittest.TestCase):
         self.assertTrue(all(doc["department_name"] == "默认部门" for doc in data["documents"]))
 
         category = self.get("/api/documents", doc_type="doc", department_id="operations", category="流程问题")
-        self.assertEqual([doc["id"] for doc in category["documents"]], ["public-doc"])
+        self.assertEqual({doc["id"] for doc in category["documents"]}, {"public-doc", "ops-shared"})
         self.assertEqual(category["stats"]["documents"], 2)
-        self.assertEqual(self.counts(category["categories"]), {"流程问题": 1, "网络问题": 1})
+        self.assertEqual(category["categories"], [])
         self.assertEqual(self.departments(category), departments)
 
     def test_document_type_has_its_own_department_options_and_statistics(self):
@@ -157,24 +158,27 @@ class DepartmentFilterTest(unittest.TestCase):
         self.assertNotIn("finance", self.departments(docs))
         self.assertEqual(docs["documents"][0]["department_name"], "默认部门")
 
+        self.add_event("public-record", "operations", visibility="public")
+        self.add_event("hr-public-record", "hr", visibility="public")
         timeline_response = self.search.get("/api/timeline", params={"department_id": "hr"})
         self.assertEqual(timeline_response.status_code, 200, timeline_response.text)
         timeline = timeline_response.json()
-        self.assertEqual([event["doc_id"] for event in timeline["events"]], ["hr-public"])
+        self.assertEqual([event["doc_id"] for event in timeline["events"]], ["hr-public-record"])
         self.assertEqual(timeline["total"], 1)
         self.assertEqual({key: row["count"] for key, row in self.departments(timeline).items()},
                          {"operations": 1, "hr": 1})
 
-    def test_generic_timeline_includes_knowledge_documents_in_the_selected_department(self):
+    def test_timeline_excludes_library_documents_and_legacy_knowledge_in_department(self):
         self.db.documents.update_one({"_id": "hr-doc"}, {"$set": {
-            "category": "常识库", "categories": ["常识库"]}})
+            "doc_type": "", "category": "常识库", "categories": ["常识库"]}})
+        self.add_event("hr-record", "hr")
         self.login_as("hr")
         timeline = self.get("/api/timeline", department_id="hr")
-        self.assertEqual({event["doc_id"] for event in timeline["events"]}, {"hr-doc", "hr-public"})
-        self.assertEqual(timeline["total"], 2)
-        self.assertEqual(timeline["event_count"], 2)
+        self.assertEqual({event["doc_id"] for event in timeline["events"]}, {"hr-record"})
+        self.assertEqual(timeline["total"], 1)
+        self.assertEqual(timeline["event_count"], 1)
         self.assertEqual(timeline["issue_count"], 1)
-        self.assertEqual(self.counts(timeline["categories"]), {"常识库": 1, "流程问题": 1})
+        self.assertEqual(self.counts(timeline["categories"]), {"流程问题": 1})
 
     def test_department_names_follow_creation_and_rename_without_reindexing(self):
         self.login_as("boss")
@@ -190,6 +194,7 @@ class DepartmentFilterTest(unittest.TestCase):
         self.assertEqual(self.get("/api/documents/legal-public")["department_name"], "法务支持")
         preview = self.get("/api/documents/legal-public/preview")
         self.assertEqual(preview["doc"]["department_name"], "法务支持")
+        self.add_event("legal-record", "legal", visibility="public")
         timeline = self.get("/api/timeline", department_id="legal")
         self.assertEqual(timeline["events"][0]["department_name"], "法务支持")
         # 可信内部服务调用与 HTTP 一样使用当前部门名称。

@@ -102,6 +102,15 @@ class AnalyzeCategoryTest(unittest.TestCase):
 
         self.assertEqual(result.category, "硬件问题")
 
+    def test_document_library_analysis_does_not_run_problem_classification(self):
+        blocks = [Block(text="员工考勤制度与请假说明。", heading="考勤制度")]
+        with patch.object(analyzer, "settings", replace(settings, analysis_use_llm=False)), \
+                patch.object(analyzer, "_doc_category") as classify:
+            result = analyzer.analyze(blocks, "考勤制度.md", classify_category=False)
+        classify.assert_not_called()
+        self.assertEqual(result.category, "")
+        self.assertTrue(result.sections)
+
 
 class DocumentCategoryStorageTest(unittest.TestCase):
     def setUp(self):

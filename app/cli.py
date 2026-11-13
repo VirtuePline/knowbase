@@ -105,9 +105,10 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             id=doc_id, name=name, stored_name=stored_name, ext=path.suffix.lower(),
             size=path.stat().st_size, sha256=digest, chunks=0,
             uploaded_at=database.now_iso(), status="processing",
+            doc_type="doc",
         )
         database.add(record)
-        result = ingester.ingest(stored, doc_id, name, path.suffix.lower().lstrip("."))
+        result = ingester.ingest(stored, doc_id, name, path.suffix.lower().lstrip("."), content_type="doc")
         if result.ok:
             database.update_status(doc_id, result.chunks, "ready",
                                    summary=result.summary, skipped=result.skipped)

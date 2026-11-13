@@ -181,6 +181,19 @@ def get_document(doc_id: str) -> dict:
         raise HTTPException(status_code=404, detail="文档不存在") from exc
 
 
+@search_router.get("/timeline/{doc_id}/children")
+def timeline_children(
+    doc_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    """展开可访问的直接后续记录，不受主时间线的日期与筛选条件限制。"""
+    try:
+        return timeline_service.children(doc_id, offset=offset, limit=limit)
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail="记录不存在") from exc
+
+
 @search_router.get("/documents/{doc_id}/preview")
 def preview_document(doc_id: str) -> dict:
     try:
@@ -305,11 +318,11 @@ async def upload_knowledge(
     shared_department_ids: str = Form("[]"),
     identity: dict = Depends(require_login),
 ) -> dict:
-    """常识注入：上传 md / docx / xlsx / csv / txt，入库固定归类为「常识库」。"""
+    """旧上传入口的兼容别名：按部门保存普通文档。"""
     try:
         content = await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
         return await run_in_threadpool(kb.upload, file.filename or "", content,
-                                       category=taxonomy.KNOWLEDGE_CATEGORY, uploaded_by=identity["username"],
+                                       doc_type="doc", uploaded_by=identity["username"],
                                        file_time=file_time, department_id=department_id,
                                        visibility=visibility, shared_department_ids=_shared_departments(shared_department_ids))
     except ValueError as exc:

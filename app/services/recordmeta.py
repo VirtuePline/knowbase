@@ -10,6 +10,7 @@ import re
 from app.domain.taxonomy import (
     DOC_CATEGORY_ORDER,
     DOC_OTHER,
+    LEGACY_KNOWLEDGE_CATEGORY,
     all_doc_categories,
     register_custom_categories,
     unregister_custom_category,
@@ -128,6 +129,8 @@ def add_category(name: str) -> list[str]:
     text = str(name or "").strip()
     if not text:
         raise ValueError("类型名称不能为空")
+    if text == LEGACY_KNOWLEDGE_CATEGORY:
+        raise ValueError("常识库分类已取消，文档请按部门管理")
     if len(text) > CATEGORY_MAX_LEN:
         raise ValueError(f"类型名称最多 {CATEGORY_MAX_LEN} 个字")
     if text not in DOC_CATEGORY_ORDER:

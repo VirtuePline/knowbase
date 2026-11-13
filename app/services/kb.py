@@ -129,8 +129,7 @@ def _tracking_root(parent_id: str, doc_id: str) -> str:
         parent = _require_write(parent_id)
     except DocumentNotFound:
         raise ValueError("所跟踪的记录不存在") from None
-    is_record = parent.doc_type == "record" or (
-        not parent.doc_type and "常识库" not in record_categories(parent))
+    is_record = database._normalize_doc_type(parent.to_dict()) == "record"
     if parent.status != "ready" or not is_record:
         raise ValueError("只能跟踪已完成入库的工作记录")
     return parent.root_id or parent.id
@@ -142,6 +141,8 @@ def _raw_path(record: DocRecord) -> Path:
 
 def _doc_dict(record: DocRecord, department_names: dict | None = None) -> dict:
     data = record.to_dict()
+    if record.doc_type == "doc":
+        data.update(category="", categories=[])
     if department_names is None:
         department_names = database.department_names([record.department_id])
     data["department_name"] = department_names.get(record.department_id, "未命名部门")
@@ -184,13 +185,16 @@ def _ingest(record: DocRecord, path: Path, category: str = "") -> DocRecord:
     category 非空时作为强制分类进入分块（覆盖自动判定），保证检索层按分类生效。
     """
     result = Ingester().ingest(path, record.id, record.name, record.ext.lstrip("."),
-                               category=category)
+                               category=category, content_type=record.doc_type)
     if not result.ok:
         database.update_status(record.id, 0, "failed", result.error)
     else:
         database.update_status(record.id, result.chunks, "ready",
                                summary=result.summary, skipped=result.skipped,
                                category=result.category)
+        if record.doc_type == "doc":
+            # 先持久化业务类型，避免清除旧常识标签后被旧数据兼容规则误识别为记录。
+            database.clear_document_categories(record.id)
         retrieval.rebuild()
     return database.get(record.id)
 
@@ -200,6 +204,9 @@ def _with_categories(docs: list[DocRecord]) -> list[DocRecord]:
     ingester = Ingester()
     filled: list[DocRecord] = []
     for doc in docs:
+        if doc.doc_type == "doc":
+            filled.append(replace_record(doc, category="", categories=[]))
+            continue
         if doc.category:
             filled.append(doc)
             continue
@@ -215,9 +222,9 @@ def _with_categories(docs: list[DocRecord]) -> list[DocRecord]:
 
 
 def list_documents(category: str = "", doc_type: str = "", department_id: str = "") -> list[dict]:
-    """文档列表。doc_type=doc 返回基础文档（含常识库：文档即常识库，不再分开），record 只返回工作记录。"""
+    """文档按部门管理；只有工作记录使用问题分类。"""
     docs = _with_categories(_records_of_type(_visible_records(department_id), doc_type))
-    if category:
+    if category and doc_type != "doc":
         name = normalize_doc_category(category)
         docs = [doc for doc in docs if name in record_categories(doc)]
     names = database.department_names(doc.department_id for doc in docs)
@@ -226,6 +233,8 @@ def list_documents(category: str = "", doc_type: str = "", department_id: str = 
 
 def category_counts(doc_type: str = "", department_id: str = "") -> list[dict]:
     """各分类的文档数，顺序固定，供前端筛选条使用；统计范围与列表过滤一致。"""
+    if doc_type == "doc":
+        return []
     return _category_counts(_with_categories(_records_of_type(_visible_records(department_id), doc_type)))
 
 
@@ -258,11 +267,11 @@ def document_listing(category: str = "", doc_type: str = "", department_id: str 
     names = database.department_names(department_counts)
     scoped = _with_categories([doc for doc in visible if not department_id or doc.department_id == department_id])
     selected = scoped
-    if category:
+    if category and doc_type != "doc":
         name = normalize_doc_category(category)
         selected = [doc for doc in scoped if name in record_categories(doc)]
     return {"documents": [_doc_dict(doc, names) for doc in selected],
-            "categories": _category_counts(scoped), "stats": _record_stats(scoped),
+            "categories": [] if doc_type == "doc" else _category_counts(scoped), "stats": _record_stats(scoped),
             "departments": _department_options(department_counts, names)}
 
 
@@ -273,7 +282,9 @@ def set_category(doc_id: str, category: str) -> dict:
 
 def set_categories(doc_id: str, categories: list) -> dict:
     """人工设置全部分类标签（可多选）：首标签为主分类，空列表清空标签。"""
-    _require_write(doc_id)
+    record = _require_write(doc_id)
+    if record.doc_type == "doc":
+        raise ValueError("文档只按部门管理，不设置问题分类")
     tags: list[str] = []
     for value in categories or []:
         text = (value or "").strip()
@@ -335,7 +346,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
 
     doc_type：doc=基础文档（文档管理页上传），record=工作记录（记录上传页上传）。
     categories 为多标签（| 或逗号分隔），非空时按其设置全部分类，首标签为主分类；
-    category 为单值兜底（常识注入等固定分类场景）。
+    category 为工作记录的单值兜底；基础文档忽略分类参数。
     date 为记录时间日期部分（YYYY-MM-DD），记录上传时人工选择的问题发生日期。
     vendor 为厂商系统类记录的厂商，入库后落登记表。
     resolved 为录入时选择的解决状态（resolved / improving / unresolved），时间线按此显示。
@@ -343,6 +354,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     parent_id 非空时新建独立追踪，不覆盖或复用父记录。
     """
     scope = access.creation_scope(department_id, visibility, shared_department_ids)
+    doc_type = "record" if (parent_id or "").strip() else (doc_type if doc_type in {"doc", "record"} else "doc")
     original, ext = _check_upload(filename, content)
     if ext in {".md", ".txt"}:
         _validate_images(_decode(content))
@@ -351,6 +363,8 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     cats = normalize_doc_categories(part for part in _CAT_SPLIT.split(categories or "") if part.strip())
     if not cats and (category or "").strip():
         cats = [normalize_doc_category(category)]
+    if doc_type == "doc":
+        cats = []
     primary = cats[0] if cats else ""
 
     doc_id = uuid.uuid4().hex[:12]
@@ -364,7 +378,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
 
     digest = sha256_of(target)
     existing = None if parent_id else database.find_by_hash(
-        digest, uploaded_by=uploaded_by, parent_id="")
+        digest, uploaded_by=uploaded_by, parent_id="", doc_type=doc_type)
     if existing and existing.status == "ready" and _same_scope(existing, scope):
         target.unlink(missing_ok=True)
         if cats:
@@ -386,7 +400,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         sha256=digest, chunks=0,
         uploaded_at=file_time or database.now_iso(),   # 默认取文件修改时间，其次当前时间
         status="processing",
-        doc_type="record" if parent_id else (doc_type if doc_type in {"doc", "record"} else "doc"),
+        doc_type=doc_type,
         resolved=norm_resolved,
         uploaded_by=uploaded_by, uploaded_by_name=uploaded_by_name,
         parent_id=parent_id, root_id=root_id,
@@ -438,7 +452,7 @@ def replace_file(doc_id: str, filename: str, content: bytes) -> dict:
         # 先在临时 ID 下试解析，确认新文件可用再替换，避免把可用文档换成坏文件
         probe_id = f"probe{uuid.uuid4().hex[:8]}"
         ingester = Ingester()
-        probe = ingester.ingest(staging, probe_id, original, ext.lstrip("."))
+        probe = ingester.ingest(staging, probe_id, original, ext.lstrip("."), content_type=record.doc_type)
         ingester.remove(probe_id)
         if not probe.ok:
             raise ValueError(f"新文件无法入库，原文档未改动：{probe.error}")
@@ -665,6 +679,8 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
         if parent_id:
             raise ValueError("跟踪关系创建后不可修改，请新建追踪记录")
         record = _require_write(doc_id)
+        if record.doc_type == "doc":
+            cats, category, primary = [], "", ""
         if not is_editable(record.ext):
             raise ValueError(f"{record.ext} 文件不支持在线编辑，仅支持 .md / .txt")
         raw = (filename or record.name).strip() or record.name
@@ -696,7 +712,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     payload = content.encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
     duplicate = None if parent_id else database.find_by_hash(
-        digest, uploaded_by=uploaded_by, parent_id="")
+        digest, uploaded_by=uploaded_by, parent_id="", doc_type=record.doc_type if record else "record")
     target_scope = ({"department_id": record.department_id, "visibility": record.visibility,
                      "shared_department_ids": record.shared_department_ids} if record else scope)
     if duplicate and duplicate.id != doc_id and duplicate.status == "ready" and _same_scope(duplicate, target_scope):

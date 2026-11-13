@@ -136,15 +136,14 @@ def conflict_risk(hits) -> bool:
     return len(docs) >= 2
 
 
-# ---------- 文档分类（入库时自动判定，落库用于列表分组与后续检索过滤）----------
+# ---------- 工作记录分类（文档库只按部门管理）----------
 
-DOC_CATEGORIES = ("MES系统", "厂商系统", "硬件问题", "网络问题", "流水线问题", "流程问题", "常识库")
+DOC_CATEGORIES = ("MES系统", "厂商系统", "硬件问题", "网络问题", "流水线问题", "流程问题")
 DOC_OTHER = "其他"
 DOC_CATEGORY_ORDER = (*DOC_CATEGORIES, DOC_OTHER)
 
-# 常识库：导航栏独立入口上传的基础事实数据（网段规划、设备/电脑 IP、配置、MAC、使用人等），
-# 问答检索不过滤分类，常识文档与其他记录一起参与 BM25 / 向量检索。
-KNOWLEDGE_CATEGORY = "常识库"
+# 仅用于识别旧文档数据；不再作为可选分类。
+LEGACY_KNOWLEDGE_CATEGORY = "常识库"
 
 # 文档级关键词。名称命中权重最高，其次章节标题，最后摘要。
 DOC_CATEGORY_KEYWORDS: dict[str, list[str]] = {
@@ -211,7 +210,7 @@ def register_custom_categories(names) -> None:
     """注册后台新增的自定义类型（模块加载 / 新增接口时调用）。"""
     for name in names or []:
         text = str(name).strip()
-        if text:
+        if text and text != LEGACY_KNOWLEDGE_CATEGORY:
             _custom_categories.add(text)
 
 
@@ -235,14 +234,16 @@ def normalize_doc_categories(values) -> list:
     tags: list[str] = []
     for value in values or []:
         text = str(value or "").strip()[:30]
-        if text and text not in tags:
+        if text and text != LEGACY_KNOWLEDGE_CATEGORY and text not in tags:
             tags.append(text)
     return tags
 
 
 def record_categories(record) -> list:
     """文档的全部分类标签：categories 优先，空时回退到主分类（自动判定结果）。"""
-    tags = list(getattr(record, "categories", None) or [])
+    if getattr(record, "doc_type", "") == "doc":
+        return []
+    tags = normalize_doc_categories(getattr(record, "categories", None) or [])
     if not tags:
         primary = normalize_doc_category(getattr(record, "category", "") or "其他")
         if primary:

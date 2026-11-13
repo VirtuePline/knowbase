@@ -20,8 +20,8 @@ class Block:
 class Chunk:
     """进入检索的最小单元。
 
-    检索只看 summary（为空时退回 text）；text / table 是原文，作为元数据随命中返回，
-    供模型作答与前端展示。
+    工作记录检索 summary（为空时退回 text），文档库同时检索原文。
+    text / table 作为元数据随命中返回，供模型作答与前端展示。
     """
     id: str
     doc_id: str
@@ -34,6 +34,13 @@ class Chunk:
     summary: str = ""
     category: str = ""          # 所属文档分类，随分块保存，便于后续按分类过滤检索
     references: list[str] = field(default_factory=list)  # 命中后补充来源与模型材料，不参与评分
+    content_type: str = ""    # doc=文档库；record=工作记录。doc_type 保留文件格式语义。
+
+    @property
+    def is_library_document(self) -> bool:
+        # 旧索引没有 content_type，保留原常识文档的全文检索能力。
+        return self.content_type == "doc" or (not self.content_type and (
+            self.doc_type == "doc" or self.category == "常识库"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +55,7 @@ class Chunk:
             "summary": self.summary,
             "category": self.category,
             "references": self.references,
+            "content_type": self.content_type,
         }
 
     @classmethod
@@ -64,6 +72,7 @@ class Chunk:
             summary=data.get("summary", ""),
             category=data.get("category", ""),
             references=data.get("references", []),
+            content_type=data.get("content_type", ""),
         )
 
 

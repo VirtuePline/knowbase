@@ -483,7 +483,7 @@ def _doc_category(doc_name: str, summary: str, sections: list[Block]) -> str:
 
 # ---------- 入口 ----------
 
-def analyze(blocks: list[Block], doc_name: str) -> DocAnalysis:
+def analyze(blocks: list[Block], doc_name: str, *, classify_category: bool = True) -> DocAnalysis:
     # 先去版式噪声，再把 PDF 的页面块按标题/主题归并成结构段，最后才处理超长段。
     prepared = _split_long(_pdf_structure(_strip_repeated_lines(blocks)))
     prepared = [b for b in prepared if b.text.strip() or b.table]
@@ -535,5 +535,5 @@ def analyze(blocks: list[Block], doc_name: str) -> DocAnalysis:
     return DocAnalysis(
         summary=summary, sections=sections,
         skipped=len(prepared) - len(sections), method=method,
-        category=_doc_category(doc_name, summary, sections),
+        category=_doc_category(doc_name, summary, sections) if classify_category else "",
     )

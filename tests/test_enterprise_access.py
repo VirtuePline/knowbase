@@ -91,6 +91,10 @@ class EnterpriseAccessTest(unittest.TestCase):
         for suffix in ("", "/preview", "/download", "/source", "/edits"):
             self.assertEqual(self.api.get("/api/documents/ops-doc" + suffix).status_code, 404)
         timeline = self.api.get("/api/timeline").json()
+        self.assertEqual(timeline["events"], [])  # 文档库不进入工作记录时间线。
+        self.assertEqual(timeline["total"], 0)
+        self.db.documents.update_many({}, {"$set": {"doc_type": "record"}})
+        timeline = self.api.get("/api/timeline").json()
         self.assertEqual({item["doc_id"] for item in timeline["events"]}, {"hr-doc", "public-doc"})
         self.assertEqual(timeline["total"], 2)
 

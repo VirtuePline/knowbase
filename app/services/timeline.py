@@ -1,4 +1,4 @@
-"""时间线：每份已入库文档一条事件，按部门、时间段和分类分页查询。
+"""工作记录时间线，按部门、时间段和分类分页查询；文档库不参与。
 
 全文摘要由文档分析阶段按「时间 → 问题 → 尝试办法 → 结果 → 是否解决 → 原因」的事件记录式生成；
 时间线从摘要提取事件日期（提取不到时回退上传时间），数据库完成筛选、排序和统计，
@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import re
+
+from fastapi import HTTPException
 
 from app.domain.taxonomy import all_doc_categories
 from app.services import access, database
@@ -88,18 +90,39 @@ def _status_stages() -> list[dict]:
     ]
 
 
+def _record_filter() -> dict:
+    """与登记表的存量类型归一规则一致，旧常识库仍按文档库排除。"""
+    return {"$or": [
+        {"doc_type": "record"},
+        {"doc_type": {"$nin": ["doc", "record"]},
+         "category": {"$ne": "常识库"}, "categories": {"$ne": "常识库"}},
+    ]}
+
+
 def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
-              status: str, offset: int, limit: int, department_id: str = "") -> list[dict]:
+              status: str, offset: int, limit: int, department_id: str = "",
+              parent_id: str | None = None) -> list[dict]:
     allowed_categories = all_doc_categories()
     stages = [
         {"$match": access.read_filter()},
-        {"$match": {"status": "ready", "summary": {"$type": "string"}}},
-        {"$project": {"name": 1, "summary": {"$trim": {"input": "$summary"}}, "uploaded_at": 1,
+        {"$match": _record_filter()},
+    ]
+    if parent_id is None:
+        stages.append({"$match": {"status": "ready", "summary": {"$type": "string"}}})
+    else:
+        # 展开的后续记录不受主时间线的时间范围影响，也展示尚未完成入库的记录。
+        stages.append({"$match": {"parent_id": parent_id}})
+    stages += [
+        {"$project": {"name": 1, "summary": {"$trim": {"input": {"$cond": [
+                          {"$eq": [{"$type": "$summary"}, "string"]}, "$summary", ""]}}}, "uploaded_at": 1,
                       "category": 1, "categories": 1, "resolved": 1, "vendor": 1,
-                      "doc_type": 1, "parent_id": 1, "root_id": 1,
+                      "doc_type": 1, "parent_id": 1, "root_id": 1, "status": 1, "error": 1,
                       "uploaded_by": 1, "uploaded_by_name": 1, "department_id": 1,
                       "visibility": 1, "shared_department_ids": 1}},
-        {"$match": {"summary": {"$ne": ""}}},
+    ]
+    if parent_id is None:
+        stages.append({"$match": {"summary": {"$ne": ""}}})
+    stages += [
         {"$set": {
             "_tl_full_date": {"$regexFind": {"input": "$summary", "regex": _DATE_FULL.pattern}},
             "_tl_month_date": {"$regexFind": {"input": "$summary", "regex": _DATE_MONTH.pattern}},
@@ -114,10 +137,13 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
                 {"$in": [{"$ifNull": ["$department_id", ""]}, ["", "operations"]]},
                 "operations", "$department_id",
             ]},
-            "_tl_categories": {"$cond": [
-                {"$gt": [{"$size": {"$cond": [{"$isArray": "$categories"}, "$categories", []]}}, 0]},
-                "$categories", ["$_tl_category"],
-            ]},
+            "_tl_categories": {"$let": {
+                "vars": {"tags": {"$filter": {
+                    "input": {"$cond": [{"$isArray": "$categories"}, "$categories", []]},
+                    "as": "tag", "cond": {"$in": ["$$tag", allowed_categories]},
+                }}},
+                "in": {"$cond": [{"$gt": [{"$size": "$$tags"}, 0]}, "$$tags", ["$_tl_category"]]},
+            }},
         }},
     ]
     if start_date or end_date:
@@ -142,13 +168,13 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
         selection.append({"$match": {"vendor": vendor}})
     filtered = list(selection)
     if status:
-        filtered += [{"$match": {"_tl_categories": {"$ne": "常识库"}}}, *_status_stages(),
+        filtered += [*_status_stages(),
                      {"$match": {"_tl_effective": status}}]
     page = [*filtered, {"$sort": {"_tl_date": -1, "name": -1, "_id": -1}},
             {"$skip": offset}, {"$limit": limit}]
     if not status:
         page += _status_stages()
-    # 先分页再补父名称与追踪数；失败/处理中的子记录也计入追踪数，与删除保护规则一致。
+    # 先分页再补父名称与追踪数；失败/处理中的可见子记录也能展开查看。
     page += [
         {"$lookup": {"from": "documents", "localField": "parent_id", "foreignField": "_id",
                      "pipeline": [{"$match": access.read_filter()}, {"$project": {"name": 1}}], "as": "_tl_parent"}},
@@ -156,6 +182,7 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
                      "pipeline": [{"$match": access.read_filter()}, {"$project": {"_id": 1}}], "as": "_tl_root"}},
         {"$lookup": {"from": "documents", "let": {"parent": "$_id"}, "pipeline": [
             {"$match": access.read_filter()},
+            {"$match": _record_filter()},
             {"$match": {"$expr": {"$eq": ["$parent_id", "$$parent"]}}}, {"$count": "count"},
         ], "as": "_tl_children"}},
         {"$set": {
@@ -166,6 +193,10 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
         {"$unset": ["_tl_full_date", "_tl_month_date", "_tl_manual", "_tl_parent", "_tl_root", "_tl_children",
                      "_tl_range_start", "_tl_range_end"]},
     ]
+    if parent_id is not None:
+        # 展开列表只需当前页和总数，不重复统计子记录的所有筛选维度。
+        stages.append({"$facet": {"events": page, "total": [{"$count": "count"}]}})
+        return stages
     stages.append({"$facet": {
         "events": page,
         "total": [*filtered, {"$count": "count"}],
@@ -173,11 +204,11 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
         "event_count": [*department_scope, {"$count": "count"}],
         "categories": [*department_scope, {"$unwind": "$_tl_categories"},
                        {"$group": {"_id": "$_tl_categories", "count": {"$sum": 1}}}],
-        "issue_count": [*department_scope, {"$match": {"_tl_categories": {"$ne": "常识库"}}}, {"$count": "count"}],
+        "issue_count": [*department_scope, {"$count": "count"}],
         "vendors": [*department_scope, {"$match": category_match}, {"$match": {"vendor": {"$nin": ["", None]}}},
                     {"$group": {"_id": "$vendor", "count": {"$sum": 1}}}, {"$sort": {"_id": 1}}],
-        "status_counts": [*selection, {"$match": {"_tl_categories": {"$ne": "常识库"}}},
-                          *_status_stages(), {"$group": {"_id": "$_tl_effective", "count": {"$sum": 1}}}],
+        "status_counts": [*selection, *_status_stages(),
+                          {"$group": {"_id": "$_tl_effective", "count": {"$sum": 1}}}],
     }})
     return stages
 
@@ -195,6 +226,25 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
         start_date=start_date, end_date=end_date, category=category, vendor=vendor,
         status=status, offset=offset, limit=limit, department_id=department_id,
     ))
+    return _page_result(result, offset)
+
+
+def children(doc_id: str, *, offset: int = 0, limit: int = 20) -> dict:
+    """按权限分页读取直接后续记录；每条子记录可继续展开自己的后续。"""
+    if offset < 0 or not 1 <= limit <= 100:
+        raise ValueError("分页参数无效")
+    parent = access.require_read(doc_id)
+    if parent.doc_type != "record":
+        raise HTTPException(status_code=404, detail="工作记录不存在或无权访问")
+    result = database.timeline_page(_pipeline(
+        start_date="", end_date="", category="", vendor="", status="",
+        offset=offset, limit=limit, parent_id=doc_id,
+    ))
+    payload = _page_result(result, offset)
+    return {key: payload[key] for key in ("events", "total", "has_more", "next_offset")}
+
+
+def _page_result(result: dict, offset: int) -> dict:
     department_counts = {row["_id"]: row["count"] for row in result.get("departments", []) if row.get("_id")}
     names = database.department_names(
         set(department_counts) | {row.get("_tl_department") or row.get("department_id") or "operations"
@@ -214,6 +264,7 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
             "root_id": row.get("_tl_root_id") or record.id, "parent_name": row.get("_tl_parent_name", ""),
             "child_count": row.get("_tl_child_count", 0), "brief": _brief(record.summary),
             "heading": "", "summary": record.summary,
+            "ingest_status": record.status, "error": record.error,
             "resolved": "yes" if event_status == "resolved" else "no", "status": event_status,
             "can_write": access.can_write(record), "department_id": record.department_id,
             "department_name": names.get(record.department_id, "未命名部门"),

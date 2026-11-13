@@ -11,7 +11,6 @@ from pathlib import Path
 
 from app.core.retrieval.tokenizer import query_terms, tokenize
 from app.domain.schemas import Chunk, ScoredChunk
-from app.domain.taxonomy import KNOWLEDGE_CATEGORY
 
 INDEX_VERSION = 1
 
@@ -19,10 +18,10 @@ INDEX_VERSION = 1
 def _chunk_tokens(chunk: Chunk) -> list[str]:
     # 章节标题参与检索：Markdown 记录的故障名称通常只写在标题里。
     # 经过文档分析的分块只按摘要检索，原文仅作为元数据；旧分块没有摘要时退回原文。
-    # 常识库例外：台账类内容的单元格值（IP、MAC、设备号、使用人、配置）就是查询目标，
+    # 文档库中的台账单元格值（IP、MAC、设备号、使用人、配置）就是查询目标，
     # 原文全文参与检索，否则「74是哪个电脑」这类按值提问永远检索不到。
     text = f"{chunk.heading}\n{chunk.summary}" if chunk.summary else chunk.text
-    if chunk.category == KNOWLEDGE_CATEGORY:
+    if chunk.is_library_document:
         text = f"{text}\n{chunk.text}"
     return tokenize(text)
 

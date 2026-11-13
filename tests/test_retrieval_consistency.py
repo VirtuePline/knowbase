@@ -158,7 +158,7 @@ class ReadOnlyCategoryTest(unittest.TestCase):
     def record(self, **changes):
         record = DocRecord(id="doc", name="MES报工记录.md", stored_name="doc.md",
                            ext=".md", size=1, sha256="hash", chunks=1,
-                           uploaded_at="2026-11-09", status="ready", doc_type="doc")
+                           uploaded_at="2026-11-09", status="ready", doc_type="record")
         return replace(record, **changes)
 
     def test_missing_category_is_derived_without_database_write(self):
@@ -177,16 +177,16 @@ class ReadOnlyCategoryTest(unittest.TestCase):
             self.assertEqual(kb._with_categories([original]), [original])
         classify.assert_not_called()
 
-    def test_document_counts_include_knowledge_like_document_list(self):
-        docs = [self.record(category="常识库"), self.record(id="mes", category="MES系统"),
+    def test_document_list_does_not_expose_problem_categories(self):
+        docs = [self.record(category="常识库", doc_type="doc"), self.record(id="mes", category="MES系统", doc_type="doc"),
                 self.record(id="record", category="硬件问题", doc_type="record")]
         with patch.object(kb.database, "list_all", return_value=docs), \
                 patch.object(kb.database, "department_names", return_value={"operations": "默认部门"}):
             counts = {row["name"]: row["count"] for row in kb.category_counts("doc")}
             listed = kb.list_documents(doc_type="doc")
-        self.assertEqual(sum(counts.values()), len(listed))
-        self.assertEqual(counts["常识库"], 1)
-        self.assertEqual(counts["硬件问题"], 0)
+        self.assertEqual(counts, {})
+        self.assertEqual(len(listed), 2)
+        self.assertTrue(all(doc["category"] == "" and doc["categories"] == [] for doc in listed))
 
 
 if __name__ == "__main__":

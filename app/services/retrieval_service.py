@@ -23,7 +23,7 @@ from app.core.retrieval.reranker import RerankError, get_reranker
 from app.core.retrieval.relevance import filter_fault_hits
 from app.core.retrieval.vector_store import VectorStore
 from app.domain.schemas import Chunk, ScoredChunk
-from app.domain.taxonomy import KNOWLEDGE_CATEGORY, classify, vendor_hint, vendor_in_chunk
+from app.domain.taxonomy import classify, vendor_hint, vendor_in_chunk
 from app.services import access, database
 
 # RRF 融合常数：排名越靠前贡献越大，两路都命中的分块得到叠加
@@ -61,9 +61,9 @@ def operations_mode(question: str = "") -> bool:
 
 def _embed_text(chunk: Chunk) -> str:
     # 与 BM25 保持一致的检索文本：章节标题 + 摘要（无摘要时退回原文）。
-    # 常识库分块额外附带原文：台账单元格值（IP、MAC、设备号、使用人）是查询目标。
+    # 文档库分块额外附带原文：台账单元格值（IP、MAC、设备号、使用人）是查询目标。
     text = f"{chunk.heading}\n{chunk.summary}" if chunk.summary else chunk.text
-    if chunk.category == KNOWLEDGE_CATEGORY:
+    if chunk.is_library_document:
         text = f"{text}\n{chunk.text}"
     return text
 

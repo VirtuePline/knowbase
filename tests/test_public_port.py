@@ -45,7 +45,8 @@ class PublicPortTest(unittest.TestCase):
         self.assertEqual([doc["id"] for doc in payload["documents"]], ["public-doc"])
         self.assertFalse(payload["documents"][0]["can_write"])
         self.assertEqual(payload["stats"]["documents"], 1)
-        self.assertEqual(sum(item["count"] for item in payload["categories"]), 1)
+        self.assertEqual(sum(item["count"] for item in payload["categories"]), 0)
+        self.assertEqual({item["id"]: item["count"] for item in payload["departments"]}, {"operations": 1})
         self.assertEqual(self.search.get("/api/documents/public-doc/preview").status_code, 200)
         download = self.search.get("/api/documents/public-doc/download")
         self.assertEqual(download.status_code, 200)
@@ -91,6 +92,9 @@ class PublicPortTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200 if doc_id == "public-doc" else 404)
 
     def test_timeline_counts_and_relations_do_not_leak_private_documents(self):
+        self.db.documents.update_many({"_id": {"$in": ["public-doc", "ops-doc", "hr-doc"]}},
+                                      {"$set": {"doc_type": "record"}})
+        self.doc("public-library", "operations", "public")
         self.db.documents.update_one({"_id": "public-doc"}, {"$set": {"parent_id": "ops-doc", "root_id": "ops-doc"}})
         self.db.documents.update_one({"_id": "hr-doc"}, {"$set": {"parent_id": "public-doc", "root_id": "public-doc"}})
         response = self.search.get("/api/timeline")
@@ -103,7 +107,14 @@ class PublicPortTest(unittest.TestCase):
         event = data["events"][0]
         self.assertEqual(event["parent_name"], "")
         self.assertEqual(event["parent_id"], "")
+        self.assertEqual(event["root_id"], "public-doc")
         self.assertEqual(event["child_count"], 0)
+        children = self.search.get("/api/timeline/public-doc/children")
+        self.assertEqual(children.status_code, 200)
+        self.assertEqual(children.json()["events"], [])
+        self.assertEqual(children.json()["total"], 0)
+        self.assertEqual(self.search.get("/api/timeline/ops-doc/children").status_code, 404)
+        self.assertEqual(self.search.get("/api/timeline/public-library/children").status_code, 404)
 
     def test_guest_retrieval_and_reference_expansion_remain_public_only(self):
         observed = []

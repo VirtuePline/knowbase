@@ -202,7 +202,7 @@ test("record save failure keeps queue; attachment failure retains the saved ID a
   queue.add([file("proof.png")]);
   const button = element(); let saveHandler, createCalls = 0, resets = 0, recordSaveFails = true;
   button.addEventListener = (event, callback) => { saveHandler = callback; };
-  const context = vm.createContext({ isAdmin: true, recordAttachmentQueue: queue, editingId: "", editingChunks: 0,
+  const context = vm.createContext({ isAdmin: true, recordAttachmentQueue: queue, editingId: "", editingDocType: "record", editingChunks: 0,
     editorMode: "source", mdSrc: { value: "# 处理记录\n已修复" }, mdPicker: { selected: () => [], subValue: () => "" },
     mdResolved: { value: "resolved" }, CATEGORY_SUBS: {}, mdStatus: { textContent: "" }, trackingParent: null,
     $: (selector) => selector === "#md-save" ? button : { value: "维修员" },
@@ -240,7 +240,7 @@ test("editing loads existing attachment metadata before allowing new files", asy
   const controls = new Map();
   const doc = { id: "edit-record", name: "已有记录", chunks: 1, categories: ["网络问题"], resolved: "resolved" };
   context = vm.createContext({ isAdmin: true, recordAttachmentQueue: queue, recordAttachmentsReady: true,
-    editorRequest: 0, recDocs: [doc], docDocs: [], editingId: "", editingChunks: 0, vendorList: [],
+    editorRequest: 0, recDocs: [doc], docDocs: [], editingId: "", editingDocType: "record", editingChunks: 0, vendorList: [],
     mdSrc: { value: "" }, mdName: { value: "" }, mdResolved: { value: "" }, mdStatus: { textContent: "" }, mdTime: { value: "" },
     mdPicker: { set() {}, setSub() {} }, docCats: (value) => value.categories,
     enterpriseCanWrite: () => true, enterpriseRenderScope() {}, clearTracking() {}, mdResetHistory() {},

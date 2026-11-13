@@ -58,15 +58,15 @@ function createPage() {
     tlDepartmentSelect: node("tl-department"), docRows: node("doc-rows"),
     tlBody: node("tl-body"), tlLoadState: node("tl-load-state"),
     tlLoadMoreButton: node("tl-load-more"), tlCatFilterEl: node("tl-cat-filter"),
-    renderCategoryFilter() {}, renderDocs() { renders.push("docs"); },
+    renderDocs() { renders.push("docs"); },
     renderRecList() { renders.push("records"); },
     renderTimeline() { renders.push("timeline"); },
     resetEditor() { throw new Error("Filtering must not discard an active editor"); },
   });
   vm.runInContext(`
     let isAdmin = true, editingId = "editing";
-    let docDocs = [], docCategories = [], recDocs = [];
-    let docDepartmentFilter = "", recDepartmentFilter = "", docCatFilter = "", recCatFilter = "";
+    let docDocs = [], recDocs = [];
+    let docDepartmentFilter = "", recDepartmentFilter = "", recCatFilter = "";
     let docRequestId = 0, recRequestId = 0, statsRequestId = 0;
     let tlData = null, tlDepartmentFilter = "", tlCatFilter = "", tlVendorFilter = "", tlStatusFilter = "";
     let tlStartDate = "", tlEndDate = "", tlLoading = false, tlHasMore = false, tlNextOffset = 0;
@@ -126,13 +126,13 @@ for (const [kind, select, filter, docs, loader, rendered] of [
     page.node("#overview-documents").textContent = "100";
     page.node("#overview-chunks").textContent = "500";
     page.node("#stats").textContent = "100 份文档 · 500 个检索单元";
-    page.run('docCatFilter = recCatFilter = "旧分类"');
+    page.run('recCatFilter = "旧分类"');
     await page.change(select, "sales & service");
     const first = new URL(page.requests[0].url, "http://localhost");
     assert.equal(first.pathname, "/api/documents");
     assert.equal(first.searchParams.get("doc_type"), kind);
     assert.equal(first.searchParams.get("department_id"), "sales & service");
-    assert.equal(page.run(kind === "doc" ? "docCatFilter" : "recCatFilter"), "");
+    if (kind === "record") assert.equal(page.run("recCatFilter"), "");
     page.run(`${filter} = "hr"`);
     const latest = page.run(`${loader}()`);
     page.pending[1].resolve(response(documentPage("latest", "hr")));
@@ -201,7 +201,7 @@ test("timeline department change aborts paging and restarts the 30-item range", 
   assert.equal(page.node("tl-department").value, "sales");
 });
 
-test("timeline All count includes knowledge documents and preserves zero", () => {
+test("timeline All count uses server record counts and preserves zero", () => {
   const page = createPage();
   for (const [eventCount, expected] of [[42, 42], [0, 0], [undefined, 7]]) {
     page.run(`tlData = { event_count: ${eventCount}, issue_count: 7, categories: [], status_counts: {} }; renderTimelineFilter()`);

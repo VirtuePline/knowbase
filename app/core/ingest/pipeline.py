@@ -43,7 +43,7 @@ def _chunk_path(doc_id: str) -> Path:
 
 class Ingester:
     def ingest(self, path: Path, doc_id: str, name: str, doc_type: str,
-               category: str = "") -> IngestResult:
+               category: str = "", *, content_type: str = "record") -> IngestResult:
         try:
             raw_blocks = load_blocks(path)
             references = reference_ids(path)
@@ -53,7 +53,7 @@ class Ingester:
             return IngestResult(ok=False, error=f"解析失败：{type(exc).__name__}: {exc}")
 
         try:
-            doc_analysis = analyze(raw_blocks, name)
+            doc_analysis = analyze(raw_blocks, name, classify_category=content_type != "doc")
             analyzed_blocks = doc_analysis.sections
         except Exception as exc:
             return IngestResult(ok=False, error=f"文档分析失败：{type(exc).__name__}: {exc}")
@@ -61,7 +61,7 @@ class Ingester:
         try:
             chunks = build_chunks(analyzed_blocks, {
                 "id": doc_id, "name": name, "type": doc_type,
-                "category": category or doc_analysis.category,
+                "category": "" if content_type == "doc" else category or doc_analysis.category,
             })
         except Exception as exc:
             return IngestResult(ok=False, error=f"切块失败：{type(exc).__name__}: {exc}")
@@ -71,12 +71,13 @@ class Ingester:
 
         for chunk in chunks:
             chunk.references = [ref for ref in references if ref != doc_id]
+            chunk.content_type = content_type
         self._write(doc_id, chunks)
         return IngestResult(
             ok=True, chunks=len(chunks),
             summary=doc_analysis.summary if doc_analysis else "",
             skipped=doc_analysis.skipped if doc_analysis else 0,
-            category=category or (doc_analysis.category if doc_analysis else ""),
+            category="" if content_type == "doc" else category or (doc_analysis.category if doc_analysis else ""),
         )
 
     def _write(self, doc_id: str, chunks: list[Chunk]) -> None:
@@ -108,9 +109,11 @@ def rebuild_index() -> BM25Index:
         known.add(record.id)
         if record.status == "ready":
             for chunk in ingester.read_chunks(record.id):
-                # 登记表的人工 / 强制分类优先于分块文件里的自动判定值，
-                # 修正分类后重建索引即对检索生效（如常识库全文参与检索）。
-                if record.category and chunk.category != record.category:
+                # 业务类型以登记表为准；旧文档重建后仍可按原文中的字段值检索。
+                chunk.content_type = record.doc_type
+                if record.doc_type == "doc":
+                    chunk.category = ""
+                elif record.category and chunk.category != record.category:
                     chunk.category = record.category
                 chunks.append(chunk)
 

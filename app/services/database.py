@@ -105,6 +105,11 @@ def set_category(doc_id: str, category: str) -> bool:
     return _docs().update_one({"_id": doc_id}, {"$set": {"category": category}}).matched_count > 0
 
 
+def clear_document_categories(doc_id: str) -> None:
+    """清除旧文档分类时同时固化类型，保留附件等其余登记信息。"""
+    _docs().update_one({"_id": doc_id}, {"$set": {"doc_type": "doc", "category": "", "categories": []}})
+
+
 def set_categories(doc_id: str, categories: list) -> bool:
     """设置全部分类标签；非空时首标签即主分类（与 category 字段保持一致）。"""
     tags = [str(t).strip() for t in (categories or []) if str(t).strip()]
@@ -367,12 +372,22 @@ def get(doc_id: str) -> DocRecord | None:
 
 
 def find_by_hash(sha256: str, *, uploaded_by: str | None = None,
-                 parent_id: str | None = None) -> DocRecord | None:
-    """可按创建账号、父记录限定去重范围；空串兼容旧数据缺失字段。"""
+                 parent_id: str | None = None, doc_type: str = "") -> DocRecord | None:
+    """按创建账号、父记录和业务类型限定去重，兼容未保存类型的旧数据。"""
     query: dict = {"sha256": sha256}
     for field, value in (("uploaded_by", uploaded_by), ("parent_id", parent_id)):
         if value is not None:
             query[field] = {"$in": ["", None]} if value == "" else value
+    if doc_type == "doc":
+        query["$or"] = [{"doc_type": "doc"}, {
+            "doc_type": {"$nin": ["doc", "record"]},
+            "$or": [{"category": "常识库"}, {"categories": "常识库"}],
+        }]
+    elif doc_type == "record":
+        query["$or"] = [{"doc_type": "record"}, {
+            "doc_type": {"$nin": ["doc", "record"]},
+            "category": {"$ne": "常识库"}, "categories": {"$ne": "常识库"},
+        }]
     row = _docs().find_one(query)
     return _row_to_doc(row) if row else None
 
