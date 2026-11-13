@@ -234,9 +234,10 @@ admin_router = APIRouter(prefix="/api", tags=["admin"], dependencies=[Depends(re
 
 
 @admin_router.get("/audit-logs")
-def audit_logs(limit: int = 20, page: int = 1, identity: dict = Depends(require_super_admin)) -> dict:
-    """仅管理员可查看操作审计日志分页（时间倒序）。"""
-    logs, total = audit.list_recent(limit, page)
+def audit_logs(limit: int = 20, page: int = 1, order: str = "desc",
+               identity: dict = Depends(require_super_admin)) -> dict:
+    """仅管理员可查看操作审计日志分页（默认时间倒序，order=asc 切换正序）。"""
+    logs, total = audit.list_recent(limit, page, order)
     return {"logs": logs, "total": total, "page": page, "page_size": limit}
 
 

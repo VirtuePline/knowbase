@@ -44,6 +44,7 @@ function page(events) {
   });
   vm.runInContext(`
     let tlData = { events: ${JSON.stringify(events)} }, tlRequestId = 0, tlChildrenRequestId = -1, isAdmin = true;
+    let tlSortMode = "time-desc";
     const tlChildren = new Map(), tlCollapsed = new Set(), TL_CHILD_PAGE_SIZE = 20;
     ${["escapeHtml", "escapeAttr", "recordRelationsHtml", "syncTimelineChildren", "tlChildState",
       "tlChildrenPanelId", "tlChildrenHtml", "loadTimelineChildren", "toggleTimelineChildren",

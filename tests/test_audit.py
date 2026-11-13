@@ -61,7 +61,11 @@ class AuditPermissionTest(unittest.TestCase):
         response = self.api.get("/api/audit-logs?limit=10&page=2")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"logs": self.logs, "total": 21, "page": 2, "page_size": 10})
-        self.list_recent.assert_called_once_with(10, 2)
+        self.list_recent.assert_called_once_with(10, 2, "desc")
+        # 正序切换
+        response = self.api.get("/api/audit-logs", params={"limit": 10, "page": 1, "order": "asc"})
+        self.assertEqual(response.status_code, 200)
+        self.list_recent.assert_called_with(10, 1, "asc")
 
     def test_search_port_does_not_expose_logs_even_with_admin_cookie(self):
         api = TestClient(search_app)

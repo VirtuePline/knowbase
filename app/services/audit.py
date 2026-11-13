@@ -123,13 +123,14 @@ def record(ip: str, method: str, path: str, status: int,
         pass
 
 
-def list_recent(limit: int = 20, page: int = 1) -> tuple[list[dict], int]:
+def list_recent(limit: int = 20, page: int = 1, order: str = "desc") -> tuple[list[dict], int]:
     """操作日志分页（_id 单调递增，倒序即最新在前）。返回 (当前页记录, 总条数)。"""
     coll = mongo.db().audit_logs
     total = coll.count_documents({})
     page = max(1, int(page))
     size = max(1, min(int(limit), 100))
-    rows = coll.find({}, {"_id": 0}).sort("_id", -1).skip((page - 1) * size).limit(size)
+    direction = 1 if str(order).lower() == "asc" else -1
+    rows = coll.find({}, {"_id": 0}).sort("_id", direction).skip((page - 1) * size).limit(size)
     return list(rows), total
 
 

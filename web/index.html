@@ -124,7 +124,7 @@
       <div class="docs-head">
         <h2>已入库文档</h2>
       </div>
-      <div class="department-filter-row"><label for="doc-department-filter">所属部门</label><select id="doc-department-filter" aria-label="按所属部门筛选文档"><option value="">全部部门</option></select></div>
+      <div class="department-filter-row"><label for="doc-department-filter">所属部门</label><select id="doc-department-filter" aria-label="按所属部门筛选文档"><option value="">全部部门</option></select><label for="doc-sort">排序</label><select id="doc-sort" aria-label="文档列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="文档列表，可横向滚动"><table class="docs">
         <thead>
           <tr><th>名称 / 摘要</th><th>格式</th><th>检索单元</th><th>状态</th><th>上传时间</th><th></th></tr>
@@ -155,6 +155,7 @@
         </span></label>
         <button type="submit" class="ghost">查询</button>
         <button type="button" class="ghost" id="tl-clear-range">清除时间段</button>
+        <label>排序<select id="tl-sort" aria-label="时间线排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select></label>
         <span class="tl-range-hint">默认显示最近 30 条，向下滚动按需加载</span>
       </form>
       <div class="cat-filter" id="tl-cat-filter"></div>
@@ -333,7 +334,7 @@
         <h2>工作记录</h2>
         <span class="muted" style="font-size:13px">所有工作记录文档：上传的记录文件与在线写的处理记录；可预览、下载、编辑、替换、改分类、改记录时间</span>
       </div>
-      <div class="department-filter-row"><label for="rec-department-filter">所属部门</label><select id="rec-department-filter" aria-label="按所属部门筛选记录"><option value="">全部部门</option></select></div>
+      <div class="department-filter-row"><label for="rec-department-filter">所属部门</label><select id="rec-department-filter" aria-label="按所属部门筛选记录"><option value="">全部部门</option></select><label for="rec-sort">排序</label><select id="rec-sort" aria-label="记录列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></div>
       <div class="cat-filter" id="rec-cat-filter"></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="文档列表，可横向滚动"><table class="docs">
         <thead>
@@ -405,6 +406,7 @@
         <button class="ghost" type="button" id="wr-generate" title="仅生成自己的本周周报；重复生成会覆盖本人本周结果">生成我的本周周报</button>
         <button class="ghost account-admin-only" type="button" id="wr-generate-managed" hidden>生成本部门周报</button>
         <button class="ghost" type="button" id="wr-refresh">刷新</button>
+        <label style="font-size:12px">排序<select id="wr-sort" aria-label="周报列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></label>
         <span class="muted" id="wr-generate-status" role="status"></span>
       </div>
       <p class="muted wr-settings-note">点「查看」阅读周报正文，正文由 AI 阅读本周记录后总结。</p>
@@ -434,6 +436,7 @@
     </div>
     <div class="panel-card admin-only">
       <h2>成员与部门角色</h2>
+      <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px"><label for="users-sort" style="font-size:12px">排序</label><select id="users-sort" aria-label="成员列表排序"><option value="time-desc" selected>时间倒序（最新创建在前）</option><option value="time-asc">时间正序（最早创建在前）</option><option value="name-asc">名称 A-Z</option></select></div>
       <div class="row account-admin-only" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <span class="muted" style="font-size:13px">创建普通账号</span>
         <input type="text" id="reg-account" placeholder="账号（如 zs）" autocapitalize="none" spellcheck="false" style="width:170px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
@@ -480,6 +483,7 @@
       <h2>修改记录</h2>
       <div class="row" style="align-items:center;margin-bottom:8px">
         <button class="ghost" type="button" id="edits-refresh">刷新</button>
+        <label for="edits-sort" style="font-size:12px">排序</label><select id="edits-sort" aria-label="修改记录排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select>
         <span class="muted" style="font-size:12px">在线新建 / 修改记录都会记录动作、操作人与时间（存 MongoDB edit_logs 集合）</span>
       </div>
       <div id="edits-log" style="font-size:13px"></div>
@@ -492,6 +496,7 @@
       <h2>操作日志</h2>
       <div class="row" style="align-items:center;margin-bottom:8px">
         <button class="ghost" type="button" id="audit-refresh">刷新</button>
+        <label for="audit-sort" style="font-size:12px">排序</label><select id="audit-sort" aria-label="操作日志排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select>
         <span class="muted" style="font-size:12px">管理端每次写操作都会记录操作 IP、时间与账号（存 MongoDB audit_logs 集合）</span>
       </div>
       <div style="overflow-x:auto">
@@ -1454,6 +1459,30 @@ function sortByUploadedDesc(docs) {
   return docs.slice().sort((a, b) => String(b.uploaded_at || "").localeCompare(String(a.uploaded_at || "")));
 }
 
+// 通用列表排序：默认时间倒序（最新在前），可切换时间正序 / 名称 A-Z
+function applyListSort(list, mode, timeKey = "uploaded_at", nameKey = "name") {
+  const rows = list.slice();
+  if (mode === "name-asc") return rows.sort((a, b) => String(a[nameKey] || "").localeCompare(String(b[nameKey] || ""), "zh"));
+  rows.sort((a, b) => String(b[timeKey] || "").localeCompare(String(a[timeKey] || "")));
+  return mode === "time-asc" ? rows.reverse() : rows;
+}
+const LIST_SORT_OPTIONS = `
+          <option value="time-desc">时间倒序（最新在前）</option>
+          <option value="time-asc">时间正序（最早在前）</option>
+          <option value="name-asc">名称 A-Z</option>`;
+const TIME_SORT_OPTIONS = `
+          <option value="time-desc">时间倒序（最新在前）</option>
+          <option value="time-asc">时间正序（最早在前）</option>`;
+let docSortMode = "time-desc", recSortMode = "time-desc", tlSortMode = "time-desc",
+    wrSortMode = "time-desc", usersSortMode = "time-desc", editsSortMode = "time-desc", auditSortMode = "time-desc";
+$("#doc-sort")?.addEventListener("change", (e) => { docSortMode = e.target.value; renderDocs(); });
+$("#rec-sort")?.addEventListener("change", (e) => { recSortMode = e.target.value; renderRecList(); });
+$("#tl-sort")?.addEventListener("change", (e) => { tlSortMode = e.target.value; renderTimeline(); });
+$("#wr-sort")?.addEventListener("change", (e) => { wrSortMode = e.target.value; loadWeeklyReports(); });
+$("#users-sort")?.addEventListener("change", (e) => { usersSortMode = e.target.value; loadUsers(); });
+$("#edits-sort")?.addEventListener("change", (e) => { editsSortMode = e.target.value; loadEditsLog(); });
+$("#audit-sort")?.addEventListener("change", (e) => { auditSortMode = e.target.value; auditPage = 1; loadAuditLogs(); });
+
 function renderByDepartment(docs) {
   const groups = new Map();
   for (const doc of docs) {
@@ -1465,7 +1494,7 @@ function renderByDepartment(docs) {
     const first = list[0];
     const name = first.department_name || enterpriseDepartmentName(first.department_id || "operations");
     return `<tr class="doc-group"><td colspan="6"><span class="group-title">${escapeHtml(name)}</span><span class="group-count">${list.length} 份</span></td></tr>` +
-      sortByUploadedDesc(list).map(docRowHtml).join("");
+      applyListSort(list, docSortMode).map(docRowHtml).join("");
   }).join("");
 }
 
@@ -1804,8 +1833,10 @@ function renderTimeline() {
     if (!groups.has(event.date)) groups.set(event.date, []);
     groups.get(event.date).push(event);
   }
+  let groupEntries = [...groups.entries()];
+  if (tlSortMode === "time-asc") { groupEntries.reverse(); groupEntries.forEach(([, list]) => list.reverse()); }
   let html = "";
-  for (const [date, list] of groups) {
+  for (const [date, list] of groupEntries) {
     const fold = tlCollapsed.has(date) ? "▸" : "▾";
     html += `<div class="tl-group">
         <div class="tl-head" data-tl-group="${escapeAttr(date)}">
@@ -2478,7 +2509,7 @@ async function loadAuditLogs() {
   if (!isSuperAdmin) return;
   const body = $("#audit-body");
   try {
-    const resp = await fetch(`/api/audit-logs?limit=${AUDIT_PAGE_SIZE}&page=${auditPage}`);
+    const resp = await fetch(`/api/audit-logs?limit=${AUDIT_PAGE_SIZE}&page=${auditPage}&order=${auditSortMode === "time-asc" ? "asc" : "desc"}`);
     if (!resp.ok) throw new Error("日志加载失败");
     const data = await resp.json();
     auditTotal = data.total || 0;
@@ -2916,13 +2947,15 @@ async function loadWeeklyReports() {
     const renderGroup = (dept, byPerson) => `
       <div class="wr-dept" style="margin-bottom:14px">
         <div style="font-size:13px;font-weight:700;color:var(--muted);letter-spacing:1px;margin:4px 0 8px">${escapeHtml(dept)}</div>
-        ${[...byPerson.entries()].map(([person, list]) => `
+        ${[...byPerson.entries()]
+            .sort((a, b) => wrSortMode === "name-asc" ? a[0].localeCompare(b[0], "zh") : 0)
+            .map(([person, list]) => `
           <div class="wr-person" style="margin-bottom:10px">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <span style="font-size:14px;font-weight:600">${escapeHtml(person)}</span>
               <span class="muted" style="font-size:12px">${list.length} 份周报</span>
             </div>
-            ${list.map(renderCard).join("")}
+            ${applyListSort(list, wrSortMode === "name-asc" ? "time-desc" : wrSortMode, "week_start").map(renderCard).join("")}
           </div>`).join("")}
       </div>`;
     $("#wr-reports").innerHTML = groups.size
@@ -3000,7 +3033,7 @@ async function loadUsers() {
     const resp = await fetch("/api/admin/users");
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "账号列表加载失败");
-    usersBody.innerHTML = enterpriseUsersRows(data.users || []);
+    usersBody.innerHTML = enterpriseUsersRows(applyListSort(data.users || [], usersSortMode, "created_at", "display_name"));
     if (!(data.users || []).length) usersStatus.textContent = "暂无账号";
   } catch (err) {
     usersBody.innerHTML = "";
@@ -3171,7 +3204,7 @@ async function openPreview(id) {
     const docSummary = doc.summary
       ? `<div class="summary-box"><span class="label">全文摘要</span>${escapeHtml(doc.summary)}</div>` : "";
     const attachHtml = (doc.attachments || []).length
-      ? `<div class="attach-box"><span class="label">附件（${doc.attachments.length}）</span><div class="attach-list">${doc.attachments.map((a) =>
+      ? `<div class="attach-box"><span class="label">附件（${doc.attachments.length}）</span><div class="attach-list">${doc.attachments.slice().reverse().map((a) =>
           `<a class="attach-item" href="/api/documents/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.stored)}" target="_blank" rel="noopener" title="打开附件（不参与检索）">${escapeHtml(a.name || "附件")}<span class="attach-size">${fmtSize(a.size)}</span></a>`).join("")}</div></div>`
       : "";
     body.innerHTML = attachHtml + docSummary + data.sections.map((s) => {
@@ -3599,7 +3632,7 @@ async function loadEditsLog() {
     const resp = await fetch("/api/edits");
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "读取失败");
-    const edits = data.edits || [];
+    const edits = applyListSort(data.edits || [], editsSortMode, "edited_at");
     box.innerHTML = edits.length
       ? edits.map((it) => {
           const who = it.editor_name || it.editor || "未知";
@@ -4115,7 +4148,7 @@ function renderRecList() {
       : "暂无工作记录：在「新增工作记录」页上传文件或在线填写记录"}</td></tr>`;
     return;
   }
-  rows.innerHTML = docs.map(docRowHtml).join("");
+  rows.innerHTML = applyListSort(docs, recSortMode, "uploaded_at").map(docRowHtml).join("");
 }
 
 recCatFilterBox.addEventListener("click", (event) => {

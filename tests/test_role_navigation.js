@@ -101,6 +101,12 @@ function createPage(mode, savedTab = "") {
     "AUDIT_PAGE_SIZE", "auditPage", "auditTotal", "usersBody", "usersStatus", "sendBtn"];
   const functions = ["escapeHtml", "escapeAttr", "applyRoleVisibility", "canAccessTab", "lastTab",
     "updateNavigation", "switchTo", "loadUsers", "loadAuditLogs", "initPage"];
+  // 列表排序状态与通用排序器（loadUsers / loadAuditLogs 依赖）
+  const sortParts = [
+    `let docSortMode = "time-desc", recSortMode = "time-desc", tlSortMode = "time-desc",
+    wrSortMode = "time-desc", usersSortMode = "time-desc", editsSortMode = "time-desc", auditSortMode = "time-desc";`,
+    shippedFunction(script, "applyListSort"),
+  ].join("\n");
   // 企业权限模块（enterprise.js）：用户表格用真实渲染代码，部门初始化用轻量 stub
   const enterpriseParts = [
     shippedDeclaration(enterpriseSource, "enterpriseIdentity"),
@@ -112,7 +118,7 @@ function createPage(mode, savedTab = "") {
     `function enterpriseDepartmentName() { return ""; }`,
   ].join("\n");
   vm.runInContext([...declarations.map((name) => shippedDeclaration(script, name)),
-    ...functions.map((name) => shippedFunction(script, name)), enterpriseParts].join("\n"), context);
+    ...functions.map((name) => shippedFunction(script, name)), sortParts, enterpriseParts].join("\n"), context);
   return {
     document, find, requests, redirects,
     setMode: (value) => { currentMode = value; },

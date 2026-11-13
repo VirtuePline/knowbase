@@ -17,9 +17,10 @@ test("document library groups each document once by its department and keeps new
     enterpriseDepartmentName: (id) => id,
     docRowHtml: (doc) => `<tr data-doc="${doc.id}"></tr>`,
   });
-  for (const name of ["escapeHtml", "sortByUploadedDesc", "renderByDepartment"]) {
+  for (const name of ["escapeHtml", "sortByUploadedDesc", "applyListSort", "renderByDepartment"]) {
     vm.runInContext(shippedFunction(name), context);
   }
+  vm.runInContext('let docSortMode = "time-desc";', context);
   const result = vm.runInContext(`renderByDepartment([
     {id:"old", department_id:"it", department_name:"信息<部", uploaded_at:"2026-11-01", categories:["网络问题", "常识库"]},
     {id:"hr", department_id:"hr", department_name:"人事部", uploaded_at:"2026-11-10"},

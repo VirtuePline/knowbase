@@ -12,6 +12,7 @@ from collections import Counter
 from dataclasses import replace as replace_record
 from pathlib import Path
 from fastapi import HTTPException
+from pymongo import DESCENDING
 
 from app.config import settings
 from app.core.ingest.pipeline import Ingester, sha256_of
@@ -86,7 +87,9 @@ def _visible_records(department_id: str = "") -> list[DocRecord]:
         owner = ({"department_id": {"$in": ["operations", "", None]}} if department_id == "operations"
                  else {"department_id": department_id})
         query = {"$and": [query, owner]}
-    return [database._row_to_doc(row) for row in database._docs().find(query)]
+    # 与内部用户一致：默认按上传时间倒序（最新在前），前端可再切换
+    rows = database._docs().find(query).sort("uploaded_at", DESCENDING)
+    return [database._row_to_doc(row) for row in rows]
 
 
 def _validate_images(content: str) -> set[str]:
