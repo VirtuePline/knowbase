@@ -63,25 +63,32 @@ class EnterpriseDocumentsTest(unittest.TestCase):
             self.assertFalse(kb.get_document("shared")["can_write"])
             kb.set_categories("own", ["网络问题"])
 
-    def test_permission_changes_require_owner_department_admin_and_public_is_platform_owned(self):
+    def test_permission_changes_require_owner_department_admin_and_public_is_shared_publishing(self):
         self.add("own")
         with access.identity_scope(actor()):
             with self.assertRaises(HTTPException) as error:
                 routes.update_document_access("own", routes.DocumentAccessRequest(shared_department_ids=["hr"]))
             self.assertEqual(error.exception.status_code, 403)
+            with self.assertRaises(HTTPException) as error:
+                routes.update_document_access("own", routes.DocumentAccessRequest(visibility="public"))
+            self.assertEqual(error.exception.status_code, 403)   # editor 不能发布公共文档
         with access.identity_scope(actor("admin")):
             result = routes.update_document_access("own", routes.DocumentAccessRequest(shared_department_ids=["hr"]))
             self.assertEqual(result["doc"]["shared_department_ids"], ["hr"])
             with self.assertRaises(HTTPException):
-                routes.update_document_access("own", routes.DocumentAccessRequest(visibility="public"))
-            with self.assertRaises(HTTPException):
                 routes.update_document_access("own", routes.DocumentAccessRequest(department_id="finance"))
+            # 部门管理员可以发布公共文档，并保持维护权
+            routes.update_document_access("own", routes.DocumentAccessRequest(visibility="public"))
+            self.assertEqual(database.get("own").visibility, "public")
+            self.assertTrue(kb.get_document("own")["can_write"])
+            # 也可以随时改回部门可见
+            routes.update_document_access("own", routes.DocumentAccessRequest(visibility="department"))
+            self.assertEqual(database.get("own").visibility, "department")
+            self.assertTrue(kb.get_document("own")["can_write"])
         with access.identity_scope({"username": "admin", "role": "admin"}):
             routes.update_document_access("own", routes.DocumentAccessRequest(visibility="public"))
         with access.identity_scope(actor("admin")):
-            self.assertFalse(kb.get_document("own")["can_write"])
-            with self.assertRaises(HTTPException):
-                routes.update_document_access("own", routes.DocumentAccessRequest(visibility="department"))
+            self.assertTrue(kb.get_document("own")["can_write"])   # 公共文档仍归原部门管理员维护
 
     def test_timeline_does_not_leak_hidden_parent_names_root_ids_or_child_counts(self):
         self.add("hr-root", "hr")

@@ -17,12 +17,14 @@ function enterpriseCanWrite(doc) {
   if (!isAdmin) return false;
   if (typeof doc?.can_write === "boolean") return doc.can_write;
   if (enterpriseIdentity?.role === "admin") return true;
-  return doc?.visibility !== "public" && ["admin", "editor"].includes(enterpriseIdentity?.department_roles?.[doc?.department_id || "operations"]);
+  const deptRole = enterpriseIdentity?.department_roles?.[doc?.department_id || "operations"];
+  if (!["admin", "editor"].includes(deptRole)) return false;
+  return doc?.visibility !== "public" || deptRole === "admin";   // 部门管理员可维护自己发布的公共文档
 }
 function enterpriseCanManageAccess(doc) {
   if (!isAdmin) return false;
   if (typeof doc?.can_manage_access === "boolean") return doc.can_manage_access;
-  return enterpriseIdentity?.role === "admin" || (doc?.visibility !== "public" && enterpriseIdentity?.department_roles?.[doc?.department_id || "operations"] === "admin");
+  return enterpriseIdentity?.role === "admin" || enterpriseIdentity?.department_roles?.[doc?.department_id || "operations"] === "admin";
 }
 function enterpriseHistoryKey() {
   return `kb_chat_history:${enterpriseIdentity?.account || enterpriseIdentity?.user || "unknown"}:${enterpriseIdentity?.permission_stamp || "initial"}`;
@@ -56,7 +58,7 @@ function enterpriseRenderScope(prefix, doc = null, editing = false) {
   const visibility = document.getElementById(`${prefix}-visibility`);
   visibility.value = doc?.visibility || "department";
   const canManageOwner = (deptId) => enterpriseIdentity?.role === "admin" || enterpriseIdentity?.department_roles?.[deptId] === "admin";
-  visibility.querySelector('option[value="public"]').disabled = enterpriseIdentity?.role !== "admin";
+  visibility.querySelector('option[value="public"]').disabled = !canManageOwner(owner);
   visibility.querySelector('option[value="all"]').disabled = !canManageOwner(owner);
   const shared = document.getElementById(`${prefix}-shared`);
   shared.innerHTML = enterpriseOptions(enterpriseDepartments.filter((d) => d.id !== owner), doc?.shared_department_ids || []);
@@ -71,7 +73,9 @@ function enterpriseRenderScope(prefix, doc = null, editing = false) {
   department.onchange = () => {
     const selected = [...shared.selectedOptions].map((option) => option.value);
     shared.innerHTML = enterpriseOptions(enterpriseDepartments.filter((d) => d.id !== department.value), selected);
-    visibility.querySelector('option[value="all"]').disabled = !canManageOwner(department.value);
+    const manageOwner = canManageOwner(department.value);
+    visibility.querySelector('option[value="public"]').disabled = !manageOwner;
+    visibility.querySelector('option[value="all"]').disabled = !manageOwner;
     update();
   };
   update();

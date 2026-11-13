@@ -458,8 +458,7 @@ class DocumentAccessRequest(BaseModel):
 @admin_router.patch("/documents/{doc_id}/access")
 def update_document_access(doc_id: str, req: DocumentAccessRequest) -> dict:
     record = access.require_read(doc_id)
-    if not access.is_platform_admin() and (record.visibility == "public" or
-                                          record.department_id not in access.managed_departments()):
+    if not access.is_platform_admin() and record.department_id not in access.managed_departments():
         raise HTTPException(status_code=403, detail="只有所属部门管理员可以调整文档权限")
     department_id = req.department_id if req.department_id is not None else record.department_id
     if not access.is_platform_admin() and department_id != record.department_id:

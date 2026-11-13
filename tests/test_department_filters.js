@@ -221,14 +221,14 @@ test("public document labels use the supplied department name without a director
   assert.match(label, /企业公共/);
 });
 
-test("department managers can pick all-members sharing; public stays platform-admin only", () => {
+test("department managers can pick all-members sharing and public publishing", () => {
   const markup = shippedFunction(enterprise, "enterpriseScopeMarkup");
   assert.match(markup, /<option value="all">所有人共享/, "下拉缺少「所有人共享」选项");
   const render = shippedFunction(enterprise, "enterpriseRenderScope");
   assert.match(render, /option\[value="all"\]'\)\.disabled = !canManageOwner\(owner\)/,
     "部门管理员应能选择所有人共享");
-  assert.match(render, /option\[value="public"\]'\)\.disabled = enterpriseIdentity\?\.role !== "admin"/,
-    "企业公共文档仍仅平台管理员可发布");
+  assert.match(render, /option\[value="public"\]'\)\.disabled = !canManageOwner\(owner\)/,
+    "部门管理员应能发布企业公共文档");
   const scope = shippedFunction(enterprise, "enterpriseScope");
   assert.match(scope, /visibility !== "department"/, "全员共享时不应再选共享部门");
   assert.match(shippedFunction(enterprise, "enterpriseDocumentLabel"), /所有人共享/, "列表标签缺少所有人共享");

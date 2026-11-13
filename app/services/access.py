@@ -113,8 +113,10 @@ def can_write(doc) -> bool:
         return False
     if is_platform_admin():
         return True
-    return (can_read(doc) and getattr(doc, "visibility", "department") != "public"
-            and (getattr(doc, "department_id", "") or OPERATIONS) in writable_departments())
+    owner = (getattr(doc, "department_id", "") or OPERATIONS)
+    visibility = getattr(doc, "visibility", "department")
+    return (can_read(doc) and owner in writable_departments()
+            and (visibility != "public" or owner in managed_departments()))
 
 
 def require_read(doc_id: str):
@@ -142,12 +144,10 @@ def creation_scope(department_id: str = "", visibility: str = "department",
     if not is_platform_admin():
         if department_id not in writable_departments():
             raise HTTPException(status_code=403, detail="没有此部门的文档维护权限")
-        if visibility == "public":
-            raise HTTPException(status_code=403, detail="公共文档由平台管理员发布")
         if shared and department_id not in managed_departments():
             raise HTTPException(status_code=403, detail="只有部门管理员可以授权跨部门共享")
-    if visibility == "all" and not is_platform_admin() and department_id not in managed_departments():
-        raise HTTPException(status_code=403, detail="只有部门管理员可以设置所有人共享")
+    if visibility in {"public", "all"} and not is_platform_admin() and department_id not in managed_departments():
+        raise HTTPException(status_code=403, detail="只有部门管理员可以设置企业公共或所有人共享")
     if not is_internal():
         existing = {row["id"] for row in database.list_departments()}
         if any(value not in existing for value in [department_id, *shared]):
