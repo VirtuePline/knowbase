@@ -145,6 +145,7 @@ def _doc_dict(record: DocRecord, department_names: dict | None = None) -> dict:
     if department_names is None:
         department_names = database.department_names([record.department_id])
     data["department_name"] = department_names.get(record.department_id, "未命名部门")
+    data["uploaded_by_name"] = database.recorder_label(record.uploaded_by, record.uploaded_by_name)
     data["editable"] = is_editable(record.ext)
     data["has_source"] = _raw_path(record).is_file()
     data["can_write"] = access.can_write(record)

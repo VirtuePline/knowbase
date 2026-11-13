@@ -209,7 +209,7 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
             "category": row["_tl_category"], "categories": row["_tl_categories"],
             "doc_id": record.id, "doc_name": record.name, "doc_type": record.doc_type,
             "vendor": record.vendor, "uploaded_by": record.uploaded_by,
-            "uploaded_by_name": record.uploaded_by_name,
+            "uploaded_by_name": database.recorder_label(record.uploaded_by, record.uploaded_by_name),
             "parent_id": record.parent_id if row.get("_tl_parent_name") else "",
             "root_id": row.get("_tl_root_id") or record.id, "parent_name": row.get("_tl_parent_name", ""),
             "child_count": row.get("_tl_child_count", 0), "brief": _brief(record.summary),

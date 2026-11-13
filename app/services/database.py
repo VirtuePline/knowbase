@@ -214,9 +214,11 @@ def add_edit_log(doc_id: str, editor: str, editor_name: str = "", action: str = 
 
 
 def list_edit_logs(doc_id: str, limit: int = 20) -> list[dict]:
-    rows = (mongo.db().edit_logs.find({"doc_id": doc_id}, {"_id": 0})
-            .sort("edited_at", DESCENDING).limit(limit))
-    return [{"editor": r.get("editor", ""), "editor_name": r.get("editor_name", ""),
+    rows = list(mongo.db().edit_logs.find({"doc_id": doc_id}, {"_id": 0})
+                .sort("edited_at", DESCENDING).limit(limit))
+    names = display_names(r.get("editor", "") for r in rows)
+    return [{"editor": r.get("editor", ""),
+             "editor_name": names.get(r.get("editor", ""), "") or (r.get("editor_name") or "").strip() or r.get("editor", ""),
              "action": r.get("action", ""), "edited_at": r.get("edited_at", "")} for r in rows]
 
 
@@ -228,6 +230,22 @@ def uploaded_dates(doc_ids) -> dict[str, str]:
     return {d["_id"]: str(d.get("uploaded_at", ""))
             for d in mongo.db().documents.find({"_id": {"$in": list(set(ids))}}, {"uploaded_at": 1})
             if d.get("uploaded_at")}
+
+
+def display_names(accounts) -> dict[str, str]:
+    """账号 → 用户名（display_name）；未填姓名的账号不出现在映射里，显示层回退。"""
+    ids = {str(a).strip() for a in accounts or [] if str(a).strip()}
+    if not ids:
+        return {}
+    return {row["_id"]: (row.get("display_name") or "").strip()
+            for row in mongo.db().users.find({"_id": {"$in": list(ids)}}, {"display_name": 1})
+            if (row.get("display_name") or "").strip()}
+
+
+def recorder_label(account: str, fallback_name: str = "") -> str:
+    """记录人显示标签：优先用户名，其次上传时填写的姓名，最后账号本身。"""
+    names = display_names([account])
+    return names.get((account or "").strip(), "") or (fallback_name or "").strip() or (account or "")
 
 
 def list_all_edit_logs(limit: int = 100) -> list[dict]:

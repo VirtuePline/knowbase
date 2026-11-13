@@ -1,11 +1,14 @@
 """工作周报：设置校验、本周记录收集与定时生成幂等。"""
 import datetime
+import os
 import unittest
+from pymongo import MongoClient
 from tests.network_test_support import online_api_test
 from unittest.mock import patch
+from uuid import uuid4
 
 from app.domain.schemas import DocRecord
-from app.services import weekly
+from app.services import database, mongo, weekly
 
 
 def make_record(doc_id: str, name: str, owner: str, uploaded_at: str,
@@ -109,6 +112,34 @@ class WeeklyDisplayNameTest(unittest.TestCase):
                               return_value={"display_name": "强生三"}):
                 reports = weekly.visible_reports()
         self.assertEqual(reports[0]["person_name"], "强生三")
+
+
+@online_api_test
+class RecorderLabelTest(unittest.TestCase):
+    """记录人/编辑者展示标签：优先个人资料用户名，账号只作回退。"""
+
+    def setUp(self):
+        client = MongoClient(os.environ.get("KB_TEST_MONGO", "mongodb://127.0.0.1:27017"),
+                             serverSelectionTimeoutMS=5000)
+        self.addCleanup(client.close)
+        client.admin.command("ping")
+        name = "kbtest_recorder_" + uuid4().hex
+        self.addCleanup(client.drop_database, name)
+        self.db = client[name]
+        patcher = patch.object(mongo, "db", return_value=self.db)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.db.users.insert_one({"_id": "qsl", "display_name": "强生三"})
+
+    def test_recorder_label_prefers_display_name_and_falls_back(self):
+        self.assertEqual(database.recorder_label("qsl", "sl"), "强生三")   # 有资料姓名
+        self.assertEqual(database.recorder_label("unknown", "上传时填的名"), "上传时填的名")
+        self.assertEqual(database.recorder_label("unknown", ""), "unknown")
+        self.assertEqual(database.recorder_label("", ""), "")
+
+    def test_display_names_batch_query_skips_empty_profiles(self):
+        self.db.users.insert_one({"_id": "none", "display_name": "  "})
+        self.assertEqual(database.display_names(["qsl", "none", "", "ghost"]), {"qsl": "强生三"})
 
 
 @online_api_test
