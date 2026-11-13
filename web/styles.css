@@ -224,6 +224,29 @@
     display: inline-flex; flex-wrap: nowrap; gap: 12px; align-items: center;
     width: 240px; overflow-x: auto; vertical-align: middle;
   }
+  /* 编辑器分类按内容占位；选中后只显示叶子标签和末尾的添加按钮。 */
+  .category-tags, .category-tag-list {
+    display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%;
+  }
+  .category-tags[hidden], .category-tag-list[hidden], .category-tag-list:empty,
+  .category-tags .multicat-btn[hidden] { display: none; }
+  .category-tags .multicat-btn { width: auto; }
+  .category-token {
+    display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 5px 3px 10px;
+    background: var(--accent-soft); color: var(--accent); font-size: 12px;
+  }
+  .category-token > span { overflow-wrap: anywhere; min-width: 0; }
+  .category-token-remove, .category-tag-add {
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    width: 26px; height: 26px; border: 0; border-radius: 50%; padding: 0;
+    background: transparent; color: var(--accent); font: inherit; font-size: 18px; cursor: pointer;
+  }
+  .category-tag-add { width: 31px; height: 31px; border: 1px dashed var(--line); }
+  .category-token-remove:hover, .category-tag-add:hover { background: var(--accent-soft); color: var(--text); }
+  .category-token-remove:focus-visible, .category-tag-add:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
   .subcat { display: inline-flex; flex-wrap: wrap; gap: 7px; align-items: center; }
   .subcat-label { color: var(--muted); font-size: 12.5px; }
   .subcat-opt {

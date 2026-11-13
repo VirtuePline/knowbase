@@ -212,10 +212,10 @@
       <h2 id="editor-title">新建工作记录</h2>
       <div class="editor-bar">
         <input type="text" id="md-name" placeholder="记录名称（留空自动命名，默认保存为 md 文件）" />
-        <span class="multicat" id="md-cat-multi">
-          <button type="button" class="cat-select multicat-btn" id="md-cat-btn" title="点击打开选择窗体：可勾选多个记录分类；选「自动判定」则按内容归类">自动判定记录分类</button>
+        <span class="multicat category-tags" id="md-cat-multi">
+          <button type="button" class="cat-select multicat-btn" id="md-cat-btn" title="选择分类；未选择时按内容自动判断">选择分类</button>
+          <span id="md-subcats" class="category-tag-list"></span>
         </span>
-        <span id="md-subcats" class="rec-subcats"></span>
         <input type="date" id="md-time" title="记录时间：默认当前日期，只需选择年月日" />
         <select id="md-resolved" title="完成情况：时间线徽标按此显示；时间线上的人工标记优先于这里的选择">
           <option value="unresolved">未完成</option>
@@ -1981,6 +1981,18 @@ refreshTlDateDisplay();
 document.addEventListener("change", (e) => {
   if (e.target.matches(".tl-date-wrap input[type=date]")) refreshTlDateDisplay();
 });
+// 点击控件任意位置都弹出系统日历：透明 input 在部分浏览器里只有点到日历图标才会弹，这里主动触发
+document.querySelectorAll(".tl-date-wrap").forEach((wrap) => {
+  wrap.addEventListener("click", () => {
+    const input = wrap.querySelector("input[type=date]");
+    if (!input) return;
+    if (typeof input.showPicker === "function") {
+      try { input.showPicker(); } catch { input.focus(); }   // 无用户手势等场景回退聚焦
+    } else {
+      input.focus();
+    }
+  });
+});
 
 tlDepartmentSelect.addEventListener("change", () => {
   tlDepartmentFilter = tlDepartmentSelect.value;
@@ -2121,10 +2133,9 @@ async function loadCategories() {
   } catch { /* 拉取失败时用内置清单 */ }
 }
 
-// 工厂：btn=打开选择窗体的按钮 sub=二级选项容器；勾选带二级选项的类型后，
-// 其二级选项以单选框（radio）形式渲染在多选按钮右侧（窗体内也可选择）
+// 工厂：上传区保留二级单选框，编辑器使用可移除的叶子标签；完整分类与二级值仍分别保存。
 let pickerSeq = 0;   // 工厂实例序号：二级单选框分组用（同一实例内互斥）
-function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange } = {}) {
+function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", tags = false, onChange } = {}) {
   const uid = ++pickerSeq;
   const state = new Set();     // 已勾选的记录分类（空 = 自动判定）
   const subState = new Map();  // 类型 → 已选的二级选项值
@@ -2135,6 +2146,17 @@ function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange 
     return names.length === 1 ? names[0] : `${names[0]} 等 ${names.length} 项`;
   }
   function renderSubs() {
+    btn.hidden = tags && state.size > 0;
+    if (tags) {
+      const chips = [...state].map((cat) => {
+        const leaf = subState.get(cat) || cat;
+        const path = leaf === cat ? cat : `${cat} / ${leaf}`;
+        return `<span class="category-token" title="${escapeAttr(path)}"><span>${escapeHtml(leaf)}</span><button type="button" class="category-token-remove" data-remove-category="${escapeAttr(cat)}" aria-label="${escapeAttr(`删除分类：${path}`)}" title="删除分类">×</button></span>`;
+      });
+      if (state.size) chips.push('<button type="button" class="category-tag-add" data-add-category aria-label="添加分类" title="添加分类">+</button>');
+      sub.innerHTML = chips.join("");
+      return;
+    }
     const parts = [];
     for (const cat of state) {
       const conf = CATEGORY_SUBS[cat];
@@ -2155,7 +2177,7 @@ function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange 
     if (onChange) onChange();
   }
 
-  btn.addEventListener("click", (e) => {
+  function openDialog(e) {
     e.stopPropagation();
     catDialog.open({
       selected: [...state].filter(Boolean),
@@ -2170,6 +2192,18 @@ function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange 
         sync();
       },
     });
+  }
+  btn.addEventListener("click", openDialog);
+  if (tags) sub.addEventListener("click", (e) => {
+    const remove = e.target.closest("[data-remove-category]");
+    if (remove) {
+      state.delete(remove.dataset.removeCategory);
+      prune();
+      sync();
+      (sub.querySelector("[data-add-category]") || btn).focus();
+    } else if (e.target.closest("[data-add-category]")) {
+      openDialog(e);
+    }
   });
   sub.addEventListener("change", (e) => {
     const radio = e.target.closest("input[type=radio]");
@@ -3161,7 +3195,7 @@ const mdPreview = $("#md-preview");
 const mdName = $("#md-name");
 const mdPicker = createCategoryPicker({   // 记录分类多选：保存时按所选标签落库，空为自动判定
   btn: $("#md-cat-btn"), sub: $("#md-subcats"),
-  emptyLabel: "自动判定记录分类",
+  emptyLabel: "选择分类", tags: true,
   onChange: () => maybeApplyTemplate(),   // 选类型/厂商后按需预填模板
 });
 mdPicker.set([]);
