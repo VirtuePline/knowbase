@@ -159,6 +159,14 @@ def _can_generate_for(account: str) -> bool:
     return bool(row and access.managed_departments().intersection(row.get("department_ids", [])))
 
 
+def display_name(account: str) -> str:
+    """网页展示用用户名；账号不存在或未填姓名时回退为账号本身。"""
+    if not account:
+        return account
+    user = _account_record(account)
+    return ((user or {}).get("display_name") or "").strip() or account
+
+
 def visible_reports(limit: int = 12) -> list[dict]:
     """按稳定账号读取，并在返回缓存摘要前重新检查全部来源文档。"""
     query = {} if access.is_platform_admin() else {"owner_account": {"$exists": True}}
@@ -177,6 +185,7 @@ def visible_reports(limit: int = 12) -> list[dict]:
             continue  # 摘要可能包含已撤权来源，不能只删除来源列表再继续返回摘要
         if row.get("access_revision") != database.access_revision():
             continue
+        row["person_name"] = display_name(account or row.get("person", ""))
         result.append(row)
         if len(result) >= limit:
             break
@@ -252,8 +261,9 @@ def generate_reports(week: str | None = None, operators: list[str] | None = None
         if expected_owner and person == (access.current_identity() or {}).get("username") and owner_id != expected_owner:
             raise HTTPException(status_code=409, detail="账号已变更，请重新登录后生成周报")
         items = collect_records(week, person)
-        summary = summarize(person, week, items)
-        markdown = render_markdown(week, person, items, summary)
+        owner_name = display_name(person)          # 正文与小结用用户名展示
+        summary = summarize(owner_name, week, items)
+        markdown = render_markdown(week, owner_name, items, summary)
         _check_generation_permissions(person, owner_id, revision, items)
         database.save_weekly_report(week, person, items, generated_at, markdown=markdown,
                                     permission_revision=revision, owner_account_id=owner_id)

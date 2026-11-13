@@ -2733,6 +2733,7 @@ $("#external-apis-toggle").addEventListener("click", toggleExternalApis);
 /* ---------- 工作周报：个人排程 + 平台统一排程 + 周报列表 ---------- */
 
 let wrOwners = [];
+let wrOwnerNames = {};
 let wrSelected = new Set();
 const wrSettingsReady = new Set();
 const wrSettingsVersions = new Map();
@@ -2773,6 +2774,7 @@ async function loadWeeklySettings(globalSettings = false) {
     $("#" + prefix + "-time").value = data.time || "18:00";
     if (globalSettings) {
       wrOwners = data.owners || [];
+      wrOwnerNames = data.owner_names || {};
       wrSelected = new Set(data.operators || []);
       renderWrOwners();
     }
@@ -2791,7 +2793,7 @@ function renderWrOwners() {
   const names = [...new Set([...wrSelected, ...wrOwners])].sort();
   box.innerHTML = names.length
     ? names.map((name) => `
-      <label class="wr-owner"><input type="checkbox" data-wr-owner="${escapeAttr(escapeHtml(name))}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(name)}</label>`).join("")
+      <label class="wr-owner"><input type="checkbox" data-wr-owner="${escapeAttr(escapeHtml(name))}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(wrOwnerNames[name] ? `${wrOwnerNames[name]}（${name}）` : name)}</label>`).join("")
     : '<span class="muted">暂无工作记录，可先添加记录后再选择。</span>';
 }
 
@@ -2870,7 +2872,7 @@ $("#wr-refresh").addEventListener("click", () => refreshWeeklyReport());
 
 function weeklyFallbackMarkdown(r) {
   // 旧版周报（无 markdown 字段）用 items 现场拼一份兼容渲染
-  const lines = [`# ${r.person} 的工作周报`, ""];
+  const lines = [`# ${r.person_name || r.person} 的工作周报`, ""];
   for (const it of r.items || []) {
     lines.push(`- [${it.doc_name || "未命名记录"}](doc://${it.doc_id || ""})（${it.date || ""}）`);
   }
@@ -2890,7 +2892,7 @@ async function loadWeeklyReports() {
     $("#wr-reports").innerHTML = reports.map((r) => `
       <div class="wr-card" style="border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:#fff;overflow:hidden">
         <div style="display:flex;align-items:center;gap:10px;padding:9px 12px">
-          <span style="font-size:13.5px;font-weight:600">${escapeHtml(r.person)}</span>
+          <span style="font-size:13.5px;font-weight:600">${escapeHtml(r.person_name || r.person)}</span>
           <span class="muted" style="font-size:12px">${escapeHtml(r.week_start)} 那周 · ${(r.items || []).length} 条记录 · 生成于 ${escapeHtml(r.generated_at || "")}</span>
           <button class="ghost" type="button" data-wr-toggle style="margin-left:auto;font-size:12px;padding:3px 10px">查看</button>
         </div>

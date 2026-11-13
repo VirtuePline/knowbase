@@ -67,6 +67,51 @@ class WeeklyCollectTest(unittest.TestCase):
 
 
 @online_api_test
+class WeeklyDisplayNameTest(unittest.TestCase):
+    """周报标题与列表展示用户名（display_name），账号只作回退。"""
+
+    def test_display_name_prefers_profile_name_and_falls_back_to_account(self):
+        with patch.object(weekly, "_account_record",
+                          side_effect=lambda account: {"qsl": {"display_name": "强生三"}, "no-name": {}}.get(account)):
+            self.assertEqual(weekly.display_name("qsl"), "强生三")
+            self.assertEqual(weekly.display_name("no-name"), "no-name")   # 未填姓名回退账号
+            self.assertEqual(weekly.display_name("ghost"), "ghost")       # 账号不存在回退
+            self.assertEqual(weekly.display_name(""), "")
+
+    def test_generated_report_title_uses_display_name(self):
+        user = {"_id": "qsl", "role": "user", "must_change_password": False,
+                "department_ids": ["operations"], "department_roles": {"operations": "admin"},
+                "account_id": "synthetic-account", "display_name": "强生三"}
+        saved = []
+        with patch.object(weekly.database, "list_all", return_value=[
+                make_record("a1", "记录标题", "qsl", "2026-11-11 10:00:00")]), \
+             patch.object(weekly.database, "save_weekly_report",
+                          side_effect=lambda w, p, items, at, markdown="", **kwargs: saved.append((w, p, markdown))), \
+             patch.object(weekly.database, "get", return_value=make_record("a1", "记录标题", "qsl", "2026-11-11")), \
+             patch.object(weekly.database, "access_revision", return_value=0), \
+             patch.object(weekly, "_account_record", return_value=user), \
+             patch.object(weekly, "summarize", return_value=""):
+            reports = weekly.generate_reports("2026-11-09", operators=["qsl"])
+        self.assertTrue(reports)
+        self.assertTrue(saved[0][2].startswith("# 强生三 的工作周报"))
+        self.assertNotIn("qsl 的工作周报", saved[0][2])
+
+    def test_visible_reports_attach_person_name(self):
+        row = {"week_start": "2026-11-09", "person": "qsl", "owner_account": "qsl",
+               "owner_account_id": "", "items": [], "markdown": "# x", "generated_at": "",
+               "access_revision": 0}
+        with patch.object(weekly, "_can_generate_for", return_value=True), \
+             patch.object(weekly.database, "access_revision", return_value=0), \
+             patch.object(weekly.database, "get", return_value=None), \
+             patch.object(weekly.mongo, "db") as db_mock:
+            db_mock.return_value.weekly_reports.find.return_value.sort.return_value = [row]
+            with patch.object(weekly, "_account_record",
+                              return_value={"display_name": "强生三"}):
+                reports = weekly.visible_reports()
+        self.assertEqual(reports[0]["person_name"], "强生三")
+
+
+@online_api_test
 class WeeklyScheduleTest(unittest.TestCase):
     """定时生成：到点触发、未到点跳过。"""
 

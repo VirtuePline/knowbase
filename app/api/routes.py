@@ -663,7 +663,9 @@ def save_personal_weekly_settings(req: PersonalWeeklySettingsRequest,
 @admin_router.get("/weekly-report/settings")
 def weekly_report_settings(identity: dict = Depends(require_super_admin)) -> dict:
     """周报定时生成设置 + 可勾选的记录人名单（来自历史工作记录）。"""
-    return {**weekly_service.get_settings(), "owners": weekly_service.record_owners()}
+    owners = weekly_service.record_owners()
+    return {**weekly_service.get_settings(), "owners": owners,
+            "owner_names": {account: weekly_service.display_name(account) for account in owners}}
 
 
 @admin_router.put("/weekly-report/settings")
