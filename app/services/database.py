@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from threading import RLock
+from uuid import uuid4
 
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
@@ -244,13 +245,18 @@ def list_record_owners() -> list[str]:
 
 
 def save_weekly_report(week_start: str, person: str, items: list[dict], generated_at: str,
-                       markdown: str = "") -> None:
+                       markdown: str = "", *, permission_revision: int | None = None,
+                       owner_account_id: str | None = None) -> None:
     """写入 / 覆盖某人本周的周报（_id = 周起始日:记录人，天然幂等）。"""
+    if owner_account_id is None:
+        owner = mongo.db().users.find_one({"_id": person}, {"account_id": 1}) or {}
+        owner_account_id = owner.get("account_id", "")
     mongo.db().weekly_reports.replace_one(
         {"_id": f"{week_start}:{person}"},
         {"_id": f"{week_start}:{person}", "week_start": week_start, "person": person,
          "items": items, "markdown": markdown, "generated_at": generated_at,
-         "owner_account": person, "access_revision": access_revision()},
+         "owner_account": person, "owner_account_id": owner_account_id,
+         "access_revision": access_revision() if permission_revision is None else permission_revision},
         upsert=True,
     )
 
@@ -456,7 +462,10 @@ def initialize_enterprise() -> None:
                                           "department_roles": {default_id: "editor"}}})
     # 部门仅保留管理员和编辑者；补齐旧默认角色，未知非法值原样保留且不授写。
     roles_changed = False
-    for user in mongo.db().users.find({}, {"department_ids": 1, "department_roles": 1}):
+    for user in mongo.db().users.find({}, {"department_ids": 1, "department_roles": 1, "account_id": 1}):
+        if not user.get("account_id"):
+            mongo.db().users.update_one({"_id": user["_id"], "account_id": user.get("account_id")},
+                                        {"$set": {"account_id": uuid4().hex}})
         roles = user.get("department_roles", {})
         if not isinstance(roles, dict):
             continue

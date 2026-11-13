@@ -611,6 +611,34 @@ class WeeklySettingsRequest(BaseModel):
     operators: list[str] = Field(default_factory=list, description="需要生成周报的记录人名单")
 
 
+class PersonalWeeklySettingsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    enabled: bool
+    weekday: int = Field(ge=1, le=7)
+    time: str = Field(min_length=3, max_length=5)
+
+
+def _weekly_account(identity: dict) -> str:
+    account = identity.get("username", "").strip()
+    if not account:
+        raise HTTPException(status_code=400, detail="当前账号没有可用的用户名，无法定位本人记录")
+    return account
+
+
+@admin_router.get("/weekly-report/my-settings")
+def personal_weekly_settings(identity: dict = Depends(require_login)) -> dict:
+    return weekly_service.get_personal_settings(_weekly_account(identity))
+
+
+@admin_router.put("/weekly-report/my-settings")
+def save_personal_weekly_settings(req: PersonalWeeklySettingsRequest,
+                                 identity: dict = Depends(require_login)) -> dict:
+    try:
+        return weekly_service.save_personal_settings(_weekly_account(identity), req.enabled, req.weekday, req.time)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 @admin_router.get("/weekly-report/settings")
 def weekly_report_settings(identity: dict = Depends(require_super_admin)) -> dict:
     """周报定时生成设置 + 可勾选的记录人名单（来自历史工作记录）。"""
@@ -631,19 +659,24 @@ def list_weekly_reports(limit: int = 12, identity: dict = Depends(require_login)
     return {"reports": weekly_service.visible_reports(max(1, min(limit, 52)))}
 
 
+class WeeklyGenerateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    scope: Literal["self", "managed"] = "self"
+
+
 @admin_router.post("/weekly-reports/generate")
-def generate_weekly_reports(identity: dict = Depends(require_login)) -> dict:
-    """生成本周周报：普通账号仅生成自己的，管理员生成名单内所有人。"""
-    if identity.get("role") != "admin":
-        if access.managed_departments():
-            return {"reports": weekly_service.generate_reports(operators=[
-                account for account in weekly_service.record_owners(managed_only=True)
-                if weekly_service._can_generate_for(account)])}
-        me = identity.get("username", "").strip()
-        if not me:
-            raise HTTPException(status_code=400, detail="当前账号没有可用的用户名，无法定位本人记录")
-        return {"reports": weekly_service.generate_reports(operators=[me])}
-    return {"reports": weekly_service.generate_reports()}
+def generate_weekly_reports(req: WeeklyGenerateRequest | None = None,
+                            identity: dict = Depends(require_login)) -> dict:
+    """默认生成本人周报；批量生成必须显式选择，且服从管理范围。"""
+    if req is None or req.scope == "self":
+        return {"reports": weekly_service.generate_reports(operators=[_weekly_account(identity)])}
+    if identity.get("role") == "admin":
+        return {"reports": weekly_service.generate_reports()}
+    if not access.managed_departments():
+        raise HTTPException(status_code=403, detail="只有管理员可以批量生成周报")
+    return {"reports": weekly_service.generate_reports(operators=[
+        account for account in weekly_service.record_owners(managed_only=True)
+        if weekly_service._can_generate_for(account)])}
 
 
 @admin_router.delete("/documents/{doc_id}")

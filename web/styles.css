@@ -518,7 +518,19 @@
   body.admin-portal:not(.admin-mode) .admin-only { display: none !important; }
   body:not(.account-admin) .account-admin-only { display: none !important; }
   body:not(.super-admin) .super-admin-only { display: none !important; }
+  body:not(.authenticated-mode) .session-only { display: none !important; }
   body.admin-portal:not(.admin-mode) .admin-tab { display: none !important; }
+
+.wr-settings-row { align-items: center; flex-wrap: wrap; gap: 10px; }
+.wr-settings-row label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.wr-settings-row .wr-schedule-label { color: var(--muted); }
+.wr-settings-row select, .wr-settings-row input[type="time"] { border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; background: var(--panel, #fff); color: var(--text); font: inherit; }
+.wr-settings-row [role="status"], .wr-settings-note { font-size: 12px; }
+.wr-settings-note { margin: 10px 0 0; line-height: 1.8; }
+.wr-owners { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.wr-owner { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
+.wr-reports-heading { align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.wr-reports-heading h2 { margin: 0; }
 
 /* 企业部门与文档权限 */
 .document-scope { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8fbfa; margin: 12px 0; }

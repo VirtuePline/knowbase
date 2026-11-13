@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>企业知识库</title>
-<meta name="theme-color" content="#f4f7fa" />
+<meta name="theme-color" content="#35655f" />
 <script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/styles.css" />
 <link rel="stylesheet" href="/static/record-attachments.css" />
@@ -22,7 +22,7 @@
     <button class="tab-btn active" data-tab="chat" aria-current="page">智能问答</button>
     <button class="tab-btn" data-tab="docs" id="docs-tab-btn">文档管理</button>
     <button class="tab-btn" data-tab="timeline">时间线</button>
-    <button class="tab-btn admin-tab" data-tab="weekly">工作周报</button>
+    <button class="tab-btn session-only" data-tab="weekly">工作周报</button>
     <button class="tab-btn admin-tab" data-tab="editor">新增工作记录</button>
     <button class="tab-btn admin-tab" data-tab="records">记录管理</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="settings">知识分类与模板</button>
@@ -40,7 +40,7 @@
 </header>
 
 <main id="workspace" tabindex="-1">
-  <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><div class="workspace-tools"><span class="workspace-context">企业公共知识与部门知识</span><label class="theme-switcher"><span>主题颜色</span><select data-theme-select aria-label="主题颜色"><option value="teal">青绿</option><option value="blue">蓝色</option><option value="violet">紫色</option><option value="amber">琥珀</option></select><span class="theme-status" data-theme-status aria-live="polite"></span></label></div></div>
+  <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><div class="workspace-tools"><span class="workspace-context">企业公共知识与部门知识</span><div class="theme-switcher" role="group" aria-label="主题颜色"><span class="theme-label">主题颜色</span><div class="theme-options"><button type="button" class="theme-option" data-theme-option="teal" aria-label="切换为青绿主题" title="青绿主题" aria-pressed="true"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="blue" aria-label="切换为蓝色主题" title="蓝色主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="violet" aria-label="切换为紫色主题" title="紫色主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="amber" aria-label="切换为琥珀主题" title="琥珀主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button></div><span class="theme-status" data-theme-status aria-live="polite"></span></div></div></div>
   <!-- 问答 -->
   <section class="tab active" id="tab-chat">
     <button type="button" class="history-fab" id="history-btn" title="查看最近的问答记录（仅保存在本机浏览器）">历史记录</button>
@@ -381,35 +381,41 @@
     </div>
   </section>
 
-  <!-- 工作周报（独立导航页）：markdown 周报，记录引用可点击预览；生成设置仅管理员可见 -->
-  <section class="tab" id="tab-weekly">
-    <div class="page-heading"><h1>工作周报</h1><p>按记录人汇总每周的处理记录，每条标明工作内容和完成情况，点击记录名可打开预览。</p></div>
-    <div class="panel-card admin-only">
-      <h2>周报生成设置</h2>
-      <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px">
-        <label style="font-size:13px;display:flex;align-items:center;gap:5px">
-          <input type="checkbox" id="wr-enabled" /> 启用定时生成
-        </label>
-        <select id="wr-weekday" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px">
-          <option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option>
-          <option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="7">每周日</option>
-        </select>
-        <input type="time" id="wr-time" value="18:00" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
-        <button class="ghost" type="button" id="wr-save">保存设置</button>
-        <span class="muted" id="wr-status" style="font-size:13px"></span>
+  <!-- 工作周报：个人设置向全部登录员工开放，统一排程仅平台管理员可见 -->
+  <section class="tab session-only" id="tab-weekly">
+    <div class="page-heading"><h1>工作周报</h1><p>汇总自己的每周工作记录，查看工作内容和完成情况，点击记录名可打开预览。</p></div>
+    <div class="panel-card" id="wr-personal-settings">
+      <h2>我的周报生成设置</h2>
+      <div class="row wr-settings-row">
+        <label><input type="checkbox" id="wr-enabled" /> 启用定时生成</label>
+        <label class="wr-schedule-label">生成日期<select id="wr-weekday" aria-label="生成日期"><option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option><option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="7">每周日</option></select></label>
+        <label class="wr-schedule-label">生成时间<input type="time" id="wr-time" value="18:00" required aria-label="生成时间" /></label>
+        <button class="ghost" type="button" id="wr-save" disabled>保存设置</button>
+        <span class="muted" id="wr-status" role="status"></span>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">
-        勾选需要生成周报的记录人；到点自动汇总其本周（周一起 7 天）的工作记录，markdown 格式存入数据库，每条标明完成状态。
+      <p class="muted wr-settings-note">到点自动汇总本人本周（周一起 7 天）的工作记录，无需管理员授权。个人设置仅影响自己的周报。</p>
+    </div>
+    <div class="panel-card super-admin-only" id="wr-global-settings" hidden>
+      <h2>统一周报生成设置</h2>
+      <div class="row wr-settings-row">
+        <label><input type="checkbox" id="wr-global-enabled" /> 启用定时生成</label>
+        <label class="wr-schedule-label">生成日期<select id="wr-global-weekday" aria-label="生成日期"><option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option><option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="7">每周日</option></select></label>
+        <label class="wr-schedule-label">生成时间<input type="time" id="wr-global-time" value="18:00" required aria-label="生成时间" /></label>
+        <button class="ghost" type="button" id="wr-global-save" disabled>保存设置</button>
+        <span class="muted" id="wr-global-status" role="status"></span>
       </div>
-      <div id="wr-owners" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>
+      <p class="muted wr-settings-note">勾选统一排程的记录人；员工已保存的个人设置优先，未设置的员工使用此排程。</p>
+      <div id="wr-global-owners" class="wr-owners"></div>
     </div>
     <div class="panel-card">
-      <div class="row" style="align-items:center;margin-bottom:8px">
-        <h2 style="margin:0">周报列表</h2>
-        <button class="ghost" type="button" id="wr-generate" title="生成本周周报（本人），管理员生成名单内所有人；重复生成会覆盖本周结果">生成本周周报</button>
+      <div class="row wr-reports-heading">
+        <h2>周报列表</h2>
+        <button class="ghost" type="button" id="wr-generate" title="仅生成自己的本周周报；重复生成会覆盖本人本周结果">生成我的本周周报</button>
+        <button class="ghost account-admin-only" type="button" id="wr-generate-managed" hidden>生成本部门周报</button>
         <button class="ghost" type="button" id="wr-refresh">刷新</button>
-        <span class="muted" style="font-size:12px">点「查看」阅读周报正文，正文由 AI 阅读本周记录后总结</span>
+        <span class="muted" id="wr-generate-status" role="status"></span>
       </div>
+      <p class="muted wr-settings-note">点「查看」阅读周报正文，正文由 AI 阅读本周记录后总结。</p>
       <div id="wr-reports"></div>
     </div>
   </section>
@@ -1149,11 +1155,13 @@ const docDepartmentSelect = $("#doc-department-filter");
 const recDepartmentSelect = $("#rec-department-filter");
 const collapsedMonths = new Set();   // 日期视图里被收起的月份，重渲染后保持状态
 let isAdmin = false;          // 当前管理端会话有文档写权限
+let isAuthenticated = false; // 已登录管理端；个人周报不依赖文档写权限
 let isSuperAdmin = false;     // 管理员账号（role=admin）：独占用户管理、修改记录与操作日志
 
 // 管理员专属导航与页面默认隐藏，读取会话角色后统一显示。
 function applyRoleVisibility() {
   document.body.classList.toggle("super-admin", isSuperAdmin);
+  document.body.classList.toggle("authenticated-mode", isAuthenticated);
 }
 let isAccountAdmin = false;   // 账号管理员：可创建普通账号
 let currentUser = "";          // 稳定英文账号，用于身份标识
@@ -2527,91 +2535,143 @@ async function refreshSettings() {
   renderVendorList();
 }
 
-/* ---------- 工作周报：定时设置 + 记录人勾选 + 周报列表 ---------- */
+/* ---------- 工作周报：个人排程 + 平台统一排程 + 周报列表 ---------- */
 
-const WR_WEEKDAYS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-let wrOwners = [];        // 可勾选的记录人名单（历史记录去重）
-let wrSelected = new Set();  // 已勾选（需要生成周报）的记录人
+let wrOwners = [];
+let wrSelected = new Set();
+const wrSettingsReady = new Set();
+const wrSettingsVersions = new Map();
+const wrSettingsSaving = new Set();
+let wrGenerating = false;
+let wrReportsRequestId = 0;
+
+function canUseWeeklyReports() {
+  return portal === "admin" && isAuthenticated;
+}
 
 async function refreshWeeklyReport() {
-  loadWeeklyReports();
-  $("#wr-generate").textContent = isSuperAdmin ? "立即生成全部" : isAccountAdmin ? "生成本部门周报" : "生成本周周报";
-  if (!isSuperAdmin) return;   // 定时设置与名单仅管理员可见
+  if (!canUseWeeklyReports()) return;
+  $("#wr-global-settings").hidden = !isSuperAdmin;
+  $("#wr-generate-managed").hidden = !(isSuperAdmin || isAccountAdmin);
+  $("#wr-generate-managed").textContent = isSuperAdmin ? "生成统一名单周报" : "生成本部门周报";
+  await Promise.all([loadWeeklyReports(), loadWeeklySettings(),
+    ...(isSuperAdmin ? [loadWeeklySettings(true)] : [])]);
+}
+
+async function loadWeeklySettings(globalSettings = false) {
+  if (!canUseWeeklyReports() || (globalSettings && !isSuperAdmin)) return;
+  const prefix = globalSettings ? "wr-global" : "wr";
+  if (wrSettingsSaving.has(prefix)) return;
+  const requestId = (wrSettingsVersions.get(prefix) || 0) + 1;
+  wrSettingsVersions.set(prefix, requestId);
+  const endpoint = globalSettings ? "/api/weekly-report/settings" : "/api/weekly-report/my-settings";
+  wrSettingsReady.delete(prefix);
+  $("#" + prefix + "-save").disabled = true;
+  $("#" + prefix + "-status").textContent = "加载中…";
   try {
-    const resp = await fetch("/api/weekly-report/settings");
-    if (!resp.ok) return;
+    const resp = await fetch(endpoint);
     const data = await resp.json();
-    wrOwners = data.owners || [];
-    wrSelected = new Set(data.operators || []);
-    $("#wr-enabled").checked = !!data.enabled;
-    $("#wr-weekday").value = String(data.weekday || 5);
-    $("#wr-time").value = data.time || "18:00";
-    renderWrOwners();
-  } catch { /* 设置拉取失败不阻断列表 */ }
+    if (wrSettingsVersions.get(prefix) !== requestId) return;
+    if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "设置加载失败，请点击刷新重试");
+    $("#" + prefix + "-enabled").checked = !!data.enabled;
+    $("#" + prefix + "-weekday").value = String(data.weekday || 5);
+    $("#" + prefix + "-time").value = data.time || "18:00";
+    if (globalSettings) {
+      wrOwners = data.owners || [];
+      wrSelected = new Set(data.operators || []);
+      renderWrOwners();
+    }
+    wrSettingsReady.add(prefix);
+    $("#" + prefix + "-save").disabled = false;
+    $("#" + prefix + "-status").textContent = "";
+  } catch (error) {
+    if (wrSettingsVersions.get(prefix) === requestId) {
+      $("#" + prefix + "-status").textContent = error.message || "设置加载失败，请点击刷新重试";
+    }
+  }
 }
 
 function renderWrOwners() {
-  const box = $("#wr-owners");
+  const box = $("#wr-global-owners");
   const names = [...new Set([...wrSelected, ...wrOwners])].sort();
   box.innerHTML = names.length
     ? names.map((name) => `
-      <label class="wr-owner" style="font-size:13px;display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer">
-        <input type="checkbox" data-wr-owner="${escapeAttr(name)}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(name)}
-      </label>`).join("")
-    : '<span class="muted" style="font-size:13px">暂无工作记录，先在记录里填写记录人后再来勾选。</span>';
+      <label class="wr-owner"><input type="checkbox" data-wr-owner="${escapeAttr(escapeHtml(name))}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(name)}</label>`).join("")
+    : '<span class="muted">暂无工作记录，可先添加记录后再选择。</span>';
 }
 
-$("#wr-owners").addEventListener("change", (e) => {
-  const name = e.target.dataset && e.target.dataset.wrOwner;
+$("#wr-global-owners").addEventListener("change", (event) => {
+  const name = event.target.dataset?.wrOwner;
   if (!name) return;
-  e.target.checked ? wrSelected.add(name) : wrSelected.delete(name);
+  event.target.checked ? wrSelected.add(name) : wrSelected.delete(name);
 });
 
-$("#wr-save").addEventListener("click", async () => {
-  const btn = $("#wr-save");
+async function saveWeeklySettings(globalSettings = false) {
+  if (!canUseWeeklyReports() || (globalSettings && !isSuperAdmin)) return;
+  const prefix = globalSettings ? "wr-global" : "wr";
+  if (wrSettingsSaving.has(prefix)) return;
+  if (!wrSettingsReady.has(prefix)) { toast("请先刷新并加载周报设置"); return; }
+  const time = $("#" + prefix + "-time");
+  if (!time.reportValidity()) return;
+  const btn = $("#" + prefix + "-save");
+  if (btn.disabled) return;
+  const status = $("#" + prefix + "-status");
+  // 保存使同一表单的旧 GET 失效；另一组个人/统一设置仍可独立操作。
+  wrSettingsVersions.set(prefix, (wrSettingsVersions.get(prefix) || 0) + 1);
+  wrSettingsSaving.add(prefix);
   btn.disabled = true;
-  $("#wr-status").textContent = "保存中…";
+  status.textContent = "保存中…";
+  const payload = { enabled: $("#" + prefix + "-enabled").checked,
+    weekday: Number($("#" + prefix + "-weekday").value), time: time.value };
+  if (globalSettings) payload.operators = [...wrSelected];
   try {
-    const resp = await fetch("/api/weekly-report/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        enabled: $("#wr-enabled").checked,
-        weekday: Number($("#wr-weekday").value),
-        time: $("#wr-time").value,
-        operators: [...wrSelected],
-      }),
+    const resp = await fetch(globalSettings ? "/api/weekly-report/settings" : "/api/weekly-report/my-settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "保存失败");
-    $("#wr-status").textContent = "已保存，到点自动生成";
-    toast("周报设置已保存");
-  } catch (err) {
-    $("#wr-status").textContent = "";
-    toast(String(err.message || err));
+    if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "保存失败");
+    status.textContent = payload.enabled ? "已保存，到点自动生成" : "已保存，定时生成已关闭";
+    toast(globalSettings ? "统一周报设置已保存" : "我的周报设置已保存");
+  } catch (error) {
+    status.textContent = error.message || "保存失败，请重试";
+    toast(status.textContent);
   } finally {
+    wrSettingsSaving.delete(prefix);
     btn.disabled = false;
   }
-});
+}
 
-$("#wr-generate").addEventListener("click", async () => {
-  const btn = $("#wr-generate");
-  btn.disabled = true;
-  $("#wr-status").textContent = "生成中…";
+$("#wr-save").addEventListener("click", () => saveWeeklySettings());
+$("#wr-global-save").addEventListener("click", () => saveWeeklySettings(true));
+
+async function generateWeeklyReport(scope = "self") {
+  if (!canUseWeeklyReports() || wrGenerating ||
+      (scope !== "self" && !(scope === "managed" && (isSuperAdmin || isAccountAdmin)))) return;
+  wrGenerating = true;
+  $("#wr-generate").disabled = $("#wr-generate-managed").disabled = true;
+  const status = $("#wr-generate-status");
+  status.textContent = "生成中…";
   try {
-    const resp = await fetch("/api/weekly-reports/generate", { method: "POST" });
+    const resp = await fetch("/api/weekly-reports/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }),
+    });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "生成失败");
-    $("#wr-status").textContent = `已生成 ${data.reports.length} 人的本周周报`;
-    toast(`已生成 ${data.reports.length} 人的本周周报`);
+    if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "生成失败");
+    status.textContent = scope === "self" ? "我的本周周报已生成" : `已生成 ${(data.reports || []).length} 人的本周周报`;
+    toast(status.textContent);
     await loadWeeklyReports();
-  } catch (err) {
-    $("#wr-status").textContent = "";
-    toast(String(err.message || err));
+  } catch (error) {
+    status.textContent = error.message || "生成失败，请重试";
+    toast(status.textContent);
   } finally {
-    btn.disabled = false;
+    wrGenerating = false;
+    $("#wr-generate").disabled = $("#wr-generate-managed").disabled = false;
   }
-});
+}
+
+$("#wr-generate").addEventListener("click", () => generateWeeklyReport("self"));
+$("#wr-generate-managed").addEventListener("click", () => generateWeeklyReport("managed"));
+$("#wr-refresh").addEventListener("click", () => refreshWeeklyReport());
 
 function weeklyFallbackMarkdown(r) {
   // 旧版周报（无 markdown 字段）用 items 现场拼一份兼容渲染
@@ -2624,10 +2684,13 @@ function weeklyFallbackMarkdown(r) {
 }
 
 async function loadWeeklyReports() {
+  if (!canUseWeeklyReports()) return;
+  const requestId = ++wrReportsRequestId;
   try {
     const resp = await fetch("/api/weekly-reports");
-    if (!resp.ok) return;
     const data = await resp.json();
+    if (requestId !== wrReportsRequestId) return;
+    if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "周报加载失败，请点击刷新重试");
     const reports = data.reports || [];
     $("#wr-reports").innerHTML = reports.map((r) => `
       <div class="wr-card" style="border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:#fff;overflow:hidden">
@@ -2639,8 +2702,10 @@ async function loadWeeklyReports() {
         <div class="wr-detail" hidden style="border-top:1px solid var(--line);padding:10px 14px">
           <div class="md" style="font-size:13.5px">${renderMarkdown(r.markdown || weeklyFallbackMarkdown(r))}</div>
         </div>
-      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，到点自动生成，或点「生成本周周报」。</div>';
-  } catch { /* 忽略 */ }
+      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，点击「生成我的本周周报」，或启用个人定时生成。</div>';
+  } catch (error) {
+    if (requestId === wrReportsRequestId) $("#wr-reports").innerHTML = `<div class="muted">${escapeHtml(error.message || "周报加载失败，请点击刷新重试")}</div>`;
+  }
 }
 
 // 周报列表：点「查看」展开正文，再点收起
@@ -2771,11 +2836,12 @@ function updateNavigation(tab) {
 
 const LAST_TAB_KEY = "kb_last_tab";   // 记住最后停留的页签，刷新后原地恢复
 const PUBLIC_TABS = ["chat", "docs", "timeline"];
+const SESSION_TABS = ["weekly"];
 const SUPER_ADMIN_TABS = ["edits", "logs", "settings"];
-const ADMIN_TABS = ["editor", "records", "accounts", "weekly", ...SUPER_ADMIN_TABS];
+const ADMIN_TABS = ["editor", "records", "accounts", ...SUPER_ADMIN_TABS];
 
 function canAccessTab(tab) {
-  return PUBLIC_TABS.includes(tab) || (portal === "admin" && ((tab === "accounts" && isAccountAdmin) || (isAdmin && ADMIN_TABS.includes(tab) && tab !== "accounts" && (!SUPER_ADMIN_TABS.includes(tab) || isSuperAdmin))));
+  return PUBLIC_TABS.includes(tab) || (portal === "admin" && ((SESSION_TABS.includes(tab) && isAuthenticated) || (tab === "accounts" && isAccountAdmin) || (isAdmin && ADMIN_TABS.includes(tab) && tab !== "accounts" && (!SUPER_ADMIN_TABS.includes(tab) || isSuperAdmin))));
 }
 
 function lastTab() {
@@ -2784,7 +2850,7 @@ function lastTab() {
 
 function switchTo(tab, { preserveEditor = false } = {}) {
   if (!canAccessTab(tab)) {
-    if (ADMIN_TABS.includes(tab) && !isAdmin && portal === "admin") openLogin();
+    if (portal === "admin" && ((SESSION_TABS.includes(tab) && !isAuthenticated) || (ADMIN_TABS.includes(tab) && !isAdmin))) openLogin();
     return;
   }
   if (tab === "editor" && !preserveEditor && resetEditor() === false) return;
@@ -4211,6 +4277,7 @@ async function initPage() {
     authEnabled = data.auth === true;
     const authenticated = data.authenticated === true || data.admin === true;
     if (!authenticated && portal !== "search") { window.location.replace("/login"); return; }
+    isAuthenticated = portal === "admin" && authenticated && data.must_change_password !== true;
     isAdmin = portal === "admin" && data.can_write === true;
     isSuperAdmin = portal === "admin" && data.role === "admin";
     isAccountAdmin = portal === "admin" && (data.can_manage_users === true || data.role === "admin");
@@ -4222,7 +4289,7 @@ async function initPage() {
     await enterpriseInitialize(data);
   } catch {
     // 会话状态读取失败：清除角色可见性并回到公共页签，避免残留管理员界面
-    isAdmin = isSuperAdmin = isAccountAdmin = false;
+    isAuthenticated = isAdmin = isSuperAdmin = isAccountAdmin = false;
     applyRoleVisibility();
     document.body.classList.remove("admin-mode", "account-admin");
     switchTo("chat");
@@ -4257,10 +4324,10 @@ async function initPage() {
     await loadTemplates();
     syncTplEditor();
     renderVendorList();
-    const restored = lastTab();
-    // 只恢复当前账号有权使用的页签。
-    switchTo(canAccessTab(restored) ? restored : "chat");
-  } else { switchTo(PUBLIC_TABS.includes(lastTab()) ? lastTab() : "chat"); }
+  }
+  const restored = lastTab();
+  // 包括无部门账号自己的周报，只恢复当前会话有权使用的页签。
+  switchTo(canAccessTab(restored) ? restored : "chat");
 }
 
 document.querySelectorAll("#drop, #rec-drop").forEach((area) => {

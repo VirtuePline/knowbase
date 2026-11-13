@@ -1,6 +1,7 @@
 """工作周报：按负责人汇总本周工作记录，定时生成，markdown 格式。
 
 - 周报设置存 app_settings（weekly_report）：enabled / weekday(1=周一) / time / operators 名单。
+- 本人计划存 weekly_report_settings，绑定账号代际标识，优先于统一计划。
 - 周报存 weekly_reports 集合（_id = 周起始日:账号，重复生成幂等覆盖）。
 - 正文以 LLM 小结为主：阅读本周全部记录原文后写总结，最后列出引用的文档（doc:// 可点击预览）；
   LLM 未配置或调用失败时回退为记录清单。
@@ -13,14 +14,16 @@ import datetime
 import json
 import threading
 import time
+from uuid import uuid4
 
 from app.core.llm import client as llm_client
 from fastapi import HTTPException
-from app.services import access, database, kb, mongo
+from app.services import access, auth, database, kb, mongo
 
 _SETTINGS_KEY = "weekly_report"
 _RESOLVED_LABELS = {"resolved": "已完成", "improving": "处理中", "temporary": "阶段完成", "unresolved": "未完成"}
 _CONTENT_LIMIT = 6000   # 单条记录正文截断长度，避免超出模型上下文
+_SCHEDULER_LOCK = threading.Lock()
 
 
 def get_settings() -> dict:
@@ -41,20 +44,74 @@ def get_settings() -> dict:
 
 
 def save_settings(enabled: bool, weekday: int, time_text: str, operators: list[str]) -> dict:
-    if not isinstance(weekday, int) or not 1 <= weekday <= 7:
+    payload = _validate_schedule(enabled, weekday, time_text)
+    payload["operators"] = sorted({str(o).strip() for o in operators or [] if str(o).strip()})
+    database.set_runtime_setting(_SETTINGS_KEY, json.dumps(payload, ensure_ascii=False))
+    return payload
+
+
+def _validate_schedule(enabled: bool, weekday: int, time_text: str) -> dict:
+    if isinstance(weekday, bool) or not isinstance(weekday, int) or not 1 <= weekday <= 7:
         raise ValueError("weekday 应为 1~7（1=周一）")
-    if not time_text or len(time_text.split(":")) != 2:
+    if not isinstance(time_text, str) or len(time_text.split(":")) != 2:
         raise ValueError("时间格式应为 HH:MM")
-    hh, mm = (int(part) for part in time_text.split(":"))
+    try:
+        hh, mm = (int(part) for part in time_text.split(":"))
+    except ValueError:
+        raise ValueError("时间格式应为 HH:MM") from None
     if not (0 <= hh <= 23 and 0 <= mm <= 59):
         raise ValueError("时间格式应为 HH:MM")
-    payload = {
-        "enabled": bool(enabled),
-        "weekday": weekday,
-        "time": f"{hh:02d}:{mm:02d}",
-        "operators": sorted({str(o).strip() for o in operators or [] if str(o).strip()}),
-    }
-    database.set_runtime_setting(_SETTINGS_KEY, json.dumps(payload, ensure_ascii=False))
+    return {"enabled": bool(enabled), "weekday": weekday, "time": f"{hh:02d}:{mm:02d}"}
+
+
+def _account_record(account: str, *, initialize: bool = False) -> dict | None:
+    """账号标识在改密时保留，删除后重建时改变，不能用盐或秒级创建时间代替。"""
+    users = mongo.db().users
+    row = users.find_one({"_id": account})
+    if row is not None and initialize and not row.get("account_id"):
+        users.update_one({"_id": account, "account_id": row.get("account_id")},
+                         {"$set": {"account_id": uuid4().hex}})
+        row = users.find_one({"_id": account})
+    return row
+
+
+def _require_personal_account(account: str) -> dict:
+    actor = access.current_identity() or {}
+    if not access.is_internal() and (actor.get("public_only") or actor.get("must_change_password")
+                                     or actor.get("username") != account):
+        raise HTTPException(status_code=403, detail="只能设置本人的周报计划")
+    row = _account_record(account, initialize=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if actor.get("_account_id") and actor["_account_id"] != row.get("account_id"):
+        raise HTTPException(status_code=409, detail="账号已变更，请重新登录后设置周报计划")
+    return row
+
+
+def _personal_payload(row: dict | None) -> dict:
+    if row:
+        try:
+            return _validate_schedule(row.get("enabled", False), row.get("weekday", 5), row.get("time", "18:00"))
+        except ValueError:
+            pass
+    return {"enabled": False, "weekday": 5, "time": "18:00"}
+
+
+def get_personal_settings(account: str) -> dict:
+    user = _require_personal_account(account)
+    row = mongo.db().weekly_report_settings.find_one({"_id": account, "account_id": user["account_id"]})
+    return _personal_payload(row)
+
+
+def save_personal_settings(account: str, enabled: bool, weekday: int, time_text: str) -> dict:
+    payload = _validate_schedule(enabled, weekday, time_text)
+    user = _require_personal_account(account)
+    plans = mongo.db().weekly_report_settings
+    original = plans.find_one({"_id": account})
+    update = {"$set": {**payload, "account_id": user["account_id"], "updated_at": database.now_iso()}}
+    if not original or original.get("account_id") != user["account_id"]:
+        update["$unset"] = {"last_generated_week": ""}
+    plans.update_one({"_id": account}, update, upsert=True)
     return payload
 
 
@@ -109,6 +166,10 @@ def visible_reports(limit: int = 12) -> list[dict]:
         account = row.get("owner_account", "")
         if not access.is_platform_admin() and (not account or not _can_generate_for(account)):
             continue
+        if row.get("owner_account_id"):
+            user = _account_record(account)
+            if user is None or user.get("account_id") != row["owner_account_id"]:
+                continue
         items = row.get("items", [])
         if any((doc := database.get(item.get("doc_id", ""))) is None or not access.can_read(doc)
                for item in items):
@@ -181,31 +242,95 @@ def generate_reports(week: str | None = None, operators: list[str] | None = None
     for person in targets:
         if not _can_generate_for(person):
             raise HTTPException(status_code=403, detail="没有此账号的周报管理权限")
+        revision = database.access_revision()
+        user = _account_record(person, initialize=True)
+        owner_id = (user or {}).get("account_id", "")
+        expected_owner = (access.current_identity() or {}).get("_account_id")
+        if expected_owner and person == (access.current_identity() or {}).get("username") and owner_id != expected_owner:
+            raise HTTPException(status_code=409, detail="账号已变更，请重新登录后生成周报")
         items = collect_records(week, person)
         summary = summarize(person, week, items)
         markdown = render_markdown(week, person, items, summary)
-        database.save_weekly_report(week, person, items, generated_at, markdown=markdown)
+        _check_generation_permissions(person, owner_id, revision, items)
+        database.save_weekly_report(week, person, items, generated_at, markdown=markdown,
+                                    permission_revision=revision, owner_account_id=owner_id)
+        _check_generation_permissions(person, owner_id, revision, items)
         results.append({"week_start": week, "person": person, "items": items,
                         "markdown": markdown, "summary": summary or "",
                         "generated_at": generated_at})
     return results
 
 
+def _check_generation_permissions(person: str, owner_id: str, revision: int, items: list[dict]) -> None:
+    user = _account_record(person)
+    if (database.access_revision() != revision or (user or {}).get("account_id", "") != owner_id
+            or any((doc := database.get(item["doc_id"])) is None or not access.can_read(doc) for item in items)):
+        raise HTTPException(status_code=409, detail="权限已变更，请重新生成周报")
+
+
+def _schedule_due(conf: dict, now: datetime.datetime) -> bool:
+    if not conf.get("enabled"):
+        return False
+    try:
+        conf = _validate_schedule(True, conf["weekday"], conf["time"])
+    except (KeyError, ValueError):
+        return False
+    day = datetime.date.fromisoformat(week_start(now.date())) + datetime.timedelta(days=conf["weekday"] - 1)
+    hour, minute = (int(part) for part in conf["time"].split(":"))
+    planned = datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=now.tzinfo)
+    return now >= planned
+
+
+def _personal_schedules() -> dict[str, tuple[dict, dict]]:
+    """只取当前账号代际的计划，旧账号同名重建不会继承旧设置或覆盖统一计划。"""
+    schedules = {}
+    for plan in mongo.db().weekly_report_settings.find({"account_id": {"$type": "string", "$ne": ""}}):
+        user = _account_record(plan["_id"])
+        if user is not None and user.get("account_id") == plan["account_id"]:
+            schedules[plan["_id"]] = (plan, user)
+    return schedules
+
+
 def run_scheduled_once(now: datetime.datetime | None = None) -> bool:
-    """到达计划时间且本周名单尚未生成时执行生成；返回是否实际生成。"""
-    conf = get_settings()
-    if not conf["enabled"] or not conf["operators"]:
-        return False
+    """按本人优先的计划生成；同周已有结果时不重复调用模型或覆盖手动结果。"""
     now = now or datetime.datetime.now()
-    planned = now.replace(hour=int(conf["time"][:2]), minute=int(conf["time"][3:5]),
-                          second=0, microsecond=0)
-    if now < planned:
-        return False
     week = week_start(now.date())
-    # 今天还没到计划星期：新一周尚未到点，不生成
-    if now.weekday() + 1 < conf["weekday"]:
-        return False
-    return bool(generate_reports(week))
+    generated = False
+    with _SCHEDULER_LOCK:
+        personal = _personal_schedules()
+        for account, (plan, user) in personal.items():
+            if not _schedule_due(plan, now) or plan.get("last_generated_week") == week:
+                continue
+            identity = auth._row_identity(user)
+            if identity.get("must_change_password"):
+                continue
+            identity["_account_id"] = plan["account_id"]
+            cached = mongo.db().weekly_reports.find_one({"_id": f"{week}:{account}"})
+            if (cached and cached.get("owner_account_id") == plan["account_id"]
+                    and cached.get("access_revision") == database.access_revision()):
+                continue
+            try:
+                with access.identity_scope(identity):
+                    reports = generate_reports(week, operators=[account])
+                if reports:
+                    mongo.db().weekly_report_settings.update_one(
+                        {"_id": account, "account_id": plan["account_id"]},
+                        {"$set": {"last_generated_week": week}})
+                    generated = True
+            except Exception:   # noqa: BLE001 单个账号失败不阻断其他人的计划，下轮可重试。
+                continue
+        conf = get_settings()
+        if _schedule_due(conf, now):
+            targets = []
+            for account in conf["operators"]:
+                if account in personal or database.has_weekly_report(week, account):
+                    continue
+                user = _account_record(account)
+                if user is not None and not auth._row_identity(user).get("must_change_password"):
+                    targets.append(account)
+            if targets:
+                generated = bool(generate_reports(week, operators=targets)) or generated
+    return generated
 
 
 def start_weekly_scheduler(interval_sec: int = 60) -> threading.Thread:

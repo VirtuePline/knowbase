@@ -96,8 +96,8 @@ function createPage(mode, savedTab = "") {
     context[name] = () => {};
   }
   // 管理端声明的状态与函数（index.html）
-  const declarations = ["isAdmin", "isSuperAdmin", "isAccountAdmin", "currentUser", "currentDisplayName",
-    "portal", "authEnabled", "LAST_TAB_KEY", "PUBLIC_TABS", "SUPER_ADMIN_TABS", "ADMIN_TABS",
+  const declarations = ["isAdmin", "isSuperAdmin", "isAccountAdmin", "isAuthenticated", "currentUser", "currentDisplayName",
+    "portal", "authEnabled", "LAST_TAB_KEY", "PUBLIC_TABS", "SESSION_TABS", "SUPER_ADMIN_TABS", "ADMIN_TABS",
     "AUDIT_PAGE_SIZE", "auditPage", "auditTotal", "usersBody", "usersStatus", "sendBtn"];
   const functions = ["escapeHtml", "escapeAttr", "applyRoleVisibility", "canAccessTab", "lastTab",
     "updateNavigation", "switchTo", "loadUsers", "loadAuditLogs", "initPage"];
@@ -215,6 +215,32 @@ test("anonymous management portal continues to require login", async () => {
   assert.equal(page.run('canAccessTab("editor")'), false);
 });
 
+test("an employee without department or write permission can restore their own weekly page", async () => {
+  const page = createPage(operator, "weekly");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-weekly");
+  assert.equal(page.run('canAccessTab("weekly")'), true);
+  assert.equal(page.run('canAccessTab("editor")'), false);
+  assert.equal(page.document.body.classList.contains("authenticated-mode"), true);
+  assert.ok(page.find('.tab-btn[data-tab="weekly"]').classList.contains("session-only"));
+  assert.equal(page.find('.tab-btn[data-tab="weekly"]').classList.contains("admin-tab"), false);
+  assert.ok(page.find("#tab-weekly").classList.contains("session-only"));
+  assert.match(css, /body:not\(\.authenticated-mode\)\s+\.session-only\s*\{[^}]*display:\s*none\s*!important/);
+  assert.deepEqual(page.redirects, []);
+});
+
+test("the public portal cannot restore or navigate to weekly reports", async () => {
+  const page = createPage(guest, "weekly");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-chat");
+  assert.equal(page.run('canAccessTab("weekly")'), false);
+  assert.equal(page.document.body.classList.contains("authenticated-mode"), false);
+  page.run('switchTo("weekly")');
+  assert.equal(page.activeTab(), "tab-chat");
+  assert.deepEqual(page.redirects, []);
+  assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
 test("public initialization does not request the department directory", async () => {
   const classes = new Set();
   const label = { textContent: "" };
@@ -250,6 +276,7 @@ test("failed session refresh clears administrator visibility and permissions", a
   assert.equal(page.document.body.classList.contains("super-admin"), false);
   assert.equal(page.document.body.classList.contains("account-admin"), false);
   assert.equal(page.document.body.classList.contains("admin-mode"), false);
+  assert.equal(page.document.body.classList.contains("authenticated-mode"), false);
   assert.equal(page.run('canAccessTab("accounts")'), false);
   assert.equal(page.run('canAccessTab("logs")'), false);
   await page.run("loadUsers(); loadAuditLogs()");

@@ -111,9 +111,11 @@ class RequireAdminGateTest(unittest.TestCase):
 
     def test_enabled_auth_accepts_valid_session(self):
         auth.create_user("admin", "test-password")
+        account_id = mongo.db().users.find_one({"_id": "admin"})["account_id"]
         token = auth.create_session("admin")
         with patch.object(routes_mod, "settings", replace(self.tmp_settings, auth_enabled=True)):
             self.assertEqual(require_admin(token), {"username": "admin", "role": "user", "display_name": "admin",
+                                                    "_account_id": account_id,
                                                     "must_change_password": False, "password_version": 0,
                                                     "department_ids": ["operations"],
                                                     "department_roles": {"operations": "editor"}})

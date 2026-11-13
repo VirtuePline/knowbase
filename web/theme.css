@@ -1,20 +1,20 @@
 /* 主题只改变品牌与交互颜色，保留完成、错误、告警等状态的语义颜色。 */
 :root {
-  --accent: #147d77;
-  --accent-hover: #106a65;
+  --accent: #2d827a;
+  --accent-hover: #26746d;
   --accent-soft: #e8f3f2;
   --theme-tint: #f3f9f8;
   --theme-border: #bbd7d2;
   --theme-focus: #72b5aa;
-  --theme-focus-soft: #147d771c;
-  --theme-strong: #245b53;
+  --theme-focus-soft: #2d827a1c;
+  --theme-strong: #35685f;
   --theme-selection: #cce8e4;
-  --ink: #102f2e;
-  --theme-sidebar: #102f2e;
-  --theme-sidebar-line: #355650;
-  --theme-sidebar-active: #23564c;
-  --theme-sidebar-muted: #aac8c2;
-  --theme-sidebar-highlight: #d5eee8;
+  --ink: #31534f;
+  --theme-sidebar: #35655f;
+  --theme-sidebar-line: #648b83;
+  --theme-sidebar-active: #4a7c73;
+  --theme-sidebar-muted: #e0eeea;
+  --theme-sidebar-highlight: #effaf6;
   --bg: #f3f6f6;
   --canvas: #f3f6f6;
   --line: #dce5e4;
@@ -91,10 +91,18 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 }
 .workspace-tools { display: flex; align-items: center; justify-content: flex-end; gap: 20px; min-width: 0; }
 .theme-switcher { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--muted); font: 12px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; }
-.theme-switcher::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-.theme-switcher select { width: auto; min-height: 32px; max-width: 112px; margin: 0; padding: 5px 26px 5px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--theme-strong); background: #fff; font: inherit; cursor: pointer; }
-.theme-switcher select:hover { border-color: var(--theme-border); }
-.theme-switcher select:focus-visible { outline: 3px solid var(--theme-focus-soft); outline-offset: 2px; border-color: var(--theme-focus); }
+.theme-options { display: inline-flex; align-items: center; gap: 4px; }
+.theme-option { display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; margin: 0; padding: 0; border: 4px solid transparent; border-radius: 50%; background: var(--swatch); background-clip: padding-box; color: #fff; cursor: pointer; transition: box-shadow .15s, transform .15s; }
+.theme-option[data-theme-option="teal"] { --swatch: #2d827a; }
+.theme-option[data-theme-option="blue"] { --swatch: #3267ae; }
+.theme-option[data-theme-option="violet"] { --swatch: #7958a7; }
+.theme-option[data-theme-option="amber"] { --swatch: #9d651f; }
+.theme-option:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px var(--theme-border); }
+.theme-option[aria-pressed="true"] { box-shadow: 0 0 0 1.5px var(--theme-strong); }
+.theme-option:focus-visible { outline: 3px solid var(--theme-focus); outline-offset: 3px; }
+.theme-swatch-check { display: grid; place-items: center; width: 14px; height: 14px; opacity: 0; }
+.theme-swatch-check::before { content: ""; width: 7px; height: 4px; border: solid currentColor; border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
+.theme-option[aria-pressed="true"] .theme-swatch-check { opacity: 1; }
 .theme-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .account-theme-row { display: flex; justify-content: flex-end; margin: -4px 0 22px; }
 header.app-sidebar { background: var(--theme-sidebar); border-right-color: var(--theme-sidebar-line); scrollbar-color: var(--theme-sidebar-line) transparent; }
@@ -168,8 +176,10 @@ table th, #tab-accounts thead th, #tab-logs #audit-table th, .editor-preview th 
 @media (max-width: 760px) {
   .workspace-bar { gap: 8px; }
   .theme-switcher { gap: 5px; font-size: 11px; }
-  .theme-switcher > span:not(.theme-status) { display: none; }
-  .theme-switcher select { min-height: 30px; max-width: 95px; padding-left: 7px; }
+  .theme-switcher > .theme-label { display: none; }
+  .theme-option { width: 30px; height: 30px; }
+  .theme-options { gap: 2px; }
   .account-theme-row { margin-bottom: 17px; }
-  .account-theme-row .theme-switcher > span:not(.theme-status) { display: inline; }
+  .account-theme-row .theme-switcher > .theme-label { display: inline; }
 }
+@media (prefers-reduced-motion: reduce) { .theme-option { transition: none; } }

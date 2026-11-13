@@ -168,6 +168,7 @@ def _row_identity(row: dict) -> dict:
     departments = list(row["department_ids"]) if "department_ids" in row else [database.default_department_id()]
     roles = access.normalize_department_roles(departments, row.get("department_roles", {}))
     return {"username": username, "role": role, "must_change_password": bool(must_change),
+            "_account_id": str(row.get("account_id") or ""),
             "display_name": row.get("display_name") or username, "password_version": _password_version(row),
             "department_ids": departments, "department_roles": roles}
 
@@ -212,6 +213,7 @@ def _ensure_login_names_available(users, document: dict) -> None:
 def _user_document(username: str, password: str, role: str, display_name: str | None = None) -> dict:
     salt = secrets.token_bytes(16)
     return {"_id": username, "salt": salt.hex(), "password_hash": _hash_password(password, salt),
+            "account_id": secrets.token_hex(16),
             "created_at": database.now_iso(), "role": role, "must_change_password": password == "",
             "password_version": 0, "display_name": display_name or username,
             "login_names": sorted({_login_name(username), _login_name(display_name or username)})}
@@ -345,6 +347,7 @@ def list_users() -> list[dict]:
     result = []
     for row in mongo.db().users.find():
         identity = _row_identity(row)
+        identity.pop("_account_id", None)
         identity["created_at"] = str(row.get("created_at") or "")
         result.append(identity)
     result.sort(key=lambda item: (item["created_at"], item["username"]))

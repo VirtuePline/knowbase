@@ -69,6 +69,20 @@ class WeeklyScheduleTest(unittest.TestCase):
     def setUp(self):
         self.conf = {"enabled": True, "weekday": 5, "time": "18:00",
                      "operators": ["张三"]}
+        for name, value in (("_personal_schedules", {}),):
+            patcher = patch.object(weekly, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        existing = patch.object(weekly.database, "has_weekly_report", return_value=False)
+        existing.start()
+        self.addCleanup(existing.stop)
+        user = {"_id": "张三", "role": "user", "must_change_password": False,
+                "department_ids": ["operations"], "department_roles": {"operations": "editor"},
+                "account_id": "synthetic-account"}
+        for patcher in (patch.object(weekly.database, "access_revision", return_value=0),
+                        patch.object(weekly, "_account_record", return_value=user)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_runs_at_planned_time(self):
         # 2026-11-13 是周五，18:05 已过 18:00 计划点
@@ -78,15 +92,30 @@ class WeeklyScheduleTest(unittest.TestCase):
                 patch.object(weekly.database, "list_all", return_value=[
                     make_record("a1", "箱签打印不出，检查打印机地址后恢复正常使用", "张三", "2026-11-11 10:00:00")]), \
                 patch.object(weekly.database, "save_weekly_report",
-                             side_effect=lambda w, p, items, at, markdown="": saved.append((w, p, items, markdown))), \
+                             side_effect=lambda w, p, items, at, markdown="", **kwargs: saved.append((w, p, items, markdown))), \
+                patch.object(weekly.database, "get", return_value=make_record("a1", "记录", "张三", "2026-11-11")), \
                 patch.object(weekly.database, "now_iso", return_value="2026-11-13 18:05:00"):
-            self.assertTrue(weekly.run_scheduled_once(now))
+            with patch.object(weekly, "summarize", return_value=""):
+                self.assertTrue(weekly.run_scheduled_once(now))
             self.assertEqual([(w, p) for w, p, _, _ in saved], [("2026-11-09", "张三")])
             # markdown：文档引用可点击，文档名后跟日期，每条标明解决状态
             md = saved[0][3]
             self.assertIn("[箱签打印不出，检查打印机地址后恢复正常使用](doc://a1)", md)
             self.assertIn("（2026-11-11）", md)
             self.assertNotIn("- [", md.split("（")[0] if "（" in md else md)   # 开头不是日期
+
+    def test_scheduler_does_not_overwrite_a_manually_generated_report(self):
+        with patch.object(weekly, "get_settings", return_value=self.conf), \
+                patch.object(weekly.database, "has_weekly_report", return_value=True), \
+                patch.object(weekly, "generate_reports") as generate:
+            self.assertFalse(weekly.run_scheduled_once(datetime.datetime(2026, 11, 13, 18, 5)))
+        generate.assert_not_called()
+
+    def test_schedule_catches_up_after_a_missed_day_without_waiting_for_that_days_time(self):
+        with patch.object(weekly, "get_settings", return_value=self.conf), \
+                patch.object(weekly, "generate_reports", return_value=[{}]) as generate:
+            self.assertTrue(weekly.run_scheduled_once(datetime.datetime(2026, 11, 14, 9, 0)))
+        self.assertEqual(generate.call_args.args[0], "2026-11-09")
 
     def test_render_markdown_lists_reference_with_status(self):
         items = [{"doc_id": "a1", "doc_name": "扫码枪扫不上", "date": "2026-11-11", "resolved": "未解决"}]

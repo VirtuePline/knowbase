@@ -3,7 +3,7 @@
   "use strict";
   const KEY = "kb_ui_theme";
   const THEMES = {
-    teal: { label: "青绿", chrome: "#102f2e" },
+    teal: { label: "青绿", chrome: "#35655f" },
     blue: { label: "蓝色", chrome: "#152c49" },
     violet: { label: "紫色", chrome: "#302341" },
     amber: { label: "琥珀", chrome: "#382b20" },
@@ -15,7 +15,9 @@
   }
   function render(announce) {
     document.documentElement.setAttribute("data-theme", active);
-    document.querySelectorAll("[data-theme-select]").forEach((select) => { select.value = active; });
+    document.querySelectorAll("[data-theme-option]").forEach((button) => {
+      button.setAttribute("aria-pressed", button.getAttribute("data-theme-option") === active ? "true" : "false");
+    });
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute("content", THEMES[active].chrome);
     document.querySelectorAll("[data-theme-status]").forEach((status) => {
@@ -33,8 +35,10 @@
   try { active = normalize(global.localStorage.getItem(KEY)); } catch {}
   render(false);
   document.addEventListener("DOMContentLoaded", () => render(false));
-  document.addEventListener("change", (event) => {
-    if (event.target?.matches?.("[data-theme-select]")) set(event.target.value);
+  document.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-theme-option]");
+    const value = button?.getAttribute("data-theme-option");
+    if (Object.prototype.hasOwnProperty.call(THEMES, value)) set(value);
   });
   global.addEventListener("storage", (event) => {
     if (event.key === KEY) set(event.newValue, false);
