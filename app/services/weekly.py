@@ -1,7 +1,7 @@
-"""运维周报：按运维人汇总本周运维记录，定时生成，markdown 格式。
+"""工作周报：按负责人汇总本周工作记录，定时生成，markdown 格式。
 
 - 周报设置存 app_settings（weekly_report）：enabled / weekday(1=周一) / time / operators 名单。
-- 周报存 weekly_reports 集合（_id = 周起始日:运维人，重复生成幂等覆盖）。
+- 周报存 weekly_reports 集合（_id = 周起始日:账号，重复生成幂等覆盖）。
 - 正文以 LLM 小结为主：阅读本周全部记录原文后写总结，最后列出引用的文档（doc:// 可点击预览）；
   LLM 未配置或调用失败时回退为记录清单。
 - 本人可生成自己的周报；管理员可生成名单内所有人。
@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from app.services import access, database, kb, mongo
 
 _SETTINGS_KEY = "weekly_report"
-_RESOLVED_LABELS = {"resolved": "已解决", "improving": "处理中", "temporary": "临时解决", "unresolved": "未解决"}
+_RESOLVED_LABELS = {"resolved": "已完成", "improving": "处理中", "temporary": "阶段完成", "unresolved": "未完成"}
 _CONTENT_LIMIT = 6000   # 单条记录正文截断长度，避免超出模型上下文
 
 
@@ -65,7 +65,7 @@ def week_start(day: datetime.date | None = None) -> str:
 
 
 def collect_records(week_start: str, person: str) -> list[dict]:
-    """某人本周（week_start 起 7 天内）的运维记录，按时间倒序；标题完整保留。"""
+    """某人本周（week_start 起 7 天内）的工作记录，按时间倒序；标题完整保留。"""
     end = (datetime.date.fromisoformat(week_start) + datetime.timedelta(days=7)).isoformat()
     items = []
     for doc in kb._visible_records():
@@ -121,11 +121,11 @@ def visible_reports(limit: int = 12) -> list[dict]:
     return result
 
 
-_WEEKLY_PROMPT = """你是工厂运维团队的周报撰写助手。请阅读某位运维人本周的全部处理记录原文，写一段周报小结。
+_WEEKLY_PROMPT = """你是企业各部门的工作周报撰写助手。请阅读某位负责人本周的全部工作记录原文，写一段周报小结。
 
 要求：
-1. 概括本周主要处理了什么、解决了哪些问题、还有什么遗留；按「问题 → 处理与结果」组织，不要逐条罗列标题。
-2. 只使用记录原文中的设备、故障、处理步骤与结果，不要推测或补充记录里没有的内容。
+1. 概括本周主要完成了哪些工作、取得了什么结果、还有什么待办；按「事项 → 处理与结果」组织，不要逐条罗列标题。
+2. 只使用记录原文中的工作事项、处理步骤与结果，不要推测或补充记录里没有的内容。
 3. 中文，250~400 字，直接输出小结正文；不要标题、不要客套话、不要列表。"""
 
 
@@ -150,7 +150,7 @@ def summarize(person: str, week: str, items: list[dict]) -> str:
         entries.append(f"【{label}】（{it.get('date', '')}，{status}）\n{content}")
     if not entries:
         return ""
-    user = f"运维人：{person}（{week} 那周，共 {len(entries)} 条记录）\n\n" + "\n\n".join(entries)
+    user = f"负责人：{person}（{week} 那周，共 {len(entries)} 条记录）\n\n" + "\n\n".join(entries)
     try:
         return llm_client.chat(_WEEKLY_PROMPT, user).strip()
     except Exception:   # noqa: BLE001  LLM 未配置或失败不阻断周报生成
@@ -160,11 +160,11 @@ def summarize(person: str, week: str, items: list[dict]) -> str:
 def render_markdown(week: str, person: str, items: list[dict], summary: str = "") -> str:
     """周报 markdown：正文以 LLM 小结为主，最后列出引用文档（doc:// 可点击预览）。"""
     end = (datetime.date.fromisoformat(week) + datetime.timedelta(days=6)).isoformat()
-    lines = [f"# {person} 的运维周报（{week} ~ {end}）", ""]
+    lines = [f"# {person} 的工作周报（{week} ~ {end}）", ""]
     if not items:
-        return "\n".join([*lines, "本周没有运维记录。", ""]) + "\n"
+        return "\n".join([*lines, "本周没有工作记录。", ""]) + "\n"
     lines.append(summary.strip() or "（本周小结生成失败，以下为本周记录清单。）")
-    lines += ["", "## 本周处理记录"]
+    lines += ["", "## 本周工作记录"]
     for it in items:
         name = it.get("doc_name") or "未命名记录"
         tail = f"（{it.get('date', '')}）{it.get('resolved') or ''}".strip()
@@ -173,7 +173,7 @@ def render_markdown(week: str, person: str, items: list[dict], summary: str = ""
 
 
 def generate_reports(week: str | None = None, operators: list[str] | None = None) -> list[dict]:
-    """为名单中的每个运维人生成（或覆盖）本周周报；返回生成结果。"""
+    """为名单中的每个账号生成（或覆盖）本周周报；返回生成结果。"""
     week = week or week_start()
     targets = [o.strip() for o in (operators if operators is not None else get_settings()["operators"]) if o.strip()]
     generated_at = database.now_iso()

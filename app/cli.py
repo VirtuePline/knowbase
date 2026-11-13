@@ -185,7 +185,7 @@ def cmd_checkllm(_: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="工厂维保 / MES 运维知识库助手")
+    parser = argparse.ArgumentParser(description="企业知识库助手")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("serve", help="同时启动查询端与管理端")

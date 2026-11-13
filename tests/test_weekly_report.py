@@ -1,4 +1,4 @@
-"""运维周报：设置校验、本周记录收集与定时生成幂等。"""
+"""工作周报：设置校验、本周记录收集与定时生成幂等。"""
 import datetime
 import unittest
 from unittest.mock import patch
@@ -41,7 +41,7 @@ class WeeklySettingsTest(unittest.TestCase):
 
 
 class WeeklyCollectTest(unittest.TestCase):
-    """本周记录收集：按运维人与日期过滤，标题完整保留并带解决状态。"""
+    """本周记录收集：按账号与日期过滤，标题完整保留并带解决状态。"""
 
     def test_collect_records_filters_owner_and_week(self):
         week = "2026-11-09"   # 周一
@@ -56,7 +56,7 @@ class WeeklyCollectTest(unittest.TestCase):
             items = weekly.collect_records(week, "张三")
             self.assertEqual([i["doc_id"] for i in items], ["a1"])
             self.assertEqual(items[0]["doc_name"], "贴标机闪退，重启工控机后恢复正常运行")
-            self.assertEqual(items[0]["resolved"], "已解决")
+            self.assertEqual(items[0]["resolved"], "已完成")
             self.assertEqual(items[0]["date"], "2026-11-09")
 
     def test_week_start_is_monday(self):
@@ -92,10 +92,10 @@ class WeeklyScheduleTest(unittest.TestCase):
         items = [{"doc_id": "a1", "doc_name": "扫码枪扫不上", "date": "2026-11-11", "resolved": "未解决"}]
         md = weekly.render_markdown("2026-11-09", "张三", items)
         self.assertIn("[扫码枪扫不上](doc://a1)（2026-11-11）未解决", md)
-        self.assertIn("## 本周处理记录", md)
-        self.assertTrue(md.startswith("# 张三 的运维周报"))
+        self.assertIn("## 本周工作记录", md)
+        self.assertTrue(md.startswith("# 张三 的工作周报"))
         empty = weekly.render_markdown("2026-11-09", "李四", [])
-        self.assertIn("本周没有运维记录", empty)
+        self.assertIn("本周没有工作记录", empty)
 
     def test_render_markdown_prefers_llm_summary(self):
         items = [{"doc_id": "a1", "doc_name": "扫码枪扫不上", "date": "2026-11-11", "resolved": "已解决"}]
@@ -119,6 +119,19 @@ class WeeklyScheduleTest(unittest.TestCase):
             user_arg = chat_mock.call_args.args[1]
             self.assertIn("扫码枪扫不上", user_arg)
             self.assertIn("检查扫码枪线缆。", user_arg)
+
+    def test_summarize_supports_non_technical_work(self):
+        items = [{"doc_id": "a1", "doc_name": "报销流程更新", "date": "2026-11-11", "resolved": "已解决"}]
+        with patch.object(weekly, "_record_content", return_value="更新差旅报销审批流程，已通知各部门。"), \
+                patch.object(weekly.llm_client, "chat", return_value="本周完成报销流程更新。") as chat_mock:
+            summary = weekly.summarize("finance-user", "2026-11-09", items)
+        self.assertEqual(summary, "本周完成报销流程更新。")
+        system_arg, user_arg = chat_mock.call_args.args
+        self.assertIn("企业各部门", system_arg)
+        self.assertNotIn("工厂", system_arg)
+        self.assertNotIn("运维", system_arg + user_arg)
+        self.assertIn("负责人：finance-user", user_arg)
+        self.assertIn("更新差旅报销审批流程，已通知各部门。", user_arg)
 
     def test_summarize_llm_failure_returns_empty(self):
         items = [{"doc_id": "a1", "doc_name": "x", "date": "2026-11-11", "resolved": ""}]

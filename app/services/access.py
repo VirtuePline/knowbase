@@ -46,7 +46,8 @@ def identity_scope(identity):
 
 
 def is_platform_admin() -> bool:
-    return is_internal() or (current_identity() or {}).get("role") == "admin"
+    actor = current_identity() or {}
+    return is_internal() or (actor.get("role") == "admin" and not actor.get("public_only"))
 
 
 def managed_departments(identity: dict | None = None) -> set[str]:
@@ -54,6 +55,20 @@ def managed_departments(identity: dict | None = None) -> set[str]:
     memberships = set(actor.get("department_ids", []))
     return {key for key, role in actor.get("department_roles", {}).items()
             if key in memberships and role == "admin"}
+
+
+def normalize_department_roles(departments, roles) -> dict[str, str]:
+    """部门成员默认可维护文档；兼容历史 member，非法角色不授予写权限。"""
+    if not isinstance(roles, dict):
+        return {}
+    result = {}
+    for department in departments:
+        role = roles.get(department, "editor")
+        if role == "admin":
+            result[department] = "admin"
+        elif role in ("editor", "member"):
+            result[department] = "editor"
+    return result
 
 
 def writable_departments(identity: dict | None = None) -> set[str]:
@@ -69,6 +84,8 @@ def read_filter() -> dict:
     actor = current_identity()
     if not actor or actor.get("must_change_password"):
         return {"_id": {"$in": []}}
+    if actor.get("public_only"):
+        return {"visibility": "public"}
     departments = actor.get("department_ids", [])
     choices = [{"visibility": "public"}, {"department_id": {"$in": departments}},
                {"shared_department_ids": {"$in": departments}}]
@@ -83,6 +100,8 @@ def can_read(doc) -> bool:
     actor = current_identity()
     if not actor or actor.get("must_change_password"):
         return False
+    if actor.get("public_only"):
+        return getattr(doc, "visibility", "department") == "public"
     departments = set(actor.get("department_ids", []))
     return (getattr(doc, "visibility", "department") == "public"
             or (getattr(doc, "department_id", "") or OPERATIONS) in departments
@@ -90,6 +109,8 @@ def can_read(doc) -> bool:
 
 
 def can_write(doc) -> bool:
+    if (current_identity() or {}).get("public_only"):
+        return False
     if is_platform_admin():
         return True
     return (can_read(doc) and getattr(doc, "visibility", "department") != "public"
@@ -114,7 +135,7 @@ def require_write(doc_id: str):
 def creation_scope(department_id: str = "", visibility: str = "department",
                    shared_department_ids=None) -> dict:
     from app.services import database
-    department_id = department_id.strip() or next(iter(sorted(writable_departments())), OPERATIONS)
+    department_id = department_id.strip() or next(iter(sorted(writable_departments())), "") or database.default_department_id()
     shared = list(dict.fromkeys(str(value).strip() for value in shared_department_ids or [] if str(value).strip()))
     if visibility not in {"department", "public"}:
         raise HTTPException(status_code=400, detail="可见范围只能是 department / public")

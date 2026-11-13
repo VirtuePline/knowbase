@@ -199,7 +199,7 @@ class TrackingTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不存在"):
             self.create(parent_id="missing")
         basic = kb.upload("说明.md", _CONTENT.encode())["doc"]
-        with self.assertRaisesRegex(ValueError, "运维问题"):
+        with self.assertRaisesRegex(ValueError, "工作记录"):
             self.create(parent_id=basic["id"])
         root = self.create(_CONTENT + "\n补充：状态校验。")
         for status in ("processing", "failed"):

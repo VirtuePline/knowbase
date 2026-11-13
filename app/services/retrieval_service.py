@@ -47,13 +47,13 @@ def authorized_hits(hits: list[ScoredChunk]) -> list[ScoredChunk]:
 
 
 def operations_mode(question: str = "") -> bool:
-    """运维是企业知识库中的一个部门，其他部门不套用故障语义门禁。"""
+    """兼容历史技术记录的方案检索，其他部门不套用故障语义门禁。"""
     identity = access.current_identity() or {}
     if access.is_internal():
         return True
-    if "operations" not in identity.get("department_ids", []):
+    if "operations" not in identity.get("department_ids", []) and not identity.get("public_only"):
         return False
-    # 运维员工也会查询公共制度；只对其运维问题沿用专门的方案与故障规则。
+    # 默认部门成员也会查询公共制度；只对技术问题沿用专门的方案与故障规则。
     return (not question or bool(classify(question)[0] or vendor_hint(question))
             or bool(re.search(r"扫码枪|扫描枪|扫码器|读码器", question)))
 

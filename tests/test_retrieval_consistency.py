@@ -180,7 +180,8 @@ class ReadOnlyCategoryTest(unittest.TestCase):
     def test_document_counts_include_knowledge_like_document_list(self):
         docs = [self.record(category="常识库"), self.record(id="mes", category="MES系统"),
                 self.record(id="record", category="硬件问题", doc_type="record")]
-        with patch.object(kb.database, "list_all", return_value=docs):
+        with patch.object(kb.database, "list_all", return_value=docs), \
+                patch.object(kb.database, "department_names", return_value={"operations": "默认部门"}):
             counts = {row["name"]: row["count"] for row in kb.category_counts("doc")}
             listed = kb.list_documents(doc_type="doc")
         self.assertEqual(sum(counts.values()), len(listed))

@@ -165,7 +165,7 @@ async function initializeAccountPage() {
         if (!response.ok) throw new Error("无法读取部门目录");
         const data = await response.json();
         accountDepartments = (data.departments || []).filter((department) => mode.role === "admin" || mode.department_roles?.[department.id] === "admin");
-        document.querySelector("#account-departments").innerHTML = accountDepartments.map((department) => `<label class="account-department"><input type="checkbox" data-account-department="${accountEscape(department.id)}" aria-label="加入${accountEscape(department.name)}" /><span class="department-name">${accountEscape(department.name)}</span><select data-account-role="${accountEscape(department.id)}" aria-label="${accountEscape(department.name)}角色"><option value="member">只读成员</option><option value="editor">文档编辑者</option><option value="admin">部门管理员</option></select></label>`).join("");
+        document.querySelector("#account-departments").innerHTML = accountDepartments.map((department) => `<label class="account-department"><input type="checkbox" data-account-department="${accountEscape(department.id)}" aria-label="加入${accountEscape(department.name)}" /><span class="department-name">${accountEscape(department.name)}</span><select data-account-role="${accountEscape(department.id)}" aria-label="${accountEscape(department.name)}角色"><option value="editor">文档编辑者</option><option value="admin">部门管理员</option></select></label>`).join("");
         document.querySelector("#register-actor").textContent = accountDisplay(mode);
       }
     }

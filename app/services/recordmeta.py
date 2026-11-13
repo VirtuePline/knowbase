@@ -1,6 +1,6 @@
-"""上传表单的可配置项：厂商清单与各问题类型的填写模板。
+"""记录表单的可配置项：厂商清单与各记录分类的填写模板。
 
-厂商和模板都存 SQLite 的 vendors / doc_templates 表里，网页端可增删改；
+厂商和模板都存 MongoDB 的 vendors / doc_templates 集合里，网页端可增删改；
 代码里只内置默认模板，后台没有自定义过的类型使用默认模板。
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ except Exception:   # noqa: BLE001
 
 TEMPLATE_CATEGORIES = tuple(name for name in DOC_CATEGORY_ORDER if name != DOC_OTHER)
 
-# 各问题类型的默认填写模板（后台未自定义时使用）
+# 各记录分类的默认填写模板（后台未自定义时使用）
 DEFAULT_TEMPLATES: dict[str, str] = {
     "MES系统": "\n".join([
         "## MES系统问题处理",
@@ -116,10 +116,10 @@ def delete_vendor(name: str) -> list[str]:
     return list_vendors()
 
 
-# ---------- 自定义问题类型 ----------
+# ---------- 自定义记录分类 ----------
 
 def list_categories() -> list[str]:
-    """全部可选问题类型：内置固定分类 + 后台新增的自定义类型。"""
+    """全部可选记录分类：内置固定分类 + 后台新增的自定义类型。"""
     return all_doc_categories()
 
 
@@ -174,6 +174,6 @@ def save_template(category: str, content: str) -> dict[str, str]:
     """保存某类型的模板；内容为空表示恢复默认模板。"""
     name = str(category or "").strip()
     if name not in TEMPLATE_CATEGORIES:
-        raise ValueError(f"未知问题类型：{name}，可选值：{'、'.join(TEMPLATE_CATEGORIES)}")
+        raise ValueError(f"未知记录分类：{name}，可选值：{'、'.join(TEMPLATE_CATEGORIES)}")
     database.set_template(name, str(content or "").replace("\r\n", "\n"))
     return get_templates()

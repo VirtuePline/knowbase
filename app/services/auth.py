@@ -19,9 +19,10 @@ from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
-from app.services import database, mongo
+from app.services import access, database, mongo
 
 SESSION_COOKIE = "admin_session"
+PUBLIC_COOKIE = "knowledge_public_session"
 SESSION_TTL = 12 * 3600   # 会话有效期 12 小时
 _PBKDF2_ITER = 120_000
 
@@ -55,6 +56,33 @@ def create_session(username: str = "", password_version: int = 0) -> str:
         collection.insert_one({"_id": _token_id(token), **_sessions[token],
                                "expire_at": datetime.fromtimestamp(now + SESSION_TTL, timezone.utc)})
     return token
+
+
+def create_public_session() -> str:
+    """匿名访问仅获得公共资料范围；令牌只用于隔离本浏览器的问答上下文。"""
+    token = secrets.token_hex(24)
+    expires = time.time() + SESSION_TTL
+    record = {"expires": expires, "user": "guest:" + _token_id(token), "kind": "public"}
+    collection = _session_collection()
+    if collection is None:
+        with _lock:
+            for expired in [key for key, value in _sessions.items() if value["expires"] < time.time()]:
+                _sessions.pop(expired, None)
+            _sessions[token] = record
+    else:
+        collection.create_index("expire_at", expireAfterSeconds=0)
+        collection.insert_one({"_id": _token_id(token), **record,
+            "expire_at": datetime.fromtimestamp(expires, timezone.utc)})
+    return token
+
+
+def public_identity(token: str | None) -> dict | None:
+    session = _active_session(token)
+    if not session or session.get("kind") != "public":
+        return None
+    return {"username": session["user"], "display_name": "公共访问", "role": "guest",
+            "department_ids": [], "department_roles": {}, "must_change_password": False,
+            "public_only": True}
 
 
 def verify(token: str | None) -> bool:
@@ -137,10 +165,8 @@ def _row_identity(row: dict) -> dict:
             {"_id": username, "password_hash": row.get("password_hash"), "must_change_password": None},
             {"$set": {"must_change_password": must_change}},
         )
-    departments = list(row.get("department_ids", ["operations"]))
-    roles = row.get("department_roles", {"operations": "editor"} if "department_ids" not in row else {})
-    roles = {key: value for key, value in roles.items()
-             if key in departments and value in {"admin", "editor", "member"}}
+    departments = list(row["department_ids"]) if "department_ids" in row else [database.default_department_id()]
+    roles = access.normalize_department_roles(departments, row.get("department_roles", {}))
     return {"username": username, "role": role, "must_change_password": bool(must_change),
             "display_name": row.get("display_name") or username, "password_version": _password_version(row),
             "department_ids": departments, "department_roles": roles}
@@ -196,12 +222,18 @@ def create_user(username: str, password: str = "", role: str = "user", *, displa
     """仅创建账号，重名由数据库唯一主键拒绝，绝不重置已有密码。"""
     if role not in {"admin", "user"}:
         raise ValueError("无效的账号角色")
-    users = mongo.db().users
-    document = _user_document(username, password, role, display_name)
-    document["department_ids"] = department_ids if department_ids is not None else ["operations"]
-    document["department_roles"] = department_roles if department_roles is not None else {"operations": "editor"}
-    _ensure_login_names_available(users, document)
-    users.insert_one(document)
+    with database.department_mutation_lock:
+        departments = list(dict.fromkeys(department_ids)) if department_ids is not None else [database.default_department_id()]
+        supplied_roles = department_roles if department_roles is not None else {}
+        if (set(supplied_roles) - set(departments)
+                or any(value not in ("admin", "editor", "member") for value in supplied_roles.values())):
+            raise ValueError("部门角色与成员部门不匹配，或角色无效")
+        users = mongo.db().users
+        document = _user_document(username, password, role, display_name)
+        document["department_ids"] = departments
+        document["department_roles"] = access.normalize_department_roles(departments, supplied_roles)
+        _ensure_login_names_available(users, document)
+        users.insert_one(document)
 
 
 def authenticate(username: str, password: str) -> bool:

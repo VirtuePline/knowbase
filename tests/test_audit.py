@@ -31,6 +31,11 @@ class AuditPermissionTest(unittest.TestCase):
         identity_patch = patch.object(auth, "session_identity", side_effect=identities.get)
         identity_patch.start()
         self.addCleanup(identity_patch.stop)
+        guest_patch = patch.object(auth, "public_identity", return_value={
+            "username": "guest:test", "role": "guest", "public_only": True,
+            "department_ids": [], "department_roles": {}, "must_change_password": False})
+        guest_patch.start()
+        self.addCleanup(guest_patch.stop)
         self.logs = [{"time": "2026-11-12 10:00:00", "user": "operator", "action": "保存运维记录"}]
         logs_patch = patch.object(audit, "list_recent", return_value=(self.logs, 21))
         self.list_recent = logs_patch.start()
@@ -69,8 +74,8 @@ class AuditPermissionTest(unittest.TestCase):
 class AuditActionNameTest(unittest.TestCase):
     def test_known_actions(self):
         cases = [
-            ("POST", "/api/documents/markdown", "保存运维记录"),
-            ("PUT", "/api/documents/ab12cd34ef56", "编辑运维记录"),
+            ("POST", "/api/documents/markdown", "保存工作记录"),
+            ("PUT", "/api/documents/ab12cd34ef56", "编辑工作记录"),
             ("DELETE", "/api/documents/ab12cd34ef56", "删除文档"),
             ("POST", "/api/documents/rebuild", "重建索引"),
             ("PUT", "/api/fields/f_00aabbcc", "修改字段"),
@@ -106,7 +111,7 @@ class AuditRecordTest(unittest.TestCase):
         audit.record("10.1.2.3", "POST", "/api/documents/markdown", 200, detail="name=记录.md")
         row = mongo.db().audit_logs.find_one({}, {"_id": 0})
         self.assertEqual(row["ip"], "10.1.2.3")
-        self.assertEqual(row["action"], "保存运维记录")
+        self.assertEqual(row["action"], "保存工作记录")
         self.assertEqual(row["status"], 200)
         self.assertEqual(row["detail"], "name=记录.md")
         self.assertEqual(row["user"], "-")
@@ -207,7 +212,7 @@ class AuditMiddlewareTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, "仅写请求记日志")
             row = rows[0]
             self.assertEqual(row["ip"], "10.20.30.40", "取 X-Forwarded-For")
-            self.assertEqual(row["action"], "保存运维记录")
+            self.assertEqual(row["action"], "保存工作记录")
             self.assertEqual(row["detail"], "name=审计验证.md")
             self.assertEqual(row["status"], 200)
             self.assertEqual(row["user"], "auditor")

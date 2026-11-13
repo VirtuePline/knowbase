@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app.api.accounts import require_login
 from app.api import routes
 from app.main import admin_app, search_app
-from app.services import audit
+from app.services import audit, auth
 
 
 class RecordIdentityTest(unittest.TestCase):
@@ -74,11 +74,14 @@ class RecordIdentityTest(unittest.TestCase):
         response = self.api.post("/api/documents/markdown", json={"content": "x"})
         self.assertEqual(response.status_code, 401)
 
-    def test_query_port_requires_identity_for_accounts_and_has_no_document_writes(self):
+    def test_public_query_port_has_no_account_or_document_write_routes(self):
         api = TestClient(search_app)
-        self.assertIn("post", search_app.openapi()["paths"].get("/api/admin/login", {}))
-        self.assertEqual(api.post("/api/admin/register", json={"account": "new", "username": "新用户"}).status_code, 401)
-        self.assertIn(api.post("/api/documents/markdown", json={"content": "x"}).status_code, (404, 405))
+        self.addCleanup(api.close)
+        self.assertNotIn("post", search_app.openapi()["paths"].get("/api/admin/login", {}))
+        with patch.object(auth, "public_identity", return_value={"username": "guest:test", "role": "guest",
+                          "public_only": True, "department_ids": [], "department_roles": {}}):
+            self.assertEqual(api.post("/api/admin/register", json={"account": "new", "username": "新用户"}).status_code, 404)
+            self.assertIn(api.post("/api/documents/markdown", json={"content": "x"}).status_code, (404, 405))
 
 
 if __name__ == "__main__":

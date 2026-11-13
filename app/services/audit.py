@@ -17,13 +17,17 @@ _ACTION_RULES: tuple[tuple[str, str, str], ...] = (
     ("POST", "/api/admin/register", "注册账号"),
     ("POST", "/api/admin/change-password", "修改本人密码"),
     ("POST", "/api/admin/logout", "退出管理端"),
+    ("POST", "/api/departments", "创建部门"),
+    ("PUT", "/api/departments/{id}", "重命名部门"),
+    ("DELETE", "/api/departments/{id}", "删除部门"),
+    ("PATCH", "/api/admin/users/{id}/departments", "调整部门角色"),
     ("POST", "/api/documents", "上传文档"),
     ("PUT", "/api/documents/{id}/replace", "替换文档"),
     ("DELETE", "/api/documents/{id}", "删除文档"),
     ("PATCH", "/api/documents/{id}/category", "修正文档分类"),
     ("PATCH", "/api/documents/{id}/fields", "保存文档字段"),
-    ("POST", "/api/documents/markdown", "保存运维记录"),
-    ("PUT", "/api/documents/{id}", "编辑运维记录"),
+    ("POST", "/api/documents/markdown", "保存工作记录"),
+    ("PUT", "/api/documents/{id}", "编辑工作记录"),
     ("POST", "/api/documents/rebuild", "重建索引"),
     ("POST", "/api/images", "上传图片"),
     ("POST", "/api/fields", "新建字段"),
@@ -38,7 +42,7 @@ _ACTION_RULES: tuple[tuple[str, str, str], ...] = (
 _REGEX_CACHE: dict[str, re.Pattern] = {}
 
 # 从 JSON 请求体提取摘要的字段（按优先级）
-_DETAIL_KEYS = ("name", "username", "vendor", "category", "chunk_id", "key", "label", "doc_id")
+_DETAIL_KEYS = ("name", "username", "vendor", "category", "chunk_id", "key", "label", "doc_id", "target_department_id")
 
 
 def action_name(method: str, path: str) -> str:

@@ -90,7 +90,7 @@ function createPage(mode, savedTab = "") {
       throw new Error(`Unexpected request: ${url}`);
     },
   });
-  for (const name of ["loadTopQuestions", "loadCategories", "loadDocuments", "loadVendors", "loadTemplates",
+  for (const name of ["loadTopQuestions", "loadCategories", "loadDocuments", "loadKnowledgeStats", "loadVendors", "loadTemplates",
     "syncTplEditor", "renderVendorList", "resetEditor", "loadRecordList", "loadTimeline",
     "refreshSettings", "refreshWeeklyReport", "loadEditsLog"]) {
     context[name] = () => {};
@@ -127,6 +127,8 @@ function createPage(mode, savedTab = "") {
 
 const admin = { portal: "admin", authenticated: true, role: "admin", can_write: true, can_manage_users: true, can_register: true, account: "admin" };
 const operator = { portal: "admin", authenticated: true, role: "user", can_register: false, account: "operator" };
+const guest = { portal: "search", public_access: true, authenticated: false, auth: false,
+  role: "guest", can_write: false, can_manage_users: false, account: "", permission_stamp: "public-v1" };
 
 test("the full shipped script has valid JavaScript syntax", () => {
   assert.doesNotThrow(() => new vm.Script(script));
@@ -171,7 +173,7 @@ for (const tab of ["accounts", "logs", "edits"]) {
     assert.equal(page.activeTab(), "tab-chat");
     assert.equal(page.document.body.classList.contains("super-admin"), false);
     assert.equal(page.document.body.classList.contains("account-admin"), false);
-    assert.equal(page.find("#current-role").textContent, "只读成员");
+    assert.equal(page.find("#current-role").textContent, "未分配部门");
     page.run(`switchTo("${tab}")`);
     assert.equal(page.activeTab(), "tab-chat");
     await page.run("loadUsers(); loadAuditLogs()");
@@ -188,6 +190,53 @@ test("search portal remains public even with an administrator role in a stale pa
   page.run('switchTo("accounts"); switchTo("logs")');
   assert.equal(page.activeTab(), "tab-chat");
   assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
+test("anonymous public portal opens without login and hides account controls", async () => {
+  const page = createPage(guest, "accounts");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-chat");
+  assert.deepEqual(page.redirects, []);
+  assert.equal(page.find("#mode-badge").textContent, "公共访问 · 仅公共文档");
+  assert.equal(page.find("#mode-badge").disabled, true);
+  assert.equal(page.find("#account-summary").hidden, true);
+  assert.equal(page.find("#change-password-link").hidden, true);
+  assert.equal(page.document.body.classList.contains("public-access"), true);
+  assert.equal(page.run('canAccessTab("editor")'), false);
+  assert.equal(page.run('canAccessTab("accounts")'), false);
+  assert.equal(page.find("#send").disabled, false);
+  assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
+test("anonymous management portal continues to require login", async () => {
+  const page = createPage({ portal: "admin", authenticated: false, admin: false });
+  await page.init();
+  assert.deepEqual(page.redirects, ["/login"]);
+  assert.equal(page.run('canAccessTab("editor")'), false);
+});
+
+test("public initialization does not request the department directory", async () => {
+  const classes = new Set();
+  const label = { textContent: "" };
+  let departmentLoads = 0;
+  const context = vm.createContext({
+    portal: "search",
+    document: { body: { classList: { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } } },
+      querySelector: () => label },
+    localStorage: { removeItem() {} },
+    enterpriseLoadDepartments: async () => { departmentLoads++; },
+  });
+  vm.runInContext(["enterpriseIdentity", "enterpriseDepartments", "enterpriseUsers"]
+    .map((name) => shippedDeclaration(enterpriseSource, name)).join("\n") + "\n"
+    + shippedFunction(enterpriseSource, "enterpriseInitialize"), context);
+  context.payload = { ...admin, portal: "search" }; // 即使旧响应残留管理员字段也要降为公共只读。
+  await vm.runInContext("enterpriseInitialize(payload)", context);
+  assert.equal(departmentLoads, 0);
+  assert.equal(label.textContent, "公共访问 · 仅公共文档");
+  assert.equal(vm.runInContext("enterpriseIdentity.role", context), "guest");
+  assert.equal(vm.runInContext("enterpriseIdentity.account", context), "");
+  assert.equal(vm.runInContext("enterpriseDepartments.length", context), 0);
+  assert.equal(classes.has("department-manager"), false);
 });
 
 test("failed session refresh clears administrator visibility and permissions", async () => {

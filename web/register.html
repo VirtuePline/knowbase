@@ -4,8 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="theme-color" content="#102f2e" />
+<script src="/static/theme.js"></script>
 <title>创建成员账号 · 企业知识库</title>
 <link rel="stylesheet" href="/static/accounts.css" />
+<link rel="stylesheet" href="/static/theme.css" />
 <script src="/static/accounts.js" defer></script>
 </head>
 <body data-account-page="register">
@@ -19,6 +21,7 @@
   </section>
   <section class="account-form-region" aria-labelledby="account-title">
     <div class="account-form-wrap">
+      <div class="account-theme-row"><label class="theme-switcher"><span>主题颜色</span><select data-theme-select aria-label="主题颜色"><option value="teal">青绿</option><option value="blue">蓝色</option><option value="violet">紫色</option><option value="amber">琥珀</option></select><span class="theme-status" data-theme-status aria-live="polite"></span></label></div>
       <a class="account-back" href="/">← 返回企业知识工作台</a>
       <div class="account-heading"><span class="account-section-label">成员管理</span><h2 id="account-title">创建成员账号</h2><p>创建成员账号，并为其分配所属部门与工作角色。</p></div>
       <div class="register-context">当前管理员 <strong id="register-actor">正在确认账号…</strong><span>新账号可使用账号或用户名登录</span></div>
@@ -26,7 +29,7 @@
         <fieldset id="account-fields" disabled>
           <label class="account-field"><span>登录账号</span><input id="account-identifier" type="text" name="account" autocomplete="off" placeholder="例如：zhang.wei" minlength="1" maxlength="32" autocapitalize="none" spellcheck="false" required /><small>1–32 位，以英文字母开头，可含字母、数字、下划线、点或短横线。</small></label>
           <label class="account-field"><span>成员姓名 / 用户名</span><input id="account-username" type="text" name="username" autocomplete="off" placeholder="例如：张伟、人事部小林" minlength="1" maxlength="32" pattern="[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9][\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_.\-]{0,31}" autocapitalize="none" spellcheck="false" required /><small>支持中文、字母、数字及 _ . -，1–32 位，以中文、字母或数字开头。</small></label>
-          <div class="account-field-group"><div class="account-group-heading"><span id="account-departments-heading">所属部门与角色</span><small>可加入多个部门</small></div><div id="account-departments" class="account-departments" role="group" aria-labelledby="account-departments-heading"></div></div>
+          <div class="account-field-group"><div class="account-group-heading"><span id="account-departments-heading">所属部门与角色</span><small>可加入多个部门，选择编辑者或管理员</small></div><div id="account-departments" class="account-departments" role="group" aria-labelledby="account-departments-heading"></div></div>
           <div class="initial-password-note"><strong>初始密码为空</strong><p>创建账号后，成员首次登录时将密码留空，再设置自己的密码。</p></div>
           <div id="account-error" class="account-error" role="alert" hidden></div>
           <div id="account-success" class="account-success" role="status" hidden></div>

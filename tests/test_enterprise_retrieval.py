@@ -16,7 +16,7 @@ from app.services import retrieval_service as rs
 
 
 HR = {"username": "hr-user", "role": "user", "department_ids": ["hr"],
-      "department_roles": {"hr": "member"}}
+      "department_roles": {"hr": "editor"}}
 
 
 def chunk(doc_id, text="年假制度：员工每年享有五天年假。", refs=None):
@@ -53,6 +53,10 @@ class EnterpriseRetrievalTest(unittest.TestCase):
         db_patch = patch.object(mongo, "db", return_value=self.db)
         db_patch.start()
         self.addCleanup(db_patch.stop)
+        self.db.departments.insert_many([
+            {"_id": "operations", "name": "默认部门"}, {"_id": "hr", "name": "人事部门"},
+            {"_id": "finance", "name": "财务部门"},
+        ])
         self.scope = access.identity_scope(HR)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)

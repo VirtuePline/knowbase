@@ -77,23 +77,39 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
     )
     app.state.portal = mode
     for router in routers:
-        dependencies = [Depends(require_login)] if router is search_router else []
+        dependencies = [Depends(require_login)] if mode == "admin" and router is search_router else []
         app.include_router(router, dependencies=dependencies)
 
     @app.middleware("http")
     async def bind_access(request, call_next):
         token = request.cookies.get(auth.SESSION_COOKIE)
-        identity = auth.session_identity(token) if token else None
+        new_public_token = None
+        if mode == "search":
+            public_token = request.cookies.get(auth.PUBLIC_COOKIE)
+            identity = auth.public_identity(public_token)
+            if identity is None:
+                # 公共只读资源无需创建会话；仅页面初始化与问答需要浏览器上下文令牌。
+                if request.url.path in {"/", "/api/mode", "/api/chat"}:
+                    new_public_token = public_token = auth.create_public_session()
+                    identity = auth.public_identity(public_token)
+                else:
+                    identity = {"username": "", "role": "guest", "public_only": True,
+                                "department_ids": [], "department_roles": {}}
+        else:
+            identity = auth.session_identity(token) if token else None
         stamp = access.permission_stamp(identity) if identity and request.url.path == "/api/chat" else None
         with access.identity_scope(identity):
             response = await call_next(request)
             if stamp and response.status_code == 200:
-                refreshed = auth.session_identity(token)
+                refreshed = auth.public_identity(public_token) if mode == "search" else auth.session_identity(token)
                 if not refreshed or access.permission_stamp(refreshed) != stamp:
                     return JSONResponse({"detail": "访问权限已更新，请重新提问"}, status_code=409,
                                         headers={"Cache-Control": "no-store"})
             if request.url.path.startswith(("/api/", "/images/")):
                 response.headers["Cache-Control"] = "no-store"
+            if new_public_token:
+                response.set_cookie(auth.PUBLIC_COOKIE, new_public_token, max_age=auth.SESSION_TTL,
+                                    httponly=True, secure=request.url.scheme == "https", samesite="lax", path="/")
             return response
 
     if mode == "admin":
@@ -122,17 +138,27 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
 
     @app.get("/api/mode")
     def current_mode(admin_session: str | None = Cookie(default=None)) -> dict:
+        if mode == "search":
+            identity = access.current_identity() or {}
+            return {"mode": "search", "portal": "search", "public_access": True, "auth": False,
+                    "authenticated": False, "admin": False, "user": "", "account": "", "username": "访客",
+                    "display_name": "公共访问", "role": "guest", "can_write": False, "can_manage_users": False,
+                    "can_register": False, "department_ids": [], "department_roles": {}, "departments": [],
+                    "must_change_password": False, "permission_stamp": access.permission_stamp(identity)}
         return {"mode": mode, "portal": mode, **identity_payload(auth.session_identity(admin_session))}
 
+    def readable_identity(admin_session: str | None = Cookie(default=None)):
+        return access.current_identity() if mode == "search" else require_login(admin_session)
+
     @app.get("/images/{name}")
-    def image(name: str, identity: dict = Depends(require_login)):
+    def image(name: str, identity: dict = Depends(readable_identity)):
         if not re.fullmatch(r"[A-Za-z0-9_-]+\.(?:png|jpg|jpeg|gif|webp|bmp)", name, re.I):
             raise HTTPException(status_code=404, detail="图片不存在")
         asset = mongo.db().image_assets.find_one({"_id": name})
-        allowed = identity["role"] == "admin"
+        allowed = identity["role"] == "admin" and mode == "admin"
         if asset and not allowed:
             linked = asset.get("doc_ids", [])
-            allowed = (not linked and asset.get("uploaded_by") == identity["username"]) or any(
+            allowed = (mode == "admin" and not linked and asset.get("uploaded_by") == identity["username"]) or any(
                 doc is not None and access.can_read(doc) for doc in (database.get(key) for key in linked))
         path = settings.images_dir / name
         if not allowed or not path.is_file():
@@ -144,6 +170,8 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
 
         @app.get("/")
         def index(admin_session: str | None = Cookie(default=None)):          # noqa: F811
+            if mode == "search":
+                return FileResponse(settings.web_dir / "index.html")
             identity = auth.session_identity(admin_session)
             if identity is None:
                 return RedirectResponse("/login", status_code=303)
@@ -153,6 +181,8 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
 
         @app.get("/login")
         def login_page(admin_session: str | None = Cookie(default=None)):
+            if mode == "search":
+                return RedirectResponse("/", status_code=303)
             identity = auth.session_identity(admin_session)
             if identity is not None:
                 target = "/change-password" if identity.get("must_change_password", False) else "/"
@@ -161,12 +191,16 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
 
         @app.get("/change-password")
         def change_password_page(admin_session: str | None = Cookie(default=None)):
+            if mode == "search":
+                return RedirectResponse("/", status_code=303)
             if auth.session_identity(admin_session) is None:
                 return RedirectResponse("/login", status_code=303)
             return FileResponse(settings.web_dir / "change-password.html")
 
         @app.get("/register")
         def register_page(admin_session: str | None = Cookie(default=None)):
+            if mode == "search":
+                return RedirectResponse("/", status_code=303)
             identity = auth.session_identity(admin_session)
             if identity is None:
                 return RedirectResponse("/login", status_code=303)
@@ -178,10 +212,10 @@ def _make_app(title_suffix: str, routers: list, mode: str) -> FastAPI:
     return app
 
 
-# 查询端：登录后的只读知识访问，账号接口仍按角色授权。
-search_app = _make_app("查询端", [search_router, auth_router], "search")
+# 普通端口始终只公开公共资料；即使浏览器带管理端 Cookie 也不会提升权限。
+search_app = _make_app("公共查询端", [search_router], "search")
 
-# 管理端：查询端 + 登录 + 写操作（写操作需登录）。仅对运维人员开放，不挂在外网。
+# 管理端：查询端 + 登录 + 写操作（写操作需登录）。仅对授权人员开放，不挂在外网。
 admin_app = _make_app("管理端", [search_router, auth_router, admin_router], "admin")
 
 # 兼容旧的 `uvicorn app.main:app` 启动方式：指向只读的查询端，避免旧脚本意外暴露写接口

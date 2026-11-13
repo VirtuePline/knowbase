@@ -4,7 +4,7 @@
 .record-attachments-heading h3 span { margin-left: 7px; color: var(--muted, #778a87); font-size: 11px; font-weight: 400; }
 .record-attachments-count { color: var(--accent, #147d77); font-size: 11px; white-space: nowrap; }
 .record-attachment-drop { margin: 0 18px 12px; padding: 17px 18px; border: 1px dashed #bccfca; border-radius: 10px; background: #f1f7f5; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; transition: border-color .15s, background .15s; }
-.record-attachment-drop:focus-visible, .record-attachment-drop.over { outline: 3px solid #147d7724; outline-offset: 2px; border-color: var(--accent, #147d77); background: #e9f5ef; }
+.record-attachment-drop:focus-visible, .record-attachment-drop.over { outline: 3px solid var(--accent-soft, #e9f5ef); outline-offset: 2px; border-color: var(--accent, #147d77); background: var(--accent-soft, #e9f5ef); }
 .record-attachment-symbol { display: grid; place-items: center; width: 35px; height: 38px; color: var(--accent, #147d77); border-radius: 9px; background: #fff; border: 1px solid #dfebe5; flex-shrink: 0; }
 .record-attachment-symbol svg { width: 21px; height: 21px; }
 .record-attachment-help { flex: 1; min-width: 200px; }

@@ -119,6 +119,21 @@ class AnalyzerTest(unittest.TestCase):
         self.assertIn("结构段：驱动器故障", captured["user"])
         self.assertNotIn("第3-5页", captured["user"])
 
+    def test_work_record_summary_omits_generic_recorder_field(self):
+        block = Block(
+            text="- 时间：2026-11-11\n- 记录人：王同事\n"
+                 "- 工作事项：更新差旅报销流程。\n- 结果：审批步骤已确认。",
+            heading="流程更新",
+        )
+        with patch.object(analyzer, "settings", replace(settings, analysis_use_llm=False)):
+            result = analyze([block], "财务工作记录.md")
+
+        summary = result.sections[0].summary
+        self.assertIn("2026-11-11", summary)
+        self.assertIn("报销流程", summary)
+        self.assertNotIn("王同事", summary)
+        self.assertIn("记录人：王同事", result.sections[0].text, "原文保留供追溯")
+
 
 if __name__ == "__main__":
     unittest.main()

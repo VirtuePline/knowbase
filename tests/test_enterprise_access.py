@@ -53,7 +53,7 @@ class EnterpriseAccessTest(unittest.TestCase):
             auth.create_user(name, "Password123", role, department_ids=[dept], department_roles={dept: dept_role})
             self.actors[name] = auth._row_identity(self.db.users.find_one({"_id": name}))
         self.api = TestClient(main._make_app("测试", [routes.search_router, main.auth_router, routes.admin_router], "admin"))
-        self.search = TestClient(main._make_app("查询测试", [routes.search_router, main.auth_router], "search"))
+        self.search = TestClient(main._make_app("查询测试", [routes.search_router], "search"))
         self.addCleanup(self.api.close)
         self.addCleanup(self.search.close)
         self.doc("ops-doc", "operations")
@@ -69,16 +69,20 @@ class EnterpriseAccessTest(unittest.TestCase):
     def login_as(self, name, client=None):
         (client or self.api).cookies.set(auth.SESSION_COOKIE, auth.create_session(name))
 
-    def test_both_portals_require_login_and_share_persisted_sessions(self):
-        for client in (self.api, self.search):
-            self.assertEqual(client.get("/api/documents").status_code, 401)
-            self.assertEqual(client.post("/api/chat", json={"question": "制度"}).status_code, 401)
+    def test_admin_requires_login_and_persists_sessions_while_public_port_stays_public_only(self):
+        self.assertEqual(self.api.get("/api/documents").status_code, 401)
+        self.assertEqual(self.api.post("/api/chat", json={"question": "制度"}).status_code, 401)
+        self.assertEqual(self.search.get("/api/documents").status_code, 200)
         token = auth.create_session("hr")
         auth._sessions.pop(token, None)  # 模拟第二个服务进程没有本机缓存
         self.search.cookies.set(auth.SESSION_COOKIE, token)
-        self.assertEqual(self.search.get("/api/documents/hr-doc").status_code, 200)
+        self.assertEqual(self.search.get("/api/documents/hr-doc").status_code, 404)
+        other_admin = TestClient(self.api.app)
+        self.addCleanup(other_admin.close)
+        other_admin.cookies.set(auth.SESSION_COOKIE, token)
+        self.assertEqual(other_admin.get("/api/documents/hr-doc").status_code, 200)
         auth.revoke(token)
-        self.assertEqual(self.search.get("/api/documents/hr-doc").status_code, 401)
+        self.assertEqual(other_admin.get("/api/documents/hr-doc").status_code, 401)
 
     def test_read_scope_applies_to_list_metadata_download_and_timeline_counts(self):
         self.login_as("hr")
@@ -90,9 +94,11 @@ class EnterpriseAccessTest(unittest.TestCase):
         self.assertEqual({item["doc_id"] for item in timeline["events"]}, {"hr-doc", "public-doc"})
         self.assertEqual(timeline["total"], 2)
 
-    def test_read_only_members_and_cross_department_editors_cannot_write(self):
+    def test_department_members_can_edit_own_documents_but_not_other_scopes(self):
         self.login_as("reader")
-        self.assertEqual(self.api.delete("/api/documents/hr-doc").status_code, 403)
+        self.assertTrue(self.api.get("/api/documents/hr-doc").json()["can_write"])
+        self.assertEqual(self.api.patch("/api/timeline/event-status", json={
+            "doc_id": "hr-doc", "chunk_id": "hr-doc", "status": "resolved"}).status_code, 200)
         self.login_as("hr")
         self.assertEqual(self.api.delete("/api/documents/ops-doc").status_code, 404)
         self.assertEqual(self.api.delete("/api/documents/public-doc").status_code, 403)
@@ -118,7 +124,7 @@ class EnterpriseAccessTest(unittest.TestCase):
             "department_ids": ["operations"], "department_roles": {"operations": "admin"}})
         self.assertEqual(response.status_code, 403)
         response = self.api.patch("/api/admin/users/ops/departments", json={
-            "department_ids": ["hr"], "department_roles": {"hr": "member"}})
+            "department_ids": ["hr"], "department_roles": {"hr": "editor"}})
         self.assertEqual(response.status_code, 200)
         row = self.db.users.find_one({"_id": "ops"})
         self.assertEqual(set(row["department_ids"]), {"operations", "hr"})
@@ -165,8 +171,8 @@ class EnterpriseAccessTest(unittest.TestCase):
         token = auth.create_session("ops")
         auth.delete_user("ops")
         auth.create_user("ops", "DifferentPassword", department_ids=["hr"], department_roles={"hr": "admin"})
-        self.search.cookies.set(auth.SESSION_COOKIE, token)
-        self.assertEqual(self.search.get("/api/documents/hr-doc").status_code, 401)
+        self.api.cookies.set(auth.SESSION_COOKIE, token)
+        self.assertEqual(self.api.get("/api/documents/hr-doc").status_code, 401)
 
 
 if __name__ == "__main__":

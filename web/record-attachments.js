@@ -32,6 +32,7 @@
       this.error = "";
       this.lastBatch = null;
       this.serial = 0;
+      this.contextVersion = 0;
       this.fetch = options.fetch || ((...args) => global.fetch(...args));
       this.canAdd = options.canAdd || (() => true);
       this.onChange = options.onChange || (() => {});
@@ -61,8 +62,10 @@
     }
     remove(id) {
       if (this.busy) return false;
-      this.entries = this.entries.filter((entry) => entry.id !== Number(id));
-      this.lastBatch = null;
+      const removedId = Number(id);
+      this.entries = this.entries.filter((entry) => entry.id !== removedId);
+      // 后加文件尚未参与失败批次；移除它不能改变重试批次，否则响应丢失时会重复上传。
+      if (this.lastBatch?.entries.some((entry) => entry.id === removedId)) this.lastBatch = null;
       this.error = "";
       this.changed();
       return true;
@@ -81,14 +84,17 @@
       this.clear();
       this.target = null;
       this.existingCount = 0;
+      this.contextVersion += 1;
       this.changed();
       return true;
     }
     bind(doc) {
       if (!doc?.id) throw new Error("请先保存记录，再上传附件");
       if (this.target && this.target.id !== doc.id && this.entries.length) throw new Error("附件已关联另一条记录，请先完成上传或清空附件队列");
+      const changedTarget = this.target?.id !== doc.id;
       this.target = { id: doc.id, name: doc.name || "已保存记录" };
       if (Array.isArray(doc.attachments)) this.existingCount = doc.attachments.length;
+      else if (changedTarget) this.existingCount = 0;
       this.changed();
     }
     async upload() {
@@ -128,6 +134,7 @@
         this.notify("当前浏览器不支持直接读取剪贴板，请点击附件区域后按 Ctrl+V，或选择附件");
         return 0;
       }
+      const contextVersion = this.contextVersion;
       try {
         const items = await clipboard.read();
         const files = [];
@@ -137,10 +144,14 @@
           const blob = await item.getType(type);
           files.push(new global.File([blob], `剪贴板附件-${Date.now()}-${files.length + 1}.${MIME_EXT[type] || "bin"}`, { type, lastModified: Date.now() }));
         }
+        if (contextVersion !== this.contextVersion) {
+          this.notify("当前记录已切换，未添加刚才读取的剪贴板附件，请在当前记录中重新粘贴");
+          return 0;
+        }
         if (!files.length) this.notify("剪贴板中没有可读取的文件。复制文件后在附件区域按 Ctrl+V，或点击“选择附件”");
         return this.add(files);
       } catch {
-        this.notify("无法读取剪贴板，请允许剪贴板访问，或点击附件区域后按 Ctrl+V；也可以选择附件");
+        this.notify("当前无法读取剪贴板，可点击附件区域后按 Ctrl+V，或使用“选择附件”添加文件");
         return 0;
       }
     }

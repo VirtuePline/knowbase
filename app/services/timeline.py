@@ -1,4 +1,4 @@
-"""问题时间线：每份已入库文档一条事件，按时间段和分类分页查询。
+"""时间线：每份已入库文档一条事件，按部门、时间段和分类分页查询。
 
 全文摘要由文档分析阶段按「时间 → 问题 → 尝试办法 → 结果 → 是否解决 → 原因」的事件记录式生成；
 时间线从摘要提取事件日期（提取不到时回退上传时间），数据库完成筛选、排序和统计，
@@ -89,7 +89,7 @@ def _status_stages() -> list[dict]:
 
 
 def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
-              status: str, offset: int, limit: int) -> list[dict]:
+              status: str, offset: int, limit: int, department_id: str = "") -> list[dict]:
     allowed_categories = all_doc_categories()
     stages = [
         {"$match": access.read_filter()},
@@ -110,6 +110,10 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
         }},
         {"$set": {
             "_tl_date": _date_expression(),
+            "_tl_department": {"$cond": [
+                {"$in": [{"$ifNull": ["$department_id", ""]}, ["", "operations"]]},
+                "operations", "$department_id",
+            ]},
             "_tl_categories": {"$cond": [
                 {"$gt": [{"$size": {"$cond": [{"$isArray": "$categories"}, "$categories", []]}}, 0]},
                 "$categories", ["$_tl_category"],
@@ -131,8 +135,9 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
             date_match["_tl_range_start"] = {"$lte": end_date}
         stages.append({"$match": date_match})
 
-    category_match = {"_tl_categories": category} if category else {"_tl_categories": {"$ne": "常识库"}}
-    selection = [{"$match": category_match}]
+    department_scope = [{"$match": {"_tl_department": department_id}}] if department_id else []
+    category_match = {"_tl_categories": category} if category else {}
+    selection = [*department_scope, {"$match": category_match}]
     if vendor:
         selection.append({"$match": {"vendor": vendor}})
     filtered = list(selection)
@@ -164,10 +169,12 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
     stages.append({"$facet": {
         "events": page,
         "total": [*filtered, {"$count": "count"}],
-        "categories": [{"$unwind": "$_tl_categories"},
+        "departments": [{"$group": {"_id": "$_tl_department", "count": {"$sum": 1}}}],
+        "event_count": [*department_scope, {"$count": "count"}],
+        "categories": [*department_scope, {"$unwind": "$_tl_categories"},
                        {"$group": {"_id": "$_tl_categories", "count": {"$sum": 1}}}],
-        "issue_count": [{"$match": {"_tl_categories": {"$ne": "常识库"}}}, {"$count": "count"}],
-        "vendors": [{"$match": category_match}, {"$match": {"vendor": {"$nin": ["", None]}}},
+        "issue_count": [*department_scope, {"$match": {"_tl_categories": {"$ne": "常识库"}}}, {"$count": "count"}],
+        "vendors": [*department_scope, {"$match": category_match}, {"$match": {"vendor": {"$nin": ["", None]}}},
                     {"$group": {"_id": "$vendor", "count": {"$sum": 1}}}, {"$sort": {"_id": 1}}],
         "status_counts": [*selection, {"$match": {"_tl_categories": {"$ne": "常识库"}}},
                           *_status_stages(), {"$group": {"_id": "$_tl_effective", "count": {"$sum": 1}}}],
@@ -176,7 +183,7 @@ def _pipeline(*, start_date: str, end_date: str, category: str, vendor: str,
 
 
 def build(*, start_date: str = "", end_date: str = "", category: str = "", vendor: str = "",
-          status: str = "", offset: int = 0, limit: int = 30) -> dict:
+          status: str = "", offset: int = 0, limit: int = 30, department_id: str = "") -> dict:
     """每次只返回最新一页；时间段和各项筛选、计数都在数据库中完成。"""
     if offset < 0 or not 1 <= limit <= 100:
         raise ValueError("分页参数无效")
@@ -186,8 +193,13 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
         raise ValueError("开始日期不能晚于结束日期")
     result = database.timeline_page(_pipeline(
         start_date=start_date, end_date=end_date, category=category, vendor=vendor,
-        status=status, offset=offset, limit=limit,
+        status=status, offset=offset, limit=limit, department_id=department_id,
     ))
+    department_counts = {row["_id"]: row["count"] for row in result.get("departments", []) if row.get("_id")}
+    names = database.department_names(
+        set(department_counts) | {row.get("_tl_department") or row.get("department_id") or "operations"
+                                  for row in result.get("events", [])}
+    )
     events = []
     for row in result.get("events", []):
         record = database._row_to_doc(row)
@@ -204,6 +216,7 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
             "heading": "", "summary": record.summary,
             "resolved": "yes" if event_status == "resolved" else "no", "status": event_status,
             "can_write": access.can_write(record), "department_id": record.department_id,
+            "department_name": names.get(record.department_id, "未命名部门"),
             "visibility": record.visibility, "shared_department_ids": record.shared_department_ids,
         })
     counts = {row["_id"]: row["count"] for row in result.get("categories", []) if row.get("_id")}
@@ -214,6 +227,11 @@ def build(*, start_date: str = "", end_date: str = "", category: str = "", vendo
     next_offset = offset + len(events)
     return {
         "events": events,
+        "departments": sorted(
+            [{"id": key, "name": names[key], "count": count} for key, count in department_counts.items()],
+            key=lambda item: (item["name"], item["id"]),
+        ),
+        "event_count": next((row["count"] for row in result.get("event_count", [])), 0),
         "categories": [{"name": name, "count": counts[name]} for name in category_order if counts.get(name)],
         "issue_count": next((row["count"] for row in result.get("issue_count", [])), 0),
         "vendors": [{"name": row["_id"], "count": row["count"]} for row in result.get("vendors", [])],

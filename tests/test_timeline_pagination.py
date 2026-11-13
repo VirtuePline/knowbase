@@ -118,9 +118,11 @@ class TimelinePaginationTest(unittest.TestCase):
                 result = timeline.build(category="厂商系统", vendor="华智", status=status)
                 self.assertEqual([event["doc_id"] for event in result["events"]], [expected_id])
         general = timeline.build()
-        self.assertEqual(general["total"], 45)
+        self.assertEqual(general["total"], 46)
+        self.assertEqual(general["event_count"], 46)
         self.assertEqual(len(general["events"]), 30)
-        self.assertNotIn("ledger", [event["doc_id"] for event in general["events"]])
+        # 通用时间线默认同时包含工作记录与基础文档。
+        self.assertIn("ledger", [event["doc_id"] for event in timeline.build(offset=30)["events"]])
         knowledge = timeline.build(category="常识库")
         self.assertEqual([event["doc_id"] for event in knowledge["events"]], ["ledger"])
 
@@ -155,23 +157,21 @@ class TimelinePaginationTest(unittest.TestCase):
 
 class TimelineApiTest(unittest.TestCase):
     def setUp(self):
-        identity = {"username": "timeline-test", "display_name": "时间线测试员", "role": "admin",
-                    "department_ids": ["operations"], "department_roles": {"operations": "admin"},
-                    "must_change_password": False, "password_version": 0}
-        session = patch.object(auth, "session_identity", side_effect=lambda token: identity if token == "timeline-session" else None)
+        guest = {"username": "guest:timeline-test", "role": "guest", "public_only": True,
+                 "department_ids": [], "department_roles": {}, "must_change_password": False}
+        session = patch.object(auth, "public_identity", return_value=guest)
         session.start()
         self.addCleanup(session.stop)
         self.api = TestClient(search_app)
         self.addCleanup(self.api.close)
-        self.api.cookies.set(auth.SESSION_COOKIE, "timeline-session")
 
-    def test_anonymous_timeline_requires_login_before_query(self):
+    def test_anonymous_timeline_can_query_public_scope(self):
         anonymous = TestClient(search_app)
         self.addCleanup(anonymous.close)
-        with patch.object(routes.timeline_service, "build") as build:
+        with patch.object(routes.timeline_service, "build", return_value={"events": []}) as build:
             response = anonymous.get("/api/timeline")
-        self.assertEqual(response.status_code, 401)
-        build.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        build.assert_called_once()
 
     def test_default_query_forwards_only_thirty_events(self):
         payload = {"events": [], "has_more": False, "next_offset": 0, "total": 0}
@@ -186,12 +186,12 @@ class TimelineApiTest(unittest.TestCase):
         with patch.object(routes.timeline_service, "build", return_value={"events": []}) as build:
             response = self.api.get("/api/timeline", params={
                 "start_date": "2026-11-01", "end_date": "2026-11-30", "category": "厂商系统",
-                "vendor": "华智", "status": "improving", "offset": 30, "limit": 30,
+                "vendor": "华智", "status": "improving", "offset": 30, "limit": 30, "department_id": "hr",
             })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(build.call_args.kwargs, {
             "start_date": "2026-11-01", "end_date": "2026-11-30", "category": "厂商系统",
-            "vendor": "华智", "status": "improving", "offset": 30, "limit": 30,
+            "vendor": "华智", "status": "improving", "offset": 30, "limit": 30, "department_id": "hr",
         })
 
     def test_invalid_dates_ranges_page_sizes_and_status_are_rejected_before_query(self):

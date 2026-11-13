@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>企业知识库</title>
 <meta name="theme-color" content="#f4f7fa" />
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/styles.css" />
 <link rel="stylesheet" href="/static/record-attachments.css" />
+<link rel="stylesheet" href="/static/theme.css" />
 </head>
 <body class="search-mode">
 <a class="skip-link" href="#workspace">跳至主要内容</a>
@@ -19,10 +21,10 @@
   <nav aria-label="主要导航">
     <button class="tab-btn active" data-tab="chat" aria-current="page">智能问答</button>
     <button class="tab-btn" data-tab="docs" id="docs-tab-btn">文档管理</button>
-    <button class="tab-btn" data-tab="timeline">问题时间线</button>
-    <button class="tab-btn admin-tab" data-tab="weekly">运维周报</button>
-    <button class="tab-btn admin-tab" data-tab="editor">新增运维记录</button>
-    <button class="tab-btn admin-tab" data-tab="records">运维记录管理</button>
+    <button class="tab-btn" data-tab="timeline">时间线</button>
+    <button class="tab-btn admin-tab" data-tab="weekly">工作周报</button>
+    <button class="tab-btn admin-tab" data-tab="editor">新增工作记录</button>
+    <button class="tab-btn admin-tab" data-tab="records">记录管理</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="settings">知识分类与模板</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="edits">修改记录</button>
     <button class="tab-btn admin-tab account-admin-only" data-tab="accounts">用户管理</button>
@@ -38,16 +40,16 @@
 </header>
 
 <main id="workspace" tabindex="-1">
-  <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><span class="workspace-context">企业公共知识与部门知识</span></div>
+  <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><div class="workspace-tools"><span class="workspace-context">企业公共知识与部门知识</span><label class="theme-switcher"><span>主题颜色</span><select data-theme-select aria-label="主题颜色"><option value="teal">青绿</option><option value="blue">蓝色</option><option value="violet">紫色</option><option value="amber">琥珀</option></select><span class="theme-status" data-theme-status aria-live="polite"></span></label></div></div>
   <!-- 问答 -->
   <section class="tab active" id="tab-chat">
     <button type="button" class="history-fab" id="history-btn" title="查看最近的问答记录（仅保存在本机浏览器）">历史记录</button>
     <div class="chat-hero">
       <div class="hero-eyebrow"><span aria-hidden="true"></span> 企业知识，授权共享</div>
-      <h1>让每一次排障，<br class="mobile-break" />都有据可循。</h1>
+      <h1>让每一次提问，<br class="mobile-break" />都有据可循。</h1>
       <p>查找企业制度、业务流程、部门资料和处理经验，回答仅使用您有权访问的知识。</p>
       <div class="knowledge-overview" aria-label="知识库概览">
-        <div class="overview-item"><span class="overview-icon" aria-hidden="true">▤</span><div><strong id="overview-documents">—</strong><span>已入库文档</span></div></div>
+        <div class="overview-item"><span class="overview-icon" aria-hidden="true">▤</span><div><strong id="overview-documents">—</strong><span>可访问文档</span></div></div>
         <div class="overview-item"><span class="overview-icon blue" aria-hidden="true">⌕</span><div><strong id="overview-chunks">—</strong><span>可检索内容</span></div></div>
         <div class="overview-item"><span class="overview-icon amber" aria-hidden="true">✓</span><div><strong class="overview-word">原文溯源</strong><span>答案附带参考依据</span></div></div>
       </div>
@@ -81,8 +83,8 @@
         <button type="button" class="chat-toggle new-chat" id="new-chat" title="清空对话记录与上下文，开始新对话" hidden>新对话</button>
         <button type="button" class="chat-toggle" id="websearch-toggle" aria-pressed="false" hidden>联网搜索</button>
       </div>
-      <div class="composer-help"><span>支持粘贴或拖入故障截图，发送前可补充描述</span><span><kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行</span></div>
-      <div class="answer-note">回答优先依据授权知识，参考来源可点击预览。企业公共文档仅向已登录员工开放。</div>
+      <div class="composer-help"><span>支持粘贴或拖入图片，发送前可补充描述</span><span><kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行</span></div>
+      <div class="answer-note">回答依据当前可访问的文档，参考来源可点击预览。公开查询端仅使用公共文档。</div>
     </div>
 
     <!-- 历史记录：最近 10 条问答，仅存浏览器 localStorage，不上传后端 -->
@@ -128,6 +130,7 @@
           <button class="ghost" type="button" data-view="category">类型</button>
         </div>
       </div>
+      <div class="department-filter-row"><label for="doc-department-filter">所属部门</label><select id="doc-department-filter" aria-label="按所属部门筛选文档"><option value="">全部部门</option></select></div>
       <div class="cat-filter" id="cat-filter"></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="文档列表，可横向滚动"><table class="docs">
         <thead>
@@ -140,13 +143,14 @@
 
   <!-- 时间线 -->
   <section class="tab" id="tab-timeline">
-    <div class="page-heading"><h1>问题时间线</h1><p>回顾故障发生与处理过程，跟进问题解决进度。</p></div>
+    <div class="page-heading"><h1>时间线</h1><p>按部门和时间查看知识积累与工作进展，跟进事项处理过程。</p></div>
     <div class="panel-card">
       <div class="docs-head">
-        <h2>问题时间线</h2>
-        <span class="muted" style="font-size:13px">按分类汇总各文档摘要中的事件记录：何时遇到什么问题、何时解决了什么问题</span>
+        <h2>时间线</h2>
+        <span class="muted" style="font-size:13px">按分类汇总各文档摘要中的事件记录：记录创建时间、处理过程与完成情况</span>
       </div>
       <form class="tl-range" id="tl-range-form">
+        <label>所属部门<select id="tl-department-filter" aria-label="按所属部门筛选时间线"><option value="">全部部门</option></select></label>
         <label>开始日期<span class="tl-date-wrap">
           <input type="date" id="tl-start-date" aria-label="时间线开始日期" />
           <span class="tl-date-display" aria-hidden="true"><span class="tl-date-text">年 / 月 / 日</span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></span>
@@ -170,61 +174,61 @@
     </div>
   </section>
 
-  <!-- 运维处理问题上传 -->
+  <!-- 上传工作记录 -->
   <section class="tab" id="tab-editor">
-    <div class="page-heading"><h1>记录一次处理经验</h1><p>上传现场材料，或直接记录故障现象、处理步骤与结果。</p></div>
+    <div class="page-heading"><h1>新增工作记录</h1><p>上传相关材料，或直接记录工作事项、处理步骤与结果。</p></div>
     <div class="editor-identity">上传人 <strong id="upload-account">—</strong><span>由当前登录账号自动记录</span></div>
     <div class="tracking-card" id="tracking-parent-card" hidden>
       <div class="tracking-icon" aria-hidden="true">↳</div>
-      <div class="tracking-info"><span>正在追踪问题</span><button type="button" id="tracking-parent-preview"></button><small>本次新增记录将关联到此问题，父记录保持不变。</small></div>
+      <div class="tracking-info"><span>正在跟进记录</span><button type="button" id="tracking-parent-preview"></button><small>本次新增记录将关联到此记录，原记录保持不变。</small></div>
       <button type="button" class="ghost" id="tracking-cancel">取消追踪</button>
     </div>
     <div class="panel-card">
-      <h2>上传运维记录文件</h2>
+      <h2>上传工作记录文件</h2>
       <div id="record-scope-host"></div>
       <div id="rec-drop">点击选择文件，或把文件拖到这里<br />
-        <span class="muted">支持 PDF、DOCX、XLSX、MD 等；故障工单、现场记录、报错截图文档等运维问题材料，与基础文档分开管理</span>
+        <span class="muted">支持 PDF、DOCX、XLSX、MD 等；工作事项、处理记录、截图说明等业务材料，与基础文档分开管理</span>
       </div>
       <p class="record-attachments-hint">需要附加照片或文件？<a href="#record-attachments">先添加附件</a>，再选择记录文件。多份记录的附件仅随第一条成功入库的记录保存。</p>
       <input type="file" id="rec-file" multiple hidden />
       <div class="row" style="margin-top:12px">
-        <label class="muted" style="font-size:13px">问题类型：
+        <label class="muted" style="font-size:13px">记录分类：
           <span class="multicat" id="rec-cat-multi">
-            <button type="button" class="cat-select multicat-btn" id="rec-cat-btn" title="点击打开选择窗体，可勾选多个问题类型；带二级选项的类型在窗体中进一步选择">自动判定</button>
+            <button type="button" class="cat-select multicat-btn" id="rec-cat-btn" title="点击打开选择窗体，可勾选多个记录分类；带二级选项的类型在窗体中进一步选择">自动判定</button>
           </span>
         </label>
         <span id="rec-subcats" class="rec-subcats"></span>
-        <label class="muted" style="font-size:13px">运维人：
-          <input type="text" id="rec-operator" placeholder="运维人" title="运维人用户名；默认当前登录用户名，可改为其他成员" style="width:110px;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;font-size:13px" />
+        <label class="muted" style="font-size:13px">记录人：
+          <input type="text" id="rec-operator" placeholder="记录人" title="记录人用户名；默认当前登录用户名，可改为其他成员" style="width:110px;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;font-size:13px" />
         </label>
-        <label class="muted" style="font-size:13px">问题日期：
-          <input type="date" id="rec-date" title="问题发生日期；默认为今天" />
+        <label class="muted" style="font-size:13px">记录日期：
+          <input type="date" id="rec-date" title="事项发生日期；默认为今天" />
         </label>
-        <label class="muted" style="font-size:13px">是否解决：
+        <label class="muted" style="font-size:13px">完成情况：
           <select id="rec-resolved" class="cat-select" style="width:auto" title="记录当前的处理状态，时间线徽标按此显示">
-            <option value="unresolved">未解决</option>
-            <option value="improving">改善中</option>
-            <option value="temporary">临时解决</option>
-            <option value="resolved">已解决</option>
+            <option value="unresolved">未完成</option>
+            <option value="improving">处理中</option>
+            <option value="temporary">阶段完成</option>
+            <option value="resolved">已完成</option>
           </select>
         </label>
         <span class="muted" id="rec-upload-status"></span>
       </div>
     </div>
     <div class="panel-card">
-      <h2 id="editor-title">新建运维处理记录</h2>
+      <h2 id="editor-title">新建工作记录</h2>
       <div class="editor-bar">
         <input type="text" id="md-name" placeholder="记录名称（留空自动命名，默认保存为 md 文件）" />
         <span class="multicat" id="md-cat-multi">
-          <button type="button" class="cat-select multicat-btn" id="md-cat-btn" title="点击打开选择窗体：可勾选多个问题类型；选「自动判定」则按内容归类">自动判定问题类型</button>
+          <button type="button" class="cat-select multicat-btn" id="md-cat-btn" title="点击打开选择窗体：可勾选多个记录分类；选「自动判定」则按内容归类">自动判定记录分类</button>
         </span>
         <span id="md-subcats" class="rec-subcats"></span>
         <input type="date" id="md-time" title="记录时间：默认当前日期，只需选择年月日" />
-        <select id="md-resolved" title="是否解决：时间线徽标按此显示；时间线上的人工标记优先于这里的选择">
-          <option value="unresolved">未解决</option>
-          <option value="improving">改善中</option>
-          <option value="temporary">临时解决</option>
-          <option value="resolved">已解决</option>
+        <select id="md-resolved" title="完成情况：时间线徽标按此显示；时间线上的人工标记优先于这里的选择">
+          <option value="unresolved">未完成</option>
+          <option value="improving">处理中</option>
+          <option value="temporary">阶段完成</option>
+          <option value="resolved">已完成</option>
         </select>
         <div class="md-mode" role="group" aria-label="编辑模式">
           <button type="button" class="md-mode-btn active" data-mode="preview" title="在渲染结果上直接书写">预览</button>
@@ -328,14 +332,15 @@
     </div>
   </section>
 
-  <!-- 运维问题管理 -->
+  <!-- 记录管理 -->
   <section class="tab" id="tab-records">
-    <div class="page-heading"><h1>运维记录管理</h1><p>查阅与维护历史处理记录，持续积累可复用的现场经验。</p></div>
+    <div class="page-heading"><h1>记录管理</h1><p>查阅与维护历史处理记录，持续积累可复用的工作经验。</p></div>
     <div class="panel-card">
       <div class="docs-head">
-        <h2>运维问题记录</h2>
-        <span class="muted" style="font-size:13px">所有运维问题文档：上传的记录文件与在线写的处理记录；可预览、下载、编辑、替换、改分类、改记录时间</span>
+        <h2>工作记录</h2>
+        <span class="muted" style="font-size:13px">所有工作记录文档：上传的记录文件与在线写的处理记录；可预览、下载、编辑、替换、改分类、改记录时间</span>
       </div>
+      <div class="department-filter-row"><label for="rec-department-filter">所属部门</label><select id="rec-department-filter" aria-label="按所属部门筛选记录"><option value="">全部部门</option></select></div>
       <div class="cat-filter" id="rec-cat-filter"></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="文档列表，可横向滚动"><table class="docs">
         <thead>
@@ -346,15 +351,15 @@
     </div>
   </section>
 
-  <!-- 后台设置：各问题类型的填写模板与厂商清单 -->
+  <!-- 后台设置：各记录分类的填写模板与厂商清单 -->
   <section class="tab" id="tab-settings">
-    <div class="page-heading"><h1>知识分类与模板</h1><p>维护企业知识分类与记录模板，运维资料可继续关联厂商。</p></div>
+    <div class="page-heading"><h1>知识分类与模板</h1><p>维护企业知识分类与记录模板，业务资料可继续关联厂商。</p></div>
     <div class="panel-card admin-only">
       <h2>知识分类与模板</h2>
       <div class="row" style="align-items:center;margin-bottom:8px">
-        <span class="muted" style="font-size:13px">问题类型</span>
+        <span class="muted" style="font-size:13px">记录分类</span>
         <select id="tpl-cat" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px"></select>
-        <button class="ghost" type="button" id="tpl-save" title="把当前内容保存为该问题类型的默认模板，录入时按此预填">设为默认模板</button>
+        <button class="ghost" type="button" id="tpl-save" title="把当前内容保存为该记录分类的默认模板，录入时按此预填">设为默认模板</button>
         <button class="ghost" type="button" id="tpl-reset" title="清空自定义，恢复内置模板">恢复内置</button>
         <span class="muted" id="tpl-status" style="font-size:13px"></span>
       </div>
@@ -362,7 +367,7 @@
         style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:12.5px/1.6 ui-monospace,Consolas,monospace;background:#fff"></textarea>
       <div class="muted" style="font-size:12px;margin-top:6px">
         修改后点「设为默认模板」，录入该类型时即按此模板预填；「恢复内置」还原系统内置模板。
-        时间与运维人不写在模板里：时间由「问题日期」控件记录，运维人默认当前登录用户名，均随记录存入数据库。
+        时间与记录人不写在模板里：时间由「记录日期」控件记录，记录人默认当前登录用户名，均随记录存入数据库。
       </div>
       <div class="row" style="align-items:center;margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
         <span class="muted" style="font-size:13px">厂商清单</span>
@@ -371,14 +376,14 @@
         <span id="vendor-list" style="display:flex;flex-wrap:wrap;gap:6px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">
-        问题类型选「厂商系统」时必须选择厂商；删除厂商不影响已保存记录上已填的厂商。
+        记录分类选「厂商系统」时必须选择厂商；删除厂商不影响已保存记录上已填的厂商。
       </div>
     </div>
   </section>
 
-  <!-- 运维周报（独立导航页）：markdown 周报，记录引用可点击预览；生成设置仅管理员可见 -->
+  <!-- 工作周报（独立导航页）：markdown 周报，记录引用可点击预览；生成设置仅管理员可见 -->
   <section class="tab" id="tab-weekly">
-    <div class="page-heading"><h1>运维周报</h1><p>按运维人汇总每周的处理记录，每条标明是否解决了什么问题，点击记录名可打开预览。</p></div>
+    <div class="page-heading"><h1>工作周报</h1><p>按记录人汇总每周的处理记录，每条标明工作内容和完成情况，点击记录名可打开预览。</p></div>
     <div class="panel-card admin-only">
       <h2>周报生成设置</h2>
       <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px">
@@ -394,7 +399,7 @@
         <span class="muted" id="wr-status" style="font-size:13px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:8px">
-        勾选需要生成周报的运维人；到点自动汇总其本周（周一起 7 天）的运维记录，markdown 格式存入数据库，每条标明解决状态。
+        勾选需要生成周报的记录人；到点自动汇总其本周（周一起 7 天）的工作记录，markdown 格式存入数据库，每条标明完成状态。
       </div>
       <div id="wr-owners" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>
     </div>
@@ -518,12 +523,12 @@
   </div>
 </div>
 
-<!-- 问题类型选择窗体（上传页 / 编辑器 / 记录列表「改标签」共用；可新增自定义类型） -->
+<!-- 记录分类选择窗体（上传页 / 编辑器 / 记录列表「改标签」共用；可新增自定义类型） -->
 <div class="modal-mask" id="cat-dialog-mask">
   <div class="modal" style="width:min(430px,100%)">
     <header>
       <div>
-        <div class="title">选择问题类型</div>
+        <div class="title">选择记录分类</div>
         <div class="sub">可勾选多个；带二级选项的类型在下方进一步选择</div>
       </div>
       <button class="close" id="cat-dialog-close" type="button" title="关闭">×</button>
@@ -1131,10 +1136,17 @@ inputShell.addEventListener("drop", (e) => {
 const docRows = $("#doc-rows");
 const catFilter = $("#cat-filter");
 let docDocs = [];              // 基础文档（文档管理页）
-let recDocs = [];              // 运维问题记录（运维问题上传页）
+let recDocs = [];              // 工作记录（记录上传页）
 let docCategories = [];
 let docView = "date";          // "date" 按年月日分组 | "category" 按分类分组
 let docCatFilter = "";
+let docDepartmentFilter = "";
+let recDepartmentFilter = "";
+let docRequestId = 0;
+let recRequestId = 0;
+let statsRequestId = 0;
+const docDepartmentSelect = $("#doc-department-filter");
+const recDepartmentSelect = $("#rec-department-filter");
 const collapsedMonths = new Set();   // 日期视图里被收起的月份，重渲染后保持状态
 let isAdmin = false;          // 当前管理端会话有文档写权限
 let isSuperAdmin = false;     // 管理员账号（role=admin）：独占用户管理、修改记录与操作日志
@@ -1208,33 +1220,75 @@ function extTypeName(ext) {
   return EXT_TYPE_NAMES[key] || ext || "未知";
 }
 
-async function loadDocuments() {
+function renderDepartmentFilter(select, departments, selected) {
+  if (!select) return;
+  const options = (Array.isArray(departments) ? departments : []).filter((item) => item?.id);
+  const known = options.some((item) => String(item.id) === selected);
+  select.innerHTML = '<option value="">全部部门</option>' + options.map((item) => {
+    const count = Number.isFinite(item.count) ? `（${item.count}）` : "";
+    return `<option value="${escapeAttr(escapeHtml(String(item.id)))}">${escapeHtml(String(item.name || "所属部门"))}${count}</option>`;
+  }).join("") + (selected && !known ? `<option value="${escapeAttr(escapeHtml(selected))}">已选部门（当前无记录）</option>` : "");
+  select.value = selected;
+}
+
+async function loadKnowledgeStats() {
+  const requestId = ++statsRequestId;
   try {
-    const resp = await fetch("/api/documents?doc_type=doc");
+    const resp = await fetch("/api/health");
+    if (!resp.ok) throw new Error("统计加载失败");
     const data = await resp.json();
+    if (requestId !== statsRequestId) return;
+    const stats = data.stats;
+    $("#stats").textContent = `${stats.documents} 份文档 · ${stats.chunks} 个检索单元`;
+    $("#stats").title = `当前可访问的全部文档与记录；模型：${stats.llm}；语义向量：${stats.embedding || "未启用"}`;
+    $("#overview-documents").textContent = stats.documents.toLocaleString("zh-CN");
+    $("#overview-chunks").textContent = stats.chunks.toLocaleString("zh-CN");
+  } catch {
+    if (requestId === statsRequestId) $("#stats").textContent = "知识库统计暂时无法更新";
+  }
+}
+
+async function loadDocuments() {
+  const requestId = ++docRequestId;
+  const params = new URLSearchParams({ doc_type: "doc" });
+  if (docDepartmentFilter) params.set("department_id", docDepartmentFilter);
+  try {
+    const resp = await fetch(`/api/documents?${params}`);
+    const data = await resp.json();
+    if (requestId !== docRequestId) return;
+    if (!resp.ok) throw new Error("文档加载失败");
     docDocs = data.documents || [];
     docCategories = data.categories || [];
-    $("#stats").textContent = `${data.stats.documents} 份文档 · ${data.stats.chunks} 个检索单元`;
-    $("#stats").title = `模型：${data.stats.llm}；语义向量：${data.stats.embedding || "未启用"}`;
-    $("#overview-documents").textContent = data.stats.documents.toLocaleString("zh-CN");
-    $("#overview-chunks").textContent = data.stats.chunks.toLocaleString("zh-CN");
+    renderDepartmentFilter(docDepartmentSelect, data.departments, docDepartmentFilter);
     if (docCatFilter && !docCategories.some((item) => item.name === docCatFilter && item.count > 0)) {
       docCatFilter = "";
     }
     renderCategoryFilter();
     renderDocs();
   } catch {
-    $("#stats").textContent = "知识库暂时无法连接";
+    if (requestId !== docRequestId) return;
     docRows.innerHTML = '<tr><td colspan="7" class="muted">无法连接服务，请稍后重试</td></tr>';
   }
 }
+
+docDepartmentSelect.addEventListener("change", () => {
+  docDepartmentFilter = docDepartmentSelect.value;
+  docCatFilter = "";
+  loadDocuments();
+});
+
+recDepartmentSelect.addEventListener("change", () => {
+  recDepartmentFilter = recDepartmentSelect.value;
+  recCatFilter = "";
+  loadRecordList();
+});
 
 function renderCategoryFilter() {
   if (!docCategories.length) {
     catFilter.innerHTML = "";
     return;
   }
-  const total = docCategories.reduce((sum, item) => sum + item.count, 0);
+  const total = docDocs.length;
   const chips = [{ name: "", label: "全部", count: total }].concat(
     docCategories.filter((item) => item.count > 0).map((item) => ({ name: item.name, label: item.name, count: item.count }))
   );
@@ -1255,8 +1309,8 @@ function recordRelationsHtml(record, previewAttribute) {
   const parts = [];
   if (record.parent_id) {
     const parentId = escapeAttr(escapeHtml(String(record.parent_id)));
-    const parentName = escapeHtml(String(record.parent_name || "关联问题"));
-    parts.push(`<button type="button" class="relation-link" data-${previewAttribute}="${parentId}" title="预览父问题">追踪自：${parentName}</button>`);
+    const parentName = escapeHtml(String(record.parent_name || "关联记录"));
+    parts.push(`<button type="button" class="relation-link" data-${previewAttribute}="${parentId}" title="预览关联记录">追踪自：${parentName}</button>`);
   }
   const children = Math.max(0, Number(record.child_count) || 0);
   if (children) parts.push(`<span class="relation-count">${children} 条后续记录</span>`);
@@ -1280,7 +1334,7 @@ function docRowHtml(d) {
   }
   vendorOptions.push(...vendorList.map((name) =>
     `<option value="${escapeAttr(name)}"${name === (d.vendor || "") ? " selected" : ""}>${escapeHtml(name)}</option>`));
-  // 管理员：标签徽标 + 「改标签」按钮（点击打开问题类型选择窗体）；厂商仍是二级单选
+  // 管理员：标签徽标 + 「改标签」按钮（点击打开记录分类选择窗体）；厂商仍是二级单选
   const category = enterpriseCanWrite(d)
     ? catBadges(d) + `
       <span class="multicat inline-cat">
@@ -1294,7 +1348,7 @@ function docRowHtml(d) {
         <td><span class="doc-link" data-pv="${id}" title="点击预览">${escapeHtml(d.name)}</span>${enterpriseDocumentLabel(d)}
           ${d.summary ? `<div class="doc-summary" title="${escapeHtml(d.summary)}">${escapeHtml(d.summary)}</div>` : ""}
           ${d.vendor ? `<div class="net-tags"><span class="net-tag" title="厂商">厂商：${escapeHtml(d.vendor)}</span></div>` : ""}
-          <div class="record-provenance"><span>运维人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
+          <div class="record-provenance"><span>记录人：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
             `${(d.last_edited_name || d.last_edited_by) ? `<span>最后修改：${escapeHtml(String(d.last_edited_name || d.last_edited_by))}${d.last_edited_at ? " · " + escapeHtml(String(d.last_edited_at)) : ""}</span>` : ""}` +
             `${recordRelationsHtml(d, "pv")}</div>
           ${skipped}${d.error ? `<div class="muted" style="font-size:12px">${escapeHtml(d.error)}</div>` : ""}</td>
@@ -1386,7 +1440,7 @@ function renderDocs() {
   if (!docs.length) {
     docRows.innerHTML = `<tr><td colspan="7" class="muted">${docCatFilter
       ? `「${escapeHtml(docCatFilter)}」分类下暂无文档`
-      : "暂无基础文档，先上传系统手册、设备资料等文件；运维问题记录见「运维问题管理」页"}</td></tr>`;
+      : "暂无文档，可上传企业制度、业务流程或部门资料；工作记录见「记录管理」页"}</td></tr>`;
     return;
   }
   docRows.innerHTML = docView === "category" ? renderByCategory(docs) : renderByDate(docs);
@@ -1410,7 +1464,7 @@ catFilter.addEventListener("click", (event) => {
   renderDocs();
 });
 
-// 运维问题记录表已从页面移除；bindDocTable 对不存在的表格直接跳过
+// 工作记录表已从页面移除；bindDocTable 对不存在的表格直接跳过
 function bindDocTable(rowsEl, reload) {
   if (!rowsEl) return;
   rowsEl.addEventListener("change", async (event) => {
@@ -1443,7 +1497,7 @@ function bindDocTable(rowsEl, reload) {
 
   rowsEl.addEventListener("click", async (e) => {
     const inlineBtn = e.target.closest("[data-inline-btn]");
-    if (inlineBtn) {   // 打开问题类型选择窗体，确定后全量保存
+    if (inlineBtn) {   // 打开记录分类选择窗体，确定后全量保存
       const id = inlineBtn.dataset.inlineBtn;
       const doc = [...docDocs, ...recDocs].find((d) => d.id === id);
       catDialog.open({
@@ -1552,11 +1606,12 @@ $("#time-save").addEventListener("click", async () => {
   }
 });
 
-/* ---------- 问题时间线 ---------- */
+/* ---------- 时间线 ---------- */
 const tlBody = $("#tl-body");
 const tlCatFilterEl = $("#tl-cat-filter");
 const tlStartDateInput = $("#tl-start-date");
 const tlEndDateInput = $("#tl-end-date");
+const tlDepartmentSelect = $("#tl-department-filter");
 const tlLoadMoreButton = $("#tl-load-more");
 const tlLoadState = $("#tl-load-state");
 const tlSentinel = $("#tl-sentinel");
@@ -1564,9 +1619,10 @@ const TL_PAGE_SIZE = 30;
 let tlData = null;                 // 当前筛选条件下已加载的分页数据
 let tlCatFilter = "";              // 当前筛选的分类，空串为全部
 let tlVendorFilter = "";           // 二级筛选：厂商（厂商系统类记录的厂商），空串为全部
-let tlStatusFilter = "";           // 状态筛选："yes" 已解决 | "no" 未解决 | 空串为全部（常识库不受状态筛选影响）
+let tlStatusFilter = "";           // 状态筛选："yes" 已完成 | "no" 未完成 | 空串为全部（常识库不受状态筛选影响）
 let tlStartDate = "";
 let tlEndDate = "";
+let tlDepartmentFilter = "";
 let tlLoading = false;
 let tlHasMore = false;
 let tlNextOffset = 0;
@@ -1585,46 +1641,47 @@ function tlDateLabel(date) {
 }
 
 function tlBadge(resolved) {
-  if (resolved === "yes") return '<span class="tl-badge yes">已解决</span>';
-  if (resolved === "improving") return '<span class="tl-badge improving">改善中</span>';
-  if (resolved === "temporary") return '<span class="tl-badge temporary">临时解决</span>';
-  return '<span class="tl-badge no">未解决</span>';   // 未标记 / 人工未解决 / 结果未知均显示未解决
+  if (resolved === "yes") return '<span class="tl-badge yes">已完成</span>';
+  if (resolved === "improving") return '<span class="tl-badge improving">处理中</span>';
+  if (resolved === "temporary") return '<span class="tl-badge temporary">阶段完成</span>';
+  return '<span class="tl-badge no">未完成</span>';   // 未标记 / 人工未完成 / 结果未知均显示未完成
 }
 
-// 事件的有效状态：人工标记优先；「结果未知」视为未解决
+// 事件的有效状态：人工标记优先；「结果未知」视为未完成
 function tlEffective(event) {
   if (event.status === "resolved") return "yes";
   if (event.status === "improving") return "improving";
   if (event.status === "temporary") return "temporary";
-  return "no";   // 默认 / 人工未解决 / 结果未知（unknown）均视为未解决
+  return "no";   // 默认 / 人工未完成 / 结果未知（unknown）均视为未完成
 }
 
 function tlStatusControl(event) {
   const badge = tlBadge(tlEffective(event));
   if (!enterpriseCanWrite(event)) return badge;
-  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "";   // 存量 unknown 显示为未解决
+  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "";   // 存量 unknown 显示为未完成
   const options = [
-    ["", "未解决（默认）"],
-    ["improving", "改善中"],
-    ["temporary", "临时解决"],
-    ["resolved", "已解决"],
+    ["", "未完成（默认）"],
+    ["improving", "处理中"],
+    ["temporary", "阶段完成"],
+    ["resolved", "已完成"],
   ].map(([v, label]) => `<option value="${v}"${v === value ? " selected" : ""}>${label}</option>`).join("");
   return `<select class="tl-status" data-tl-status="${escapeAttr(event.chunk_id)}" data-tl-doc="${escapeAttr(event.doc_id)}" title="标记完成情况">${options}</select>`;
 }
 
 function tlItemHtml(event) {
-  // 每条问题一行：不超过 15 字的简述 + 类型 / 厂商标签，来自哪份文档以小字显示
-  // 常识库是台账类基础数据，不存在"是否解决"，不显示解决状态标记
+  // 每条记录一行：不超过 15 字的简述 + 类型 / 厂商标签，来自哪份文档以小字显示
+  // 常识库是台账类基础数据，不存在"完成情况"，不显示完成状态标记
   const isKnowledge = docCats(event).includes("常识库");
   const vendor = event.vendor ? `<span class="tl-heading">厂商：${escapeHtml(event.vendor)}</span>` : "";
   const heading = event.heading ? `<span class="tl-heading">${escapeHtml(event.heading)}</span>` : "";
+  const department = event.department_name ? `<span class="tl-heading">${escapeHtml(event.department_name)}</span>` : "";
   return `<div class="tl-item resolved-${isKnowledge ? "none" : tlEffective(event)}">
       <div class="tl-card">
         <div class="tl-meta">
           <span class="tl-brief" title="${escapeAttr(event.summary)}">${escapeHtml(event.brief || event.summary)}</span>
-          ${isKnowledge ? "" : tlStatusControl(event)}${catBadges(event)}${vendor}${heading}
+          ${isKnowledge ? "" : tlStatusControl(event)}${catBadges(event)}${department}${vendor}${heading}
         </div>
-        <div class="tl-source"><button type="button" class="tl-doc" data-tl-pv="${escapeAttr(event.doc_id)}" title="点击预览文档">${escapeHtml(event.doc_name)}</button><span class="tl-uploader">运维人：${escapeHtml(String(event.uploaded_by_name || event.uploaded_by || "历史记录"))}</span>${enterpriseCanWrite(event) && !isKnowledge && event.doc_type !== "doc" ? `<button type="button" class="ghost track-button" data-track="${escapeAttr(event.doc_id)}">追踪 <span aria-hidden="true">↗</span></button>` : ""}</div>
+        <div class="tl-source"><button type="button" class="tl-doc" data-tl-pv="${escapeAttr(event.doc_id)}" title="点击预览文档">${escapeHtml(event.doc_name)}</button><span class="tl-uploader">记录人：${escapeHtml(String(event.uploaded_by_name || event.uploaded_by || "历史记录"))}</span>${enterpriseCanWrite(event) && !isKnowledge && event.doc_type !== "doc" ? `<button type="button" class="ghost track-button" data-track="${escapeAttr(event.doc_id)}">追踪 <span aria-hidden="true">↗</span></button>` : ""}</div>
         <div class="timeline-relations">${recordRelationsHtml(event, "tl-pv")}</div>
       </div>
     </div>`;
@@ -1637,7 +1694,7 @@ function renderTimeline() {
     tlBody.innerHTML = '<div class="tl-empty">当前时间段和筛选条件下暂无事件记录</div>';
     return;
   }
-  // 按天分组：一天可以有多个问题，每天一个分组、可折叠
+  // 按天分组：一天可以有多条记录，每天一个分组、可折叠
   const groups = new Map();   // 日期 → 当天的（已按时间倒序）
   for (const event of events) {
     if (!groups.has(event.date)) groups.set(event.date, []);
@@ -1649,7 +1706,7 @@ function renderTimeline() {
     html += `<div class="tl-group">
         <div class="tl-head" data-tl-group="${escapeAttr(date)}">
           <span class="fold">${fold}</span><span class="tl-date">${tlDateLabel(date)}</span>
-          <span class="group-count">${list.length} 个问题</span>
+          <span class="group-count">${list.length} 条记录</span>
         </div>`;
     if (!tlCollapsed.has(date)) {
       html += `<div class="tl-list">${list.map(tlItemHtml).join("")}</div>`;
@@ -1660,8 +1717,9 @@ function renderTimeline() {
 }
 
 function renderTimelineFilter() {
+  renderDepartmentFilter(tlDepartmentSelect, tlData?.departments, tlDepartmentFilter);
   // 计数来自服务端完整筛选范围，不能由当前已加载的 30 条推算。
-  const chips = [{ name: "", label: "全部", count: tlData?.issue_count || 0 }].concat(
+  const chips = [{ name: "", label: "全部", count: tlData?.event_count ?? tlData?.issue_count ?? 0 }].concat(
     (tlData?.categories || []).map((item) => ({ name: item.name, label: item.name, count: item.count }))
   );
   if (tlCatFilter && !chips.some((chip) => chip.name === tlCatFilter)) {
@@ -1684,15 +1742,15 @@ function renderTimelineFilter() {
       return `<button type="button" class="cat-chip${active ? " active" : ""}" data-tl-vendor="${escapeAttr(chip.name)}">${escapeHtml(chip.label)}<span class="chip-count">${chip.count}</span></button>`;
     }).join("");
   }
-  // 状态筛选（右侧）：已解决 / 未解决；常识库台账无解决状态，选中常识库分类时整组隐藏
+  // 状态筛选（右侧）：已完成 / 未完成；常识库台账无完成状态，选中常识库分类时整组隐藏
   if (tlCatFilter !== "常识库") {
     const counts = tlData?.status_counts || {};
     const statusChips = [
       { name: "", label: "全部状态", count: counts[""] || 0 },
-      { name: "yes", label: "已解决", count: counts.yes || 0 },
-      { name: "improving", label: "改善中", count: counts.improving || 0 },
-      { name: "temporary", label: "临时解决", count: counts.temporary || 0 },
-      { name: "no", label: "未解决", count: counts.no || 0 },
+      { name: "yes", label: "已完成", count: counts.yes || 0 },
+      { name: "improving", label: "处理中", count: counts.improving || 0 },
+      { name: "temporary", label: "阶段完成", count: counts.temporary || 0 },
+      { name: "no", label: "未完成", count: counts.no || 0 },
     ];
     html += statusChips.map((chip) => {
       const active = chip.name === tlStatusFilter;
@@ -1736,7 +1794,7 @@ async function loadTimeline({ append = false } = {}) {
   updateTimelinePagination();
   const params = new URLSearchParams({ offset: String(offset), limit: String(TL_PAGE_SIZE) });
   for (const [name, value] of Object.entries({ start_date: tlStartDate, end_date: tlEndDate,
-    category: tlCatFilter, vendor: tlVendorFilter, status: tlStatusFilter })) {
+    department_id: tlDepartmentFilter, category: tlCatFilter, vendor: tlVendorFilter, status: tlStatusFilter })) {
     if (value) params.set(name, value);
   }
   try {
@@ -1769,6 +1827,8 @@ async function loadTimeline({ append = false } = {}) {
 }
 
 function refreshTimelineIfVisible() {
+  // 知识变更后的统一刷新入口：总览统计始终包含全部可见文档与记录。
+  loadKnowledgeStats();
   tlRequestController?.abort();
   tlRequestId += 1;
   tlData = null;
@@ -1791,6 +1851,12 @@ function refreshTlDateDisplay() {
 refreshTlDateDisplay();
 document.addEventListener("change", (e) => {
   if (e.target.matches(".tl-date-wrap input[type=date]")) refreshTlDateDisplay();
+});
+
+tlDepartmentSelect.addEventListener("change", () => {
+  tlDepartmentFilter = tlDepartmentSelect.value;
+  tlCatFilter = tlVendorFilter = tlStatusFilter = "";
+  loadTimeline();
 });
 
 $("#tl-range-form").addEventListener("submit", (e) => {
@@ -1899,15 +1965,15 @@ tlBody.addEventListener("click", (e) => {
   if (link) openPreview(link.dataset.tlPv);
 });
 
-/* ---------- 厂商与问题类型模板（后台设置面板 + 编辑器联动） ---------- */
+/* ---------- 厂商与记录分类模板（后台设置面板 + 编辑器联动） ---------- */
 let vendorList = [];        // 厂商清单（/api/vendors）
 
-/* ---------- 问题类型多选下拉框（上传页 / 编辑器共用）+ 二级选项配置 ---------- */
+/* ---------- 记录分类多选下拉框（上传页 / 编辑器共用）+ 二级选项配置 ---------- */
 // 二级选项配置：类型名 → { label, required, getOptions }。后期新增二级选项只需在此登记一行。
 const CATEGORY_SUBS = {
   "厂商系统": { label: "厂商", required: true, getOptions: () => vendorList },
 };
-let categoryList = [...DOC_CATEGORY_ORDER];   // 全部可选问题类型（/api/categories：内置 + 后台自定义）
+let categoryList = [...DOC_CATEGORY_ORDER];   // 全部可选记录分类（/api/categories：内置 + 后台自定义）
 function selectableCategories() { return categoryList.filter((n) => n !== "常识库"); }
 async function loadCategories() {
   try {
@@ -1922,7 +1988,7 @@ async function loadCategories() {
 let pickerSeq = 0;   // 工厂实例序号：二级单选框分组用（同一实例内互斥）
 function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange } = {}) {
   const uid = ++pickerSeq;
-  const state = new Set();     // 已勾选的问题类型（空 = 自动判定）
+  const state = new Set();     // 已勾选的记录分类（空 = 自动判定）
   const subState = new Map();  // 类型 → 已选的二级选项值
 
   function labelText() {
@@ -1980,7 +2046,7 @@ function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange 
     has: (cat) => state.has(cat),
     subValue: (cat) => subState.get(cat) || "",
     setSub(cat, value) { if (state.has(cat)) { subState.set(cat, value || ""); renderSubs(); } },
-    set(cats) {   // 统一入口：设置选中的问题类型（同步按钮文字与二级选项区）
+    set(cats) {   // 统一入口：设置选中的记录分类（同步按钮文字与二级选项区）
       state.clear();
       for (const c of cats || []) if (selectableCategories().includes(c)) state.add(c);
       prune();
@@ -1990,7 +2056,7 @@ function createCategoryPicker({ btn, sub, emptyLabel = "自动判定", onChange 
   };
 }
 
-/* ---------- 问题类型选择窗体（上传页 / 编辑器 / 记录列表「改标签」共用） ---------- */
+/* ---------- 记录分类选择窗体（上传页 / 编辑器 / 记录列表「改标签」共用） ---------- */
 const catDialog = {
   mask: $("#cat-dialog-mask"),
   optsBox: $("#cat-dialog-opts"),
@@ -2088,7 +2154,7 @@ const recPicker = createCategoryPicker({
   btn: $("#rec-cat-btn"), sub: $("#rec-subcats"),
 });
 recPicker.set([]);   // 初始：自动判定、无二级选项
-let templatesCache = {};    // 问题类型 → 模板内容（/api/templates，后台自定义优先）
+let templatesCache = {};    // 记录分类 → 模板内容（/api/templates，后台自定义优先）
 
 
 
@@ -2114,7 +2180,7 @@ async function loadTemplates() {
   } catch (err) { templatesCache = {}; }
 }
 
-// 按问题类型预填模板：仅在内容为空或本身就是某类型的模板时替换，避免覆盖正在写的内容；
+// 按记录分类预填模板：仅在内容为空或本身就是某类型的模板时替换，避免覆盖正在写的内容；
 // 厂商系统类必须先选定厂商才会载入模板
 // 模板默认标题 = 记录名称（名称改动且正文未编辑时同步更新标题）
 let tplBase = "";      // 最近一次填入的模板文本（含预填时间行，标题为模板默认）
@@ -2453,7 +2519,7 @@ if (historyPanel) {
   });
 }
 
-// 进入「模板与厂商设置」页时拉取最新数据
+// 进入「知识分类与模板」页时拉取最新数据
 async function refreshSettings() {
   await loadVendors();
   await loadTemplates();
@@ -2461,11 +2527,11 @@ async function refreshSettings() {
   renderVendorList();
 }
 
-/* ---------- 运维周报：定时设置 + 运维人勾选 + 周报列表 ---------- */
+/* ---------- 工作周报：定时设置 + 记录人勾选 + 周报列表 ---------- */
 
 const WR_WEEKDAYS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-let wrOwners = [];        // 可勾选的运维人名单（历史记录去重）
-let wrSelected = new Set();  // 已勾选（需要生成周报）的运维人
+let wrOwners = [];        // 可勾选的记录人名单（历史记录去重）
+let wrSelected = new Set();  // 已勾选（需要生成周报）的记录人
 
 async function refreshWeeklyReport() {
   loadWeeklyReports();
@@ -2492,7 +2558,7 @@ function renderWrOwners() {
       <label class="wr-owner" style="font-size:13px;display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer">
         <input type="checkbox" data-wr-owner="${escapeAttr(name)}" ${wrSelected.has(name) ? "checked" : ""} />${escapeHtml(name)}
       </label>`).join("")
-    : '<span class="muted" style="font-size:13px">暂无运维记录，先在记录里填写运维人后再来勾选。</span>';
+    : '<span class="muted" style="font-size:13px">暂无工作记录，先在记录里填写记录人后再来勾选。</span>';
 }
 
 $("#wr-owners").addEventListener("change", (e) => {
@@ -2549,11 +2615,11 @@ $("#wr-generate").addEventListener("click", async () => {
 
 function weeklyFallbackMarkdown(r) {
   // 旧版周报（无 markdown 字段）用 items 现场拼一份兼容渲染
-  const lines = [`# ${r.person} 的运维周报`, ""];
+  const lines = [`# ${r.person} 的工作周报`, ""];
   for (const it of r.items || []) {
     lines.push(`- [${it.doc_name || "未命名记录"}](doc://${it.doc_id || ""})（${it.date || ""}）`);
   }
-  if (!(r.items || []).length) lines.push("本周没有运维记录。");
+  if (!(r.items || []).length) lines.push("本周没有工作记录。");
   return lines.join("\n");
 }
 
@@ -2683,7 +2749,7 @@ function openLogin() { window.location.assign("/login"); }
 function closeLogin() { loginMask.classList.remove("show"); }
 
 $("#mode-badge").addEventListener("click", async () => {
-  if (!currentUser) return;
+  if (portal === "search" || !currentUser) return;
   const button = $("#mode-badge");
   button.disabled = true;
   try {
@@ -2803,7 +2869,7 @@ async function openPreview(id) {
     const doc = data.doc;
     $("#pv-title").textContent = doc.name;
     const skipped = doc.skipped ? ` · 已忽略 ${doc.skipped} 个非主要部分` : "";
-    $("#pv-sub").textContent = `${catName(doc.category)} · ${doc.ext} · ${doc.chunks} 个检索单元${skipped} · ${String(doc.uploaded_at || "").slice(0, 10)} · 运维人：${doc.uploaded_by_name || doc.uploaded_by || "历史记录"}`;
+    $("#pv-sub").textContent = `${catName(doc.category)} · ${doc.ext} · ${doc.chunks} 个检索单元${skipped} · ${String(doc.uploaded_at || "").slice(0, 10)} · 记录人：${doc.uploaded_by_name || doc.uploaded_by || "历史记录"}`;
     $("#pv-download").style.display = doc.has_source ? "" : "none";
     if (!data.sections.length) {
       body.innerHTML = '<p class="muted">该文档暂无可预览内容，可能仍在处理或解析失败。</p>';
@@ -2834,14 +2900,14 @@ async function openPreview(id) {
 const mdSrc = $("#md-src");
 const mdPreview = $("#md-preview");
 const mdName = $("#md-name");
-const mdPicker = createCategoryPicker({   // 问题类型多选：保存时按所选标签落库，空为自动判定
+const mdPicker = createCategoryPicker({   // 记录分类多选：保存时按所选标签落库，空为自动判定
   btn: $("#md-cat-btn"), sub: $("#md-subcats"),
-  emptyLabel: "自动判定问题类型",
+  emptyLabel: "自动判定记录分类",
   onChange: () => maybeApplyTemplate(),   // 选类型/厂商后按需预填模板
 });
 mdPicker.set([]);
 const mdTime = $("#md-time");           // 记录时间：默认当前时间，写入内容「时间」行
-const mdResolved = $("#md-resolved");   // 是否解决：时间线徽标按此显示
+const mdResolved = $("#md-resolved");   // 完成情况：时间线徽标按此显示
 
 // 本地当前日期 → 日期控件值（YYYY-MM-DD）；记录时间只保留年月日
 function todayValue() {
@@ -2860,7 +2926,7 @@ function timeToInput(text) {
 }
 
 // 把控件时间写入内容：只替换旧模板里已有的「时间：」行；
-// 模板正文不再包含时间行（时间由「问题日期」控件记录进数据库，不写正文）
+// 模板正文不再包含时间行（时间由「记录日期」控件记录进数据库，不写正文）
 function applyTimeToContent(content) {
   const label = mdTime.value || "";
   if (!label) return content;
@@ -2877,6 +2943,7 @@ const mdStatus = $("#md-status");
 let editingId = "";          // 空表示新建
 let trackingParent = null;   // 仅新建时使用；编辑已有记录不修改父子关系
 let editingChunks = 0;
+let recordAttachmentsReady = true;  // 先读取已有附件数量，再接收编辑记录的新附件
 let lastEditorRange = { start: 0, end: 0 };
 let mdInsert = { kind: "link", range: { start: 0, end: 0 } };
 let editorMode = "preview";   // 默认预览模式：在渲染结果上直接书写，不显示 Markdown 源码
@@ -3188,7 +3255,7 @@ function renderDocRefList(kw) {
     ? items.map((d) =>
         `<button type="button" class="doc-pop-item" data-ref-id="${escapeAttr(d.id)}" data-ref-name="${escapeAttr(String(d.name || ""))}">` +
         `<span>${escapeHtml(String(d.name || "未命名"))}</span>` +
-        `<span class="doc-pop-kind">${d.doc_type === "record" ? "运维记录" : escapeHtml(catName(d.category))}</span></button>`).join("")
+        `<span class="doc-pop-kind">${d.doc_type === "record" ? "工作记录" : escapeHtml(catName(d.category))}</span></button>`).join("")
     : '<div class="doc-pop-empty">没有匹配的文档</div>';
 }
 
@@ -3245,7 +3312,7 @@ async function loadEditsLog() {
           const name = it.doc_name || "（记录已删除）";
           return `<div class="edits-row"><span class="edits-action">${escapeHtml(it.action || "修改")}</span>` +
             `<span class="doc-link" data-pv="${escapeAttr(it.doc_id || "")}" title="点击预览">${escapeHtml(name)}</span>` +
-            `<span class="doc-pop-kind">${it.doc_type === "record" ? "运维记录" : "基础文档"}</span>` +
+            `<span class="doc-pop-kind">${it.doc_type === "record" ? "工作记录" : "基础文档"}</span>` +
             `<span>${escapeHtml(who)}</span>` +
             `<span class="doc-pop-kind">${escapeHtml(it.edited_at || "")}</span></div>`;
         }).join("")
@@ -3497,11 +3564,10 @@ async function handleImagePaste(event) {
   }
   const items = Array.from((event.clipboardData && event.clipboardData.items) || []);
   const imageItem = items.find((it) => it.kind === "file" && /^image\//.test(it.type));
-  if (!imageItem) return;   // 纯文本或富文本粘贴交给浏览器默认处理
+  const file = files.find((item) => /^image\//.test(item.type)) || imageItem?.getAsFile();
+  if (!file) return;   // 纯文本或富文本粘贴交给浏览器默认处理
   event.preventDefault();
   if (!isAdmin) { toast("查询端不支持上传图片"); return; }
-  const file = imageItem.getAsFile();
-  if (!file) return;
   mdStatus.textContent = "图片上传中…";
   try {
     const url = await uploadImageFile(file);
@@ -3614,12 +3680,13 @@ $("#tracking-parent-preview").addEventListener("click", () => { if (trackingPare
 $("#tracking-cancel").addEventListener("click", clearTracking);
 
 function setEditorTitle() {
-  $("#editor-title").textContent = editingId ? `编辑处理记录：${mdName.value || "未命名"}` : trackingParent ? "新增问题追踪记录" : "新建运维处理记录";
+  $("#editor-title").textContent = editingId ? `编辑处理记录：${mdName.value || "未命名"}` : trackingParent ? "新增跟进记录" : "新建工作记录";
   $("#md-save").textContent = editingId ? "保存修改" : "保存并入知识库";
 }
 
 function resetEditor({ force = false } = {}) {
   if (!recordAttachmentQueue.prepareContextChange({ force })) return false;
+  recordAttachmentsReady = true;
   trackingParent = null;
   renderTrackingParent();
   recPicker.set([]);
@@ -3656,6 +3723,7 @@ async function loadEditable(id) {
   if (doc && !enterpriseCanWrite(doc)) { toast("没有修改此文档的权限"); return; }
   enterpriseRenderScope("record", doc, true);
   editingId = id;
+  recordAttachmentsReady = false;
   editingChunks = doc ? doc.chunks : 0;
   tplBase = "";   // 编辑已有记录，不参与模板标题同步
   tplTitle = "";
@@ -3671,16 +3739,21 @@ async function loadEditable(id) {
   renderEditorPreview();
   setEditorTitle();
   try {
-    const resp = await fetch("/api/documents/" + encodeURIComponent(id) + "/source");
-    const data = await resp.json();
+    const [resp, metadataResp] = await Promise.all([
+      fetch("/api/documents/" + encodeURIComponent(id) + "/source"),
+      fetch("/api/documents/" + encodeURIComponent(id)),
+    ]);
+    const [data, metadata] = await Promise.all([resp.json(), metadataResp.json()]);
     if (!resp.ok) throw new Error(data.detail || "读取失败");
+    if (!metadataResp.ok) throw new Error(metadata.detail || "附件信息读取失败，请重试");
     if (requestId !== editorRequest) return;
     mdSrc.value = typeof data.content === "string" ? data.content : "";
     mdResetHistory();   // 回填内容后撤销栈从零开始
     mdTime.value = timeToInput(mdSrc.value) || todayValue();   // 回填记录里的时间
     lastEditorRange = { start: 0, end: 0 };
     mdName.value = data.name;
-    recordAttachmentQueue.bind({ id, name: data.name });
+    recordAttachmentQueue.bind({ ...metadata, id, name: data.name });
+    recordAttachmentsReady = true;
     mdStatus.textContent = "";
     $("#md-restored").style.display = data.restored ? "block" : "none";
     renderEditorPreview();
@@ -3692,14 +3765,24 @@ async function loadEditable(id) {
 
 async function loadRecordList() {
   if (!isAdmin) return;
+  const requestId = ++recRequestId;
+  const params = new URLSearchParams({ doc_type: "record" });
+  if (recDepartmentFilter) params.set("department_id", recDepartmentFilter);
   try {
-    const resp = await fetch("/api/documents?doc_type=record");
+    const resp = await fetch(`/api/documents?${params}`);
     const data = await resp.json();
+    if (requestId !== recRequestId) return;
+    if (!resp.ok) throw new Error("记录加载失败");
     recDocs = data.documents || [];
+    renderDepartmentFilter(recDepartmentSelect, data.departments, recDepartmentFilter);
   } catch {
+    if (requestId === recRequestId) {
+      const rows = $("#rec-rows");
+      if (rows) rows.innerHTML = '<tr><td colspan="7" class="muted">记录加载失败，请刷新重试</td></tr>';
+    }
     return;
   }
-  if (editingId && !recDocs.some((d) => d.id === editingId) && !docDocs.some((d) => d.id === editingId)) resetEditor();
+  if (!docDepartmentFilter && !recDepartmentFilter && editingId && !recDocs.some((d) => d.id === editingId) && !docDocs.some((d) => d.id === editingId)) resetEditor();
   renderRecList();
 }
 
@@ -3728,8 +3811,8 @@ function renderRecList() {
   const docs = recCatFilter ? recDocs.filter((d) => docCats(d).includes(recCatFilter)) : recDocs;
   if (!docs.length) {
     rows.innerHTML = `<tr><td colspan="7" class="muted">${recCatFilter
-      ? `「${escapeHtml(recCatFilter)}」分类下暂无运维问题记录`
-      : "暂无运维问题记录：在「运维处理问题上传」页上传记录文件或在线写入处理记录"}</td></tr>`;
+      ? `「${escapeHtml(recCatFilter)}」分类下暂无工作记录`
+      : "暂无工作记录：在「新增工作记录」页上传文件或在线填写记录"}</td></tr>`;
     return;
   }
   rows.innerHTML = docs.map(docRowHtml).join("");
@@ -3758,7 +3841,7 @@ function fileTimeValue(file) {
 
 const recordAttachmentQueue = RecordAttachments.mount({
   root: $("#record-attachments"),
-  canAdd: () => isAdmin,
+  canAdd: () => isAdmin && recordAttachmentsReady,
   notify: toast,
   onUploaded: (result, target) => {
     if (result.count) toast(`已向《${target.name}》添加 ${result.count} 个附件`);
@@ -3805,7 +3888,7 @@ async function uploadRecordFiles(files) {
     const missingSub = cats.find((c) => CATEGORY_SUBS[c]?.required && !recPicker.subValue(c));
     if (missingSub) {
       status.textContent = "";
-      toast(`问题类型为「${missingSub}」时请先选择${CATEGORY_SUBS[missingSub].label}`);
+      toast(`记录分类为「${missingSub}」时请先选择${CATEGORY_SUBS[missingSub].label}`);
       return;
     }
     if (cats.length) form.append("categories", cats.join("|"));
@@ -3822,7 +3905,7 @@ async function uploadRecordFiles(files) {
       else {
         succeeded += 1;
         firstSavedDoc = firstSavedDoc || data.doc;
-        toast(`运维记录已入库：${f.name}，${data.doc.chunks} 个检索单元`);
+        toast(`工作记录已入库：${f.name}，${data.doc.chunks} 个检索单元`);
       }
     } catch {
       toast(`${f.name}：网络异常`);
@@ -3978,7 +4061,7 @@ $("#md-save").addEventListener("click", async () => {
   const mdVendorValue = mdPicker.subValue("厂商系统");
   const missingSub = mdCats.find((c) => CATEGORY_SUBS[c]?.required && !mdPicker.subValue(c));
   if (missingSub) {
-    toast(`问题类型为「${missingSub}」时必须选择${CATEGORY_SUBS[missingSub].label}`);
+    toast(`记录分类为「${missingSub}」时必须选择${CATEGORY_SUBS[missingSub].label}`);
     return;
   }
   const filename = normalizeMdFilename();
@@ -4114,6 +4197,7 @@ $("#rebuild").addEventListener("click", async () => {
     if (!resp.ok) throw new Error(data.detail || "重建失败");
     toast(`已重建：${data.chunks} 个分块 / ${data.documents} 份文档`);
     loadDocuments();
+    loadKnowledgeStats();
   } catch (err) { toast(String(err.message || err)); }
   finally { btn.disabled = false; }
 });
@@ -4126,15 +4210,15 @@ async function initPage() {
     portal = data.portal || (data.admin ? "admin" : "search");
     authEnabled = data.auth === true;
     const authenticated = data.authenticated === true || data.admin === true;
-    if (!authenticated) { window.location.replace("/login"); return; }
+    if (!authenticated && portal !== "search") { window.location.replace("/login"); return; }
     isAdmin = portal === "admin" && data.can_write === true;
     isSuperAdmin = portal === "admin" && data.role === "admin";
     isAccountAdmin = portal === "admin" && (data.can_manage_users === true || data.role === "admin");
     applyRoleVisibility();
     loadTopQuestions();
-    currentUser = String(data.account || data.user || "");
-    currentDisplayName = String(data.display_name || data.username || currentUser);
-    if (data.must_change_password === true) { window.location.replace("/change-password"); return; }
+    currentUser = portal === "search" ? "" : String(data.account || data.user || "");
+    currentDisplayName = portal === "search" ? "公共访问" : String(data.display_name || data.username || currentUser);
+    if (portal !== "search" && data.must_change_password === true) { window.location.replace("/change-password"); return; }
     await enterpriseInitialize(data);
   } catch {
     // 会话状态读取失败：清除角色可见性并回到公共页签，避免残留管理员界面
@@ -4149,22 +4233,24 @@ async function initPage() {
   document.body.classList.toggle("admin-portal", portal === "admin");
   document.body.classList.toggle("admin-mode", isAdmin);
   document.body.classList.toggle("account-admin", isAccountAdmin);
+  document.body.classList.toggle("public-access", portal === "search");
   $("#account-summary").hidden = !currentUser;
   const readableUser = currentDisplayName && currentDisplayName !== currentUser ? `${currentDisplayName}（${currentUser}）` : currentUser;
   $("#current-user").textContent = readableUser;
   $("#current-user").title = readableUser;
-  $("#current-role").textContent = enterpriseIdentity?.role === "admin" ? "平台管理员" : isAccountAdmin ? "部门管理员" : isAdmin ? "文档编辑者" : "只读成员";
+  $("#current-role").textContent = portal === "search" ? "公共访客" : enterpriseIdentity?.role === "admin" ? "平台管理员" : isAccountAdmin ? "部门管理员" : isAdmin ? "文档编辑者" : enterpriseIdentity?.department_ids?.length ? "权限未配置" : "未分配部门";
   $("#upload-account").textContent = readableUser || "—";
   const operatorInput = $("#rec-operator");
   if (operatorInput && !operatorInput.value) operatorInput.value = currentDisplayName || currentUser || "";
   $("#change-password-link").hidden = !currentUser;
   const badge = $("#mode-badge");
-  badge.textContent = "退出登录";
+  badge.textContent = portal === "search" ? "公共访问 · 仅公共文档" : "退出登录";
   badge.className = "mode-badge " + (isAdmin ? "admin" : "search");
-  badge.title = "退出当前账号";
+  badge.title = portal === "search" ? "无需登录，仅查询企业公开发布的文档" : "退出当前账号";
+  badge.disabled = portal === "search";
   $("#docs-tab-btn").textContent = portal === "search" ? "文档检索" : "文档管理";
-  await loadCategories();   // 问题类型清单：内置 + 后台自定义，选择窗体用
-  await loadDocuments();
+  await loadCategories();   // 记录分类清单：内置 + 后台自定义，选择窗体用
+  await Promise.all([loadKnowledgeStats(), loadDocuments()]);
   sendBtn.disabled = false;
   if (isAdmin) {
     await loadVendors();

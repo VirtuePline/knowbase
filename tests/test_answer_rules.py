@@ -42,7 +42,8 @@ class TaxonomyTest(unittest.TestCase):
 
     def test_fallback_text_is_fixed(self):
         self.assertTrue(FALLBACK_TEXT.startswith("【知识库未查询到匹配的记录】"))
-        self.assertIn("核对设备编号", FALLBACK_TEXT)
+        self.assertIn("核对主题、关键词", FALLBACK_TEXT)
+        self.assertNotIn("运维", FALLBACK_TEXT)
 
 
 class ConflictTest(unittest.TestCase):

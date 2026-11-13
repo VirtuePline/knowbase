@@ -4,8 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="theme-color" content="#102f2e" />
+<script src="/static/theme.js"></script>
 <title>登录企业知识工作台 · 企业知识库</title>
 <link rel="stylesheet" href="/static/accounts.css" />
+<link rel="stylesheet" href="/static/theme.css" />
 <script src="/static/accounts.js" defer></script>
 </head>
 <body data-account-page="login">
@@ -19,6 +21,7 @@
   </section>
   <section class="account-form-region" aria-labelledby="account-title">
     <div class="account-form-wrap">
+      <div class="account-theme-row"><label class="theme-switcher"><span>主题颜色</span><select data-theme-select aria-label="主题颜色"><option value="teal">青绿</option><option value="blue">蓝色</option><option value="violet">紫色</option><option value="amber">琥珀</option></select><span class="theme-status" data-theme-status aria-live="polite"></span></label></div>
       <span class="account-access-note"><span class="access-dot" aria-hidden="true"></span>企业成员访问入口</span>
       <div class="account-heading"><span class="account-section-label">欢迎回来</span><h2 id="account-title">登录企业知识工作台</h2><p>使用您的账号，在授权范围内查找企业公共知识与部门资料。</p></div>
       

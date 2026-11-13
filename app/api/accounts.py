@@ -20,7 +20,7 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(default="", max_length=128)
     role: str = "user"
-    department_ids: list[str] = Field(default_factory=lambda: ["operations"])
+    department_ids: list[str] = Field(default_factory=lambda: [database.default_department_id()])
     department_roles: dict[str, str] = Field(default_factory=dict)
 
 
@@ -34,6 +34,10 @@ class DepartmentRequest(BaseModel):
     name: str
 
 
+class DepartmentDeleteRequest(BaseModel):
+    target_department_id: str = Field(default="", max_length=48)
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(default="", max_length=128)
     new_password: str = Field(default="", max_length=128)
@@ -45,7 +49,7 @@ def identity_payload(identity: dict | None) -> dict:
     try:
         departments = database.list_departments() if identity else []
     except AttributeError:
-        departments = [{"id": "operations", "name": "运维部门"}]
+        departments = [{"id": "operations", "name": "默认部门"}]
     manager = bool(identity and (identity["role"] == "admin" or access.managed_departments(identity)))
     return {"admin": bool(identity), "authenticated": bool(identity), "auth": True,
             "user": identity["username"] if identity else "",
@@ -138,9 +142,10 @@ def register(req: RegisterRequest, identity: dict = Depends(require_account_admi
         raise HTTPException(status_code=400, detail="注册账号的角色只能是普通用户")
     try:
         account, display_name = auth.validate_registration(req.account, req.username, req.password)
-        departments, roles = _validate_memberships(req.department_ids, req.department_roles, identity)
-        auth.create_user(account, role="user", display_name=display_name,
-                         department_ids=departments, department_roles=roles)
+        with database.department_mutation_lock:
+            departments, roles = _validate_memberships(req.department_ids, req.department_roles, identity)
+            auth.create_user(account, role="user", display_name=display_name,
+                             department_ids=departments, department_roles=roles)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except DuplicateKeyError:
@@ -177,15 +182,20 @@ def _validate_memberships(departments, roles, identity):
     existing = {row["id"] for row in database.list_departments()}
     if any(d not in existing for d in departments) or set(roles) - set(departments):
         raise ValueError("部门不存在或角色与成员部门不匹配")
-    if any(role not in {"admin", "editor", "member"} for role in roles.values()):
-        raise ValueError("部门角色只能是 admin / editor / member")
+    if any(role not in {"admin", "editor"} for role in roles.values()):
+        raise ValueError("部门角色只能是 admin / editor")
     if identity["role"] != "admin" and set(departments) - access.managed_departments(identity):
         raise HTTPException(status_code=403, detail="只能管理本部门成员")
-    return departments, {d: roles.get(d, "member") for d in departments}
+    return departments, {d: roles.get(d, "editor") for d in departments}
 
 
 @auth_router.patch("/admin/users/{account}/departments")
 def set_memberships(account: str, req: MembershipRequest, identity: dict = Depends(require_account_admin)):
+    with database.department_mutation_lock:
+        return _set_memberships(account, req, identity)
+
+
+def _set_memberships(account: str, req: MembershipRequest, identity: dict):
     row = mongo.db().users.find_one({"_id": account})
     if not row:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -199,7 +209,12 @@ def set_memberships(account: str, req: MembershipRequest, identity: dict = Depen
         managed = access.managed_departments(identity)
         original = auth._row_identity(row)
         departments += [d for d in original["department_ids"] if d not in managed]
-        roles.update({d: r for d, r in original["department_roles"].items() if d not in managed})
+        stored_roles = row.get("department_roles")
+        for department in original["department_ids"]:
+            if department not in managed:
+                # 非法旧角色必须保持拒绝写入；不能因清理掉角色键而变为默认编辑者。
+                roles[department] = original["department_roles"].get(
+                    department, stored_roles.get(department) if isinstance(stored_roles, dict) else None)
     mongo.db().users.update_one({"_id": account}, {"$set": {
         "department_ids": departments, "department_roles": roles}})
     database.bump_access_revision()
@@ -213,21 +228,53 @@ def departments(identity: dict = Depends(require_login)):
     return {"departments": database.list_departments()}
 
 
-def _save_department(department_id, name, identity):
+def _save_department(department_id, name, identity, *, create):
     if identity["role"] != "admin":
         raise HTTPException(status_code=403, detail="只有平台管理员可以维护部门")
     try:
-        department = database.save_department(department_id, name)
+        department = database.save_department(department_id, name, create=create)
         return {"department": department, "departments": database.list_departments()}
+    except database.DepartmentNotFound:
+        raise HTTPException(status_code=404, detail="部门不存在") from None
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="部门标识已存在，请使用其他标识") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @auth_router.post("/departments")
 def create_department(req: DepartmentRequest, identity: dict = Depends(require_login)):
-    return _save_department(req.id, req.name, identity)
+    return _save_department(req.id, req.name, identity, create=True)
 
 
 @auth_router.put("/departments/{department_id}")
 def rename_department(department_id: str, req: DepartmentRequest, identity: dict = Depends(require_login)):
-    return _save_department(department_id, req.name, identity)
+    return _save_department(department_id, req.name, identity, create=False)
+
+
+def _require_platform_admin(identity: dict) -> None:
+    if identity["role"] != "admin":
+        raise HTTPException(status_code=403, detail="只有平台管理员可以删除部门")
+
+
+@auth_router.get("/departments/{department_id}/deletion")
+def department_deletion_info(department_id: str, identity: dict = Depends(require_login)):
+    _require_platform_admin(identity)
+    try:
+        return database.department_deletion_info(department_id)
+    except database.DepartmentNotFound:
+        raise HTTPException(status_code=404, detail="部门不存在") from None
+
+
+@auth_router.delete("/departments/{department_id}")
+def delete_department(department_id: str, req: DepartmentDeleteRequest | None = None,
+                      identity: dict = Depends(require_login)):
+    _require_platform_admin(identity)
+    try:
+        return database.delete_department(department_id, req.target_department_id if req else "")
+    except database.DepartmentNotFound:
+        raise HTTPException(status_code=404, detail="部门不存在") from None
+    except database.DepartmentDeleteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None

@@ -77,10 +77,16 @@ def _require_write(doc_id: str) -> DocRecord:
     return record
 
 
-def _visible_records() -> list[DocRecord]:
+def _visible_records(department_id: str = "") -> list[DocRecord]:
     if access.is_internal():
-        return database.list_all()
-    return [database._row_to_doc(row) for row in database._docs().find(access.read_filter())]
+        records = database.list_all()
+        return [doc for doc in records if not department_id or doc.department_id == department_id]
+    query = access.read_filter()
+    if department_id:
+        owner = ({"department_id": {"$in": ["operations", "", None]}} if department_id == "operations"
+                 else {"department_id": department_id})
+        query = {"$and": [query, owner]}
+    return [database._row_to_doc(row) for row in database._docs().find(query)]
 
 
 def _validate_images(content: str) -> set[str]:
@@ -114,7 +120,7 @@ def _same_scope(record: DocRecord, scope: dict) -> bool:
 
 
 def _tracking_root(parent_id: str, doc_id: str) -> str:
-    """关系只在创建时设定，父记录必须是已入库的运维记录。"""
+    """关系只在创建时设定，父记录必须是已入库的工作记录。"""
     if not parent_id:
         return doc_id
     if parent_id == doc_id:
@@ -126,7 +132,7 @@ def _tracking_root(parent_id: str, doc_id: str) -> str:
     is_record = parent.doc_type == "record" or (
         not parent.doc_type and "常识库" not in record_categories(parent))
     if parent.status != "ready" or not is_record:
-        raise ValueError("只能跟踪已完成入库的运维问题记录")
+        raise ValueError("只能跟踪已完成入库的工作记录")
     return parent.root_id or parent.id
 
 
@@ -134,8 +140,11 @@ def _raw_path(record: DocRecord) -> Path:
     return settings.raw_dir / record.stored_name
 
 
-def _doc_dict(record: DocRecord) -> dict:
+def _doc_dict(record: DocRecord, department_names: dict | None = None) -> dict:
     data = record.to_dict()
+    if department_names is None:
+        department_names = database.department_names([record.department_id])
+    data["department_name"] = department_names.get(record.department_id, "未命名部门")
     data["editable"] = is_editable(record.ext)
     data["has_source"] = _raw_path(record).is_file()
     data["can_write"] = access.can_write(record)
@@ -204,28 +213,56 @@ def _with_categories(docs: list[DocRecord]) -> list[DocRecord]:
     return filled
 
 
-def list_documents(category: str = "", doc_type: str = "") -> list[dict]:
-    """文档列表。doc_type=doc 返回基础文档（含常识库：文档即常识库，不再分开），record 只返回运维问题记录。"""
-    docs = _with_categories(_visible_records())
-    if doc_type == "doc":
-        docs = [doc for doc in docs if doc.doc_type == "doc"]
-    elif doc_type == "record":
-        docs = [doc for doc in docs if doc.doc_type == "record"]
+def list_documents(category: str = "", doc_type: str = "", department_id: str = "") -> list[dict]:
+    """文档列表。doc_type=doc 返回基础文档（含常识库：文档即常识库，不再分开），record 只返回工作记录。"""
+    docs = _with_categories(_records_of_type(_visible_records(department_id), doc_type))
     if category:
         name = normalize_doc_category(category)
         docs = [doc for doc in docs if name in record_categories(doc)]
-    return [_doc_dict(doc) for doc in docs]
+    names = database.department_names(doc.department_id for doc in docs)
+    return [_doc_dict(doc, names) for doc in docs]
 
 
-def category_counts(doc_type: str = "") -> list[dict]:
+def category_counts(doc_type: str = "", department_id: str = "") -> list[dict]:
     """各分类的文档数，顺序固定，供前端筛选条使用；统计范围与列表过滤一致。"""
-    docs = _with_categories(_visible_records())
-    if doc_type == "doc":
-        docs = [doc for doc in docs if doc.doc_type == "doc"]
-    elif doc_type == "record":
-        docs = [doc for doc in docs if doc.doc_type == "record"]
+    return _category_counts(_with_categories(_records_of_type(_visible_records(department_id), doc_type)))
+
+
+def _records_of_type(records: list[DocRecord], doc_type: str) -> list[DocRecord]:
+    return [doc for doc in records if not doc_type or doc.doc_type == doc_type]
+
+
+def _category_counts(docs: list[DocRecord]) -> list[dict]:
     counter = Counter(tag for doc in docs for tag in record_categories(doc))   # 多标签逐个计数
-    return [{"name": name, "count": counter.get(name, 0)} for name in DOC_CATEGORY_ORDER]
+    order = [*DOC_CATEGORY_ORDER, *sorted(set(counter) - set(DOC_CATEGORY_ORDER))]
+    return [{"name": name, "count": counter.get(name, 0)} for name in order]
+
+
+def visible_departments(doc_type: str = "") -> list[dict]:
+    docs = _records_of_type(_visible_records(), doc_type)
+    counts = Counter(doc.department_id for doc in docs)
+    names = database.department_names(counts)
+    return _department_options(counts, names)
+
+
+def _department_options(counts: Counter, names: dict[str, str]) -> list[dict]:
+    return sorted(({"id": key, "name": names[key], "count": count} for key, count in counts.items()),
+                  key=lambda item: (item["name"], item["id"]))
+
+
+def document_listing(category: str = "", doc_type: str = "", department_id: str = "") -> dict:
+    """同一批可见元数据生成列表和各项统计，避免重复读库与重复推断旧分类。"""
+    visible = _records_of_type(_visible_records(), doc_type)
+    department_counts = Counter(doc.department_id for doc in visible)
+    names = database.department_names(department_counts)
+    scoped = _with_categories([doc for doc in visible if not department_id or doc.department_id == department_id])
+    selected = scoped
+    if category:
+        name = normalize_doc_category(category)
+        selected = [doc for doc in scoped if name in record_categories(doc)]
+    return {"documents": [_doc_dict(doc, names) for doc in selected],
+            "categories": _category_counts(scoped), "stats": _record_stats(scoped),
+            "departments": _department_options(department_counts, names)}
 
 
 def set_category(doc_id: str, category: str) -> dict:
@@ -252,7 +289,7 @@ def set_vendor(doc_id: str, vendor: str) -> dict:
     _require_write(doc_id)
     value = (vendor or "").strip()
     if value and value not in database.list_vendors():
-        raise ValueError(f"未知厂商：{value}，请先在「模板与厂商设置」里添加")
+        raise ValueError(f"未知厂商：{value}，请先在「知识分类与模板」里添加")
     database.set_vendor(doc_id, value)
     return _doc_dict(_require(doc_id))
 
@@ -295,13 +332,13 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
            visibility: str = "department", shared_department_ids: list[str] | None = None) -> dict:
     """上传文档；category / categories 非空时入库后强制设置分类，优先于自动判定。
 
-    doc_type：doc=基础文档（文档管理页上传），record=运维问题记录（运维问题上传页上传）。
+    doc_type：doc=基础文档（文档管理页上传），record=工作记录（记录上传页上传）。
     categories 为多标签（| 或逗号分隔），非空时按其设置全部分类，首标签为主分类；
     category 为单值兜底（常识注入等固定分类场景）。
-    date 为记录时间日期部分（YYYY-MM-DD），运维问题上传时人工选择的问题发生日期。
+    date 为记录时间日期部分（YYYY-MM-DD），记录上传时人工选择的问题发生日期。
     vendor 为厂商系统类记录的厂商，入库后落登记表。
     resolved 为录入时选择的解决状态（resolved / improving / unresolved），时间线按此显示。
-    uploaded_by 为创建账号；uploaded_by_name 为运维人用户名（默认当前登录用户名，可改）；
+    uploaded_by 为创建账号；uploaded_by_name 为记录人用户名（默认当前登录用户名，可改）；
     parent_id 非空时新建独立追踪，不覆盖或复用父记录。
     """
     scope = access.creation_scope(department_id, visibility, shared_department_ids)
@@ -334,7 +371,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         if vendor:
             database.set_vendor(existing.id, vendor)
         if not date and existing.doc_type == "record":
-            # 运维记录未指定日期时默认取文件修改日期，其次当前日期
+            # 工作记录未指定日期时默认取文件修改日期，其次当前日期
             date = file_time[:10] if file_time else datetime.date.today().isoformat()
         if date:
             set_document_time(existing.id, date)   # 重复文件也按本次选择修正记录时间
@@ -365,7 +402,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         database.set_vendor(doc_id, vendor)
         result = _require(doc_id)
     if not date and record.doc_type == "record":
-        # 运维记录未指定日期时默认取文件修改日期，其次当前日期
+        # 工作记录未指定日期时默认取文件修改日期，其次当前日期
         date = file_time[:10] if file_time else datetime.date.today().isoformat()
     if date:
         set_document_time(doc_id, date)
@@ -611,13 +648,13 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     category 为单值兜底。两者都为空时保留自动判定结果。
     vendor 仅对挂有「厂商系统」标签的记录有意义：其余分类忽略。
     resolved 为录入时选择的解决状态；空串时保留原状态（新建则为未标记）。
-    uploaded_by / uploaded_by_name / parent_id 仅用于创建，编辑保留原始创建账号、运维人与跟踪关系。
+    uploaded_by / uploaded_by_name / parent_id 仅用于创建，编辑保留原始创建账号、记录人与跟踪关系。
     """
     if not content.strip():
         raise ValueError("内容为空，未保存")
     _validate_images(content)
     if vendor and vendor not in recordmeta.list_vendors():
-        raise ValueError("未知厂商，请先在「模板与厂商设置」里添加")
+        raise ValueError("未知厂商，请先在「知识分类与模板」里添加")
     cats = normalize_doc_categories(part for part in _CAT_SPLIT.split(categories or "") if part.strip())
     if not cats and (category or "").strip():
         cats = [normalize_doc_category(category)]
@@ -636,16 +673,16 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     else:
         scope = access.creation_scope(department_id, visibility, shared_department_ids)
         date_suffix = database.now_iso()[:10].replace("-", "")
-        base = Path((filename or "").strip() or f"运维记录_{date_suffix}").name
+        base = Path((filename or "").strip() or f"工作记录_{date_suffix}").name
         ext = ".txt" if base.lower().endswith(".txt") else ".md"
         name = base[: -len(ext)] if base.lower().endswith(ext) else base
-        name = name.strip() or f"运维记录_{date_suffix}"
+        name = name.strip() or f"工作记录_{date_suffix}"
         doc_id = uuid.uuid4().hex[:12]
         record = None
 
     if record:
         uploaded_by, parent_id, root_id = record.uploaded_by, record.parent_id, record.root_id
-        uploaded_by_name = record.uploaded_by_name   # 编辑保留原运维人
+        uploaded_by_name = record.uploaded_by_name   # 编辑保留原记录人
     else:
         uploaded_by = (uploaded_by or "").strip()
         uploaded_by_name = (uploaded_by_name or "").strip()
@@ -728,10 +765,13 @@ def rebuild() -> dict:
     return {"chunks": len(index.chunks), "documents": index.doc_count()}
 
 
-def stats() -> dict:
-    if access.is_internal():
+def stats(doc_type: str = "", department_id: str = "") -> dict:
+    if access.is_internal() and not doc_type and not department_id:
         return retrieval.stats()
-    records = _visible_records()
+    return _record_stats(_records_of_type(_visible_records(department_id), doc_type))
+
+
+def _record_stats(records: list[DocRecord]) -> dict:
     return {"documents": len(records), "chunks": sum(doc.chunks for doc in records),
             "llm": settings.llm_model if settings.llm_available else "未配置（仅返回检索摘录）",
             "embedding": settings.embedding_model if settings.embedding_enabled else "已停用",

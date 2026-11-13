@@ -37,7 +37,7 @@ function enterpriseOptions(departments, selected = []) {
 function enterpriseScopeMarkup(prefix) {
   return `<div class="document-scope" data-scope="${prefix}">
     <label>所属部门<select id="${prefix}-department" required></select></label>
-    <label>可见范围<select id="${prefix}-visibility"><option value="department">部门文档</option><option value="public">企业公共文档（全体员工）</option></select></label>
+    <label>可见范围<select id="${prefix}-visibility"><option value="department">部门文档</option><option value="public">企业公共文档（无需登录可访问）</option></select></label>
     <label class="scope-shared">共享给其他部门<select id="${prefix}-shared" multiple aria-label="共享部门，可多选"></select><small>不选则仅本部门可见；共享仅授予阅读权限。</small></label>
   </div>`;
 }
@@ -86,7 +86,7 @@ function enterpriseAppendScope(form, prefix) {
 }
 function enterpriseDocumentLabel(doc) {
   const shared = doc.shared_department_ids || [];
-  return `<div class="document-access"><span>${enterpriseEscape(enterpriseDepartmentName(doc.department_id || "operations"))}</span><span>${doc.visibility === "public" ? "企业公共" : "部门文档"}</span>${shared.length ? `<span>共享：${shared.map(enterpriseDepartmentName).map(enterpriseEscape).join("、")}</span>` : ""}</div>`;
+  return `<div class="document-access"><span>${enterpriseEscape(doc.department_name || enterpriseDepartmentName(doc.department_id || "operations"))}</span><span>${doc.visibility === "public" ? "企业公共" : "部门文档"}</span>${shared.length ? `<span>共享：${shared.map(enterpriseDepartmentName).map(enterpriseEscape).join("、")}</span>` : ""}</div>`;
 }
 async function enterpriseJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -95,7 +95,7 @@ async function enterpriseJson(url, options = {}) {
   return data;
 }
 function enterpriseDepartmentRolesMarkup(prefix, selected = [], roles = {}) {
-  return enterpriseManagedDepartments().map((department) => `<label class="department-role"><input type="checkbox" data-membership="${enterpriseEscape(department.id)}"${selected.includes(department.id) ? " checked" : ""} />${enterpriseEscape(department.name)}<select data-department-role="${enterpriseEscape(department.id)}">${[["member", "只读成员"], ["editor", "文档编辑者"], ["admin", "部门管理员"]].map(([role, label]) => `<option value="${role}"${(roles[department.id] || "member") === role ? " selected" : ""}>${label}</option>`).join("")}</select></label>`).join("") || '<span class="muted">暂无可管理的部门</span>';
+  return enterpriseManagedDepartments().map((department) => `<label class="department-role"><input type="checkbox" data-membership="${enterpriseEscape(department.id)}"${selected.includes(department.id) ? " checked" : ""} />${enterpriseEscape(department.name)}<select data-department-role="${enterpriseEscape(department.id)}">${[["editor", "文档编辑者"], ["admin", "部门管理员"]].map(([role, label]) => `<option value="${role}"${(roles[department.id] === "admin" ? "admin" : "editor") === role ? " selected" : ""}>${label}</option>`).join("")}</select></label>`).join("") || '<span class="muted">暂无可管理的部门</span>';
 }
 function enterpriseMembershipValue(container, existing = null) {
   const managed = new Set(enterpriseManagedDepartments().map((department) => department.id));
@@ -104,7 +104,7 @@ function enterpriseMembershipValue(container, existing = null) {
   container.querySelectorAll("[data-membership]:checked").forEach((checkbox) => {
     const id = checkbox.dataset.membership;
     ids.push(id);
-    roles[id] = [...container.querySelectorAll("[data-department-role]")].find((select) => select.dataset.departmentRole === id)?.value || "member";
+    roles[id] = [...container.querySelectorAll("[data-department-role]")].find((select) => select.dataset.departmentRole === id)?.value || "editor";
   });
   return { department_ids: ids, department_roles: roles };
 }
@@ -113,15 +113,16 @@ function enterpriseUsersRows(users) {
   return users.map((user) => {
     const account = user.account || user.username;
     const admin = user.role === "admin";
-    return `<tr><td>${enterpriseEscape(account)}</td><td>${enterpriseEscape(user.display_name || account)}</td><td>${admin ? "平台管理员" : (user.department_ids || []).map((id) => `${enterpriseEscape(enterpriseDepartmentName(id))} · ${{ member: "只读成员", editor: "编辑者", admin: "部门管理员" }[user.department_roles?.[id]] || "成员"}`).join("<br />")}</td><td>${enterpriseEscape(String(user.created_at || "").slice(0, 16))}</td><td>${admin ? "—" : `<button type="button" class="ghost" data-membership-user="${enterpriseEscape(account)}">部门与角色</button>${isSuperAdmin ? `<button class="ghost danger" type="button" data-del-user="${enterpriseEscape(account)}">删除</button>` : ""}`}</td></tr>`;
+    const departments = (user.department_ids || []).map((id) => `${enterpriseEscape(enterpriseDepartmentName(id))} · ${user.department_roles?.[id] === "admin" ? "部门管理员" : ["editor", "member"].includes(user.department_roles?.[id]) ? "文档编辑者" : "角色异常"}`).join("<br />") || "未分配部门";
+    return `<tr><td>${enterpriseEscape(account)}</td><td>${enterpriseEscape(user.display_name || account)}</td><td>${admin ? "平台管理员" : departments}</td><td>${enterpriseEscape(String(user.created_at || "").slice(0, 16))}</td><td>${admin ? "—" : `<button type="button" class="ghost" data-membership-user="${enterpriseEscape(account)}">部门与角色</button>${isSuperAdmin ? `<button class="ghost danger" type="button" data-del-user="${enterpriseEscape(account)}">删除</button>` : ""}`}</td></tr>`;
   }).join("");
 }
-function enterpriseOpenDialog(title, body, onSave) {
+function enterpriseOpenDialog(title, body, onSave, { saveLabel = "保存", destructive = false } = {}) {
   document.getElementById("enterprise-dialog")?.remove();
   const dialog = document.createElement("dialog");
   dialog.id = "enterprise-dialog";
   dialog.className = "enterprise-dialog";
-  dialog.innerHTML = `<form method="dialog"><h2>${enterpriseEscape(title)}</h2><div class="enterprise-dialog-body">${body}</div><p class="enterprise-error" role="alert"></p><div class="enterprise-dialog-actions"><button value="cancel" class="ghost">取消</button><button type="button" class="primary" data-enterprise-save>保存</button></div></form>`;
+  dialog.innerHTML = `<form method="dialog"><h2>${enterpriseEscape(title)}</h2><div class="enterprise-dialog-body">${body}</div><p class="enterprise-error" role="alert"></p><div class="enterprise-dialog-actions"><button value="cancel" class="ghost">取消</button><button type="button" class="primary${destructive ? " danger" : ""}" data-enterprise-save>${enterpriseEscape(saveLabel)}</button></div></form>`;
   document.body.appendChild(dialog);
   dialog.querySelector("[data-enterprise-save]").addEventListener("click", async (event) => {
     event.target.disabled = true;
@@ -142,6 +143,37 @@ async function enterpriseEditAccess(doc) {
   enterpriseRenderScope("access", doc);
   if (enterpriseIdentity?.role !== "admin") dialog.querySelector("#access-department").disabled = true;
 }
+function enterpriseDepartmentDirectoryRows() {
+  return enterpriseDepartments.map((department) => `<div class="department-directory-row"><span>${enterpriseEscape(department.name)} <small>${enterpriseEscape(department.id)}</small></span>${isSuperAdmin ? `<div class="department-directory-actions"><button class="ghost" type="button" data-rename-department="${enterpriseEscape(department.id)}">重命名</button><button class="ghost danger" type="button" data-delete-department="${enterpriseEscape(department.id)}"${enterpriseDepartments.length <= 1 ? ' disabled title="至少保留一个部门"' : ""}>删除</button></div>` : ""}</div>`).join("");
+}
+async function enterpriseDeleteDepartment(department) {
+  if (!isSuperAdmin || !department) return;
+  try {
+    const preview = await enterpriseJson(`/api/departments/${encodeURIComponent(department.id)}/deletion`);
+    const targets = (preview.departments || []).filter((item) => item.id !== department.id);
+    if (!targets.length) { toast("至少保留一个部门，请先创建其他部门"); return; }
+    const documents = Number(preview.documents) || 0;
+    const members = Number(preview.members) || 0;
+    const sharedDocuments = Number(preview.shared_documents) || 0;
+    const body = `<div class="department-deletion-content"><p>将删除部门「${enterpriseEscape(preview.department?.name || department.name)}」。</p>
+      <div class="department-deletion-counts"><span>所属文档 <strong>${documents}</strong></span><span>部门成员 <strong>${members}</strong></span><span>共享文档 <strong>${sharedDocuments}</strong></span></div>
+      <label>文档迁移至<select data-department-transfer${documents ? " required" : ""}><option value="">${documents ? "请选择接收文档的部门" : "无需迁移文档"}</option>${enterpriseOptions(targets)}</select></label>
+      <p class="muted">所属文档、正文和附件会保留；迁移后目标部门成员可访问原部门文档，公共文档保留公共范围。</p>
+      <p class="muted">成员会移除该部门归属与角色，账号保留，不会自动加入目标部门；共享给该部门的授权也会移除。</p></div>`;
+    return enterpriseOpenDialog(`删除部门：${preview.department?.name || department.name}`, body, async (dialog) => {
+      const target = dialog.querySelector("[data-department-transfer]").value;
+      if ((documents && !target) || (target && !targets.some((item) => item.id === target))) {
+        throw new Error("请选择接收文档的部门");
+      }
+      await enterpriseJson(`/api/departments/${encodeURIComponent(department.id)}`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_department_id: target }),
+      });
+      enterpriseClearSession();
+      window.location.reload();
+    }, { saveLabel: "删除部门", destructive: true });
+  } catch (error) { toast(error.message); }
+}
 async function enterpriseLoadDepartments() {
   const data = await enterpriseJson("/api/departments");
   enterpriseDepartments = data.departments || [];
@@ -153,14 +185,17 @@ async function enterpriseLoadDepartments() {
   const registration = document.getElementById("reg-departments");
   if (registration) registration.innerHTML = enterpriseDepartmentRolesMarkup("reg");
   const directory = document.getElementById("department-directory");
-  if (directory) directory.innerHTML = enterpriseDepartments.map((department) => `<div class="department-directory-row"><span>${enterpriseEscape(department.name)} <small>${enterpriseEscape(department.id)}</small></span>${isSuperAdmin ? `<button class="ghost" type="button" data-rename-department="${enterpriseEscape(department.id)}">重命名</button>` : ""}</div>`).join("");
+  if (directory) directory.innerHTML = enterpriseDepartmentDirectoryRows();
 }
 async function enterpriseInitialize(data) {
-  enterpriseIdentity = data;
+  const publicAccess = data.public_access === true || portal === "search";
+  enterpriseIdentity = publicAccess ? { ...data, public_access: true, role: "guest", account: "", user: "",
+    department_ids: [], department_roles: {}, can_write: false, can_manage_users: false } : data;
   try { localStorage.removeItem("kb_chat_history"); } catch {}
-  document.body.classList.toggle("department-manager", portal === "admin" && data.can_manage_users === true);
+  document.body.classList.toggle("department-manager", !publicAccess && portal === "admin" && data.can_manage_users === true);
   const context = document.querySelector(".workspace-context");
-  if (context) context.textContent = "企业公共知识 · 部门知识共享";
+  if (context) context.textContent = publicAccess ? "公共访问 · 仅公共文档" : "企业公共知识 · 部门知识共享";
+  if (publicAccess) { enterpriseDepartments = []; enterpriseUsers = []; return; }
   await enterpriseLoadDepartments();
 }
 
@@ -170,7 +205,7 @@ window.fetch = async (...args) => {
   const response = await enterpriseOriginalFetch(...args);
   if (response.status === 401 && String(args[0]).startsWith("/api/")) {
     enterpriseClearSession();
-    window.location.replace("/login");
+    if (enterpriseIdentity?.public_access !== true) window.location.replace("/login");
   }
   return response;
 };
@@ -197,6 +232,10 @@ document.addEventListener("click", async (event) => {
     if (!name?.trim()) return;
     try { await enterpriseJson(`/api/departments/${encodeURIComponent(department.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) }); await enterpriseLoadDepartments(); }
     catch (error) { toast(error.message); }
+  }
+  const remove = event.target.closest("[data-delete-department]");
+  if (remove && isSuperAdmin) {
+    await enterpriseDeleteDepartment(enterpriseDepartments.find((item) => item.id === remove.dataset.deleteDepartment));
   }
   if (event.target.closest("#department-create") && isSuperAdmin) {
     const id = document.getElementById("department-id").value.trim();

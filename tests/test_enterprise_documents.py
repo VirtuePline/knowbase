@@ -45,14 +45,15 @@ class EnterpriseDocumentsTest(unittest.TestCase):
         self.add("secret", "hr")
         self.add("public", "hr", "public")
         self.add("shared", "hr", shared_department_ids=["operations"])
-        with access.identity_scope(actor("member")):
+        with access.identity_scope(actor()):
             self.assertEqual({item["id"] for item in kb.list_documents()}, {"own", "public", "shared"})
             self.assertEqual(kb.stats()["documents"], 3)
             self.assertEqual(next(item["count"] for item in kb.category_counts()
                                   if item["name"] == "流程问题"), 3)
             with self.assertRaises(kb.DocumentNotFound):
                 kb.get_document("secret")
-            for doc_id in ("own", "public", "shared"):
+            self.assertTrue(kb.get_document("own")["can_write"])
+            for doc_id in ("public", "shared"):
                 self.assertFalse(kb.get_document(doc_id)["can_write"])
                 with self.assertRaises(HTTPException) as error:
                     kb.set_categories(doc_id, ["网络问题"])
@@ -87,7 +88,7 @@ class EnterpriseDocumentsTest(unittest.TestCase):
         self.add("own", parent_id="hr-root", root_id="hr-root")
         self.add("hidden-child", "hr", parent_id="own", root_id="hr-root")
         self.add("visible-child", parent_id="own", root_id="own")
-        with access.identity_scope(actor("member")):
+        with access.identity_scope(actor()):
             result = timeline.build()
         self.assertEqual(result["total"], 2)
         self.assertEqual(result["issue_count"], 2)
@@ -96,7 +97,7 @@ class EnterpriseDocumentsTest(unittest.TestCase):
         self.assertEqual(event["parent_id"], "")
         self.assertEqual(event["root_id"], "own")
         self.assertEqual(event["child_count"], 1)
-        self.assertFalse(event["can_write"])
+        self.assertTrue(event["can_write"])
 
     def test_status_updates_reject_mismatched_ids_and_inaccessible_records(self):
         self.add("own")
@@ -123,16 +124,16 @@ class EnterpriseDocumentsTest(unittest.TestCase):
     def test_weekly_reports_use_accounts_and_hide_revoked_source_summaries(self):
         self.add("own", uploaded_by="operator", uploaded_by_name="同名员工")
         self.add("other", "hr", uploaded_by="other", uploaded_by_name="同名员工")
-        with access.identity_scope(actor("member")):
+        with access.identity_scope(actor()):
             own = weekly.collect_records("2026-11-09", "operator")
             self.assertEqual([item["doc_id"] for item in own], ["own"])
             self.assertEqual(weekly.collect_records("2026-11-09", "同名员工"), [])
         database.save_weekly_report("2026-11-09", "operator", own, "2026-11-12", markdown="安全摘要")
         database.save_weekly_report("2026-11-02", "operator", [{"doc_id": "other"}], "2026-11-12", markdown="私有摘要")
-        with access.identity_scope(actor("member")):
+        with access.identity_scope(actor()):
             self.assertEqual([item["markdown"] for item in weekly.visible_reports()], ["安全摘要"])
         database.set_document_access("own", "hr", "department", [])
-        with access.identity_scope(actor("member")):
+        with access.identity_scope(actor()):
             self.assertEqual(weekly.visible_reports(), [])
 
 

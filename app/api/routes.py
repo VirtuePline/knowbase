@@ -10,7 +10,7 @@ import json
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -31,7 +31,7 @@ search_router = APIRouter(prefix="/api", tags=["search"])
 
 
 class ChatRequest(BaseModel):
-    question: str = Field(default="", description="工程师提问")
+    question: str = Field(default="", description="用户提问")
     history: list[dict] = Field(default_factory=list, description="预留的上下文轮次")
     conversation_id: str = Field(default="", max_length=128)
     fast_mode: bool | None = Field(default=None, description="本次是否快速问答；缺省用服务端全局设置")
@@ -117,29 +117,31 @@ def health() -> dict:
 
 
 @search_router.get("/documents")
-def list_documents(category: str = "", doc_type: str = "") -> dict:
-    return {
-        "documents": kb.list_documents(category, doc_type),
-        "categories": kb.category_counts(doc_type),
-        "stats": kb.stats(),
-    }
+def list_documents(category: str = "", doc_type: Literal["", "doc", "record"] = "", department_id: str = "") -> dict:
+    return kb.document_listing(category, doc_type, department_id)
 
 
 @search_router.get("/vendors")
 def list_vendors() -> dict:
     """厂商清单：厂商系统类记录按厂商归类，清单在网页端维护。"""
+    if (access.current_identity() or {}).get("public_only"):
+        return {"vendors": sorted({doc.vendor for doc in kb._visible_records() if doc.vendor})}
     return {"vendors": recordmeta.list_vendors()}
 
 
 @search_router.get("/categories")
 def list_categories() -> dict:
-    """全部可选问题类型：内置固定分类 + 后台新增的自定义类型。"""
+    """全部可选记录分类：内置固定分类 + 后台新增的自定义类型。"""
+    if (access.current_identity() or {}).get("public_only"):
+        return {"categories": sorted({tag for doc in kb._visible_records() for tag in taxonomy.record_categories(doc)})}
     return {"categories": recordmeta.list_categories()}
 
 
 @search_router.get("/templates")
 def list_templates() -> dict:
-    """各问题类型的填写模板；后台未自定义的类型返回默认模板。"""
+    """各记录分类的填写模板；后台未自定义的类型返回默认模板。"""
+    if (access.current_identity() or {}).get("public_only"):
+        return {"templates": {}}
     return {"templates": recordmeta.get_templates()}
 
 
@@ -152,14 +154,15 @@ def timeline(
     status: str = Query(default="", pattern=r"^(?:yes|no|improving|temporary)?$"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=30, ge=1, le=100),
+    department_id: str = "",
 ) -> dict:
-    """按时间段、分类和状态分页查询时间线，默认返回最近 30 条。"""
+    """按部门、时间段、分类和状态分页查询时间线，默认返回最近 30 条。"""
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
     return timeline_service.build(
         start_date=start_date.isoformat() if start_date else "",
         end_date=end_date.isoformat() if end_date else "",
-        category=category, vendor=vendor, status=status, offset=offset, limit=limit,
+        category=category, vendor=vendor, status=status, offset=offset, limit=limit, department_id=department_id,
     )
 
 
@@ -221,12 +224,12 @@ class MarkdownRequest(BaseModel):
     content: str = Field(default="", description="Markdown / 纯文本内容")
     doc_id: str = Field(default="", description="为空则新建，否则覆盖该文档")
     filename: str = Field(default="", description="文件名，缺省时自动生成")
-    category: str = Field(default="", description="人工指定的单一问题类型（兼容）；为空时按内容自动归类")
+    category: str = Field(default="", description="人工指定的单一记录分类（兼容）；为空时按内容自动归类")
     categories: str = Field(default="", description="多分类标签，| 或逗号分隔；非空时优先于 category")
     vendor: str = Field(default="", description="厂商（厂商系统类记录必填）")
     resolved: str = Field(default="", description="解决状态：resolved / improving / temporary / unresolved；空保留原值")
-    uploaded_by_name: str = Field(default="", description="运维人用户名（默认当前登录用户名）；仅创建时写入")
-    parent_id: str = Field(default="", description="追踪的父运维记录ID；仅创建时设置")
+    uploaded_by_name: str = Field(default="", description="记录人用户名（默认当前登录用户名）；仅创建时写入")
+    parent_id: str = Field(default="", description="追踪的父工作记录ID；仅创建时设置")
     department_id: str = ""
     visibility: str = "department"
     shared_department_ids: list[str] = Field(default_factory=list)
@@ -251,7 +254,7 @@ async def upload_document(
     date: str = Form(""),
     vendor: str = Form(""),
     resolved: str = Form(""),
-    operator_name: str = Form("", description="运维人用户名；缺省为当前登录用户名"),
+    operator_name: str = Form("", description="记录人用户名；缺省为当前登录用户名"),
     parent_id: str = Form(""),
     file_time: str = Form("", description="本地文件修改时间（YYYY-MM-DD HH:MM:SS）；作为上传时间与记录时间默认值"),
     department_id: str = Form(""),
@@ -259,14 +262,14 @@ async def upload_document(
     shared_department_ids: str = Form("[]"),
     identity: dict = Depends(require_login),
 ) -> dict:
-    """上传文档：doc_type=doc 基础文档（默认）/ record 运维问题记录。
+    """上传文档：doc_type=doc 基础文档（默认）/ record 工作记录。
 
-    category 非空时强制分类（运维问题上传时人工选择的问题类型，优先于自动判定）；
-    date 为运维记录的问题发生日期（YYYY-MM-DD），入库后作为记录时间展示与时间线排序；
+    category 非空时强制分类（记录上传时人工选择的记录分类，优先于自动判定）；
+    date 为工作记录的问题发生日期（YYYY-MM-DD），入库后作为记录时间展示与时间线排序；
     未选日期时默认取 file_time 的日期部分（文件修改时间）；
-    vendor 为厂商系统类记录的厂商（问题类型选「厂商系统」时必填）；
+    vendor 为厂商系统类记录的厂商（记录分类选「厂商系统」时必填）；
     resolved 为录入时选择的解决状态（resolved / improving / temporary / unresolved），时间线按此显示；
-    operator_name 为运维人用户名，入库时与登录账号分开记录。
+    operator_name 为记录人用户名，入库时与登录账号分开记录。
     """
     if doc_type not in {"doc", "record"}:
         raise HTTPException(status_code=400, detail="doc_type 只能是 doc / record")
@@ -564,12 +567,12 @@ def remove_vendor(name: str) -> dict:
 
 
 class CategoryNameRequest(BaseModel):
-    name: str = Field(description="自定义问题类型名称")
+    name: str = Field(description="自定义记录分类名称")
 
 
 @admin_router.post("/categories", dependencies=[Depends(require_super_admin)])
 def add_category(req: CategoryNameRequest) -> dict:
-    """新增自定义问题类型；与内置类型重名时忽略。"""
+    """新增自定义记录分类；与内置类型重名时忽略。"""
     try:
         return {"categories": recordmeta.add_category(req.name)}
     except ValueError as exc:
@@ -578,7 +581,7 @@ def add_category(req: CategoryNameRequest) -> dict:
 
 @admin_router.delete("/categories/{name}", dependencies=[Depends(require_super_admin)])
 def remove_category(name: str) -> dict:
-    """删除自定义问题类型；已保存记录上的标签保留。"""
+    """删除自定义记录分类；已保存记录上的标签保留。"""
     try:
         return {"categories": recordmeta.delete_category(name)}
     except ValueError as exc:
@@ -586,13 +589,13 @@ def remove_category(name: str) -> dict:
 
 
 class TemplateRequest(BaseModel):
-    category: str = Field(description="问题类型")
+    category: str = Field(description="记录分类")
     content: str = Field(default="", description="模板内容；为空表示恢复默认模板")
 
 
 @admin_router.put("/templates", dependencies=[Depends(require_super_admin)])
 def save_template(req: TemplateRequest) -> dict:
-    """保存某问题类型的上传模板。"""
+    """保存某记录分类的上传模板。"""
     try:
         return {"templates": recordmeta.save_template(req.category, req.content)}
     except ValueError as exc:
@@ -605,12 +608,12 @@ class WeeklySettingsRequest(BaseModel):
     enabled: bool = Field(description="是否启用周报定时生成")
     weekday: int = Field(description="每周几生成（1=周一 … 7=周日）")
     time: str = Field(description="生成时间点（HH:MM）")
-    operators: list[str] = Field(default_factory=list, description="需要生成周报的运维人名单")
+    operators: list[str] = Field(default_factory=list, description="需要生成周报的记录人名单")
 
 
 @admin_router.get("/weekly-report/settings")
 def weekly_report_settings(identity: dict = Depends(require_super_admin)) -> dict:
-    """周报定时生成设置 + 可勾选的运维人名单（来自历史运维记录）。"""
+    """周报定时生成设置 + 可勾选的记录人名单（来自历史工作记录）。"""
     return {**weekly_service.get_settings(), "owners": weekly_service.record_owners()}
 
 

@@ -9,12 +9,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from threading import RLock
 
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 
 from app.domain.schemas import DocRecord
 from app.services import mongo
+
+# 管理端多线程写入与部门删除共用，避免验证部门后又写回已删除的归属。
+department_mutation_lock = RLock()
 
 _INT_FIELDS = {"size", "chunks", "skipped"}
 _LIST_FIELDS = {"categories", "shared_department_ids"}
@@ -28,7 +32,7 @@ _DOC_FIELDS = (
 
 
 def _normalize_doc_type(row: dict) -> str:
-    """存量数据没有 doc_type 字段：常识库归基础文档，其余（历史运维记录）归运维问题记录。"""
+    """存量数据没有 doc_type 字段：常识库归基础文档，其余（历史工作记录）归工作记录。"""
     value = str(row.get("doc_type") or "")
     if value in {"doc", "record"}:
         return value
@@ -73,7 +77,14 @@ def _row_to_doc(row: dict) -> DocRecord:
 
 
 def add(doc: DocRecord) -> None:
-    _docs().replace_one({"_id": doc.id}, {"_id": doc.id, **{f: getattr(doc, f) for f in _DOC_FIELDS}}, upsert=True)
+    from app.services import access
+    with department_mutation_lock:
+        if not access.is_internal():
+            _validate_document_departments(doc.department_id, doc.shared_department_ids)
+        elif doc.department_id == "operations" and not mongo.db().departments.find_one({"_id": "operations"}):
+            # 命令行模型保留历史默认 ID；默认部门已删除时使用现存部门。
+            doc.department_id = default_department_id()
+        _docs().replace_one({"_id": doc.id}, {"_id": doc.id, **{f: getattr(doc, f) for f in _DOC_FIELDS}}, upsert=True)
 
 
 def update_status(doc_id: str, chunks: int, status: str, error: str = "",
@@ -220,10 +231,10 @@ def list_all_edit_logs(limit: int = 100) -> list[dict]:
     return rows
 
 
-# ---------- 运维周报（定时生成，按运维人汇总本周记录标题） ----------
+# ---------- 工作周报（定时生成，按记录人汇总本周记录标题） ----------
 
 def list_record_owners() -> list[str]:
-    """有运维记录的运维人名单（去重），供周报设置勾选。"""
+    """有工作记录的记录人名单（去重），供周报设置勾选。"""
     try:
         names = mongo.db().documents.distinct(
             "uploaded_by_name", {"doc_type": "record", "uploaded_by_name": {"$nin": ["", None]}})
@@ -234,7 +245,7 @@ def list_record_owners() -> list[str]:
 
 def save_weekly_report(week_start: str, person: str, items: list[dict], generated_at: str,
                        markdown: str = "") -> None:
-    """写入 / 覆盖某人本周的周报（_id = 周起始日:运维人，天然幂等）。"""
+    """写入 / 覆盖某人本周的周报（_id = 周起始日:记录人，天然幂等）。"""
     mongo.db().weekly_reports.replace_one(
         {"_id": f"{week_start}:{person}"},
         {"_id": f"{week_start}:{person}", "week_start": week_start, "person": person,
@@ -426,44 +437,179 @@ def top_questions(days: int = 7, limit: int = 4) -> list[dict]:
 
 
 def initialize_enterprise() -> None:
-    """幂等迁移：历史资料保留为运维部门内部资料，不自动公开。"""
-    mongo.db().departments.update_one({"_id": "operations"},
-        {"$setOnInsert": {"name": "运维部门", "created_at": now_iso()}}, upsert=True)
-    for field, value in (("department_id", "operations"), ("visibility", "department"),
+    """幂等迁移：历史资料保留为默认部门内部资料，不自动公开。"""
+    # 仅空组织首次创建内置部门，已删除的内置部门不会在重启后重新出现。
+    if mongo.db().departments.find_one({}, {"_id": 1}) is None:
+        mongo.db().departments.update_one({"_id": "operations"},
+            {"$setOnInsert": {"name": "默认部门", "created_at": now_iso()}}, upsert=True)
+    default_id = default_department_id()
+    # 仅调整历史内置名称；稳定 ID、已有归属及用户自定义部门名称均保留。
+    renamed = mongo.db().departments.update_one({"_id": "operations", "name": "运维部门"},
+                                               {"$set": {"name": "默认部门"}})
+    if renamed.modified_count:
+        bump_access_revision()
+    for field, value in (("department_id", default_id), ("visibility", "department"),
                          ("shared_department_ids", [])):
         _docs().update_many({field: {"$exists": False}}, {"$set": {field: value}})
     mongo.db().users.update_many({"department_ids": {"$exists": False}},
-                                {"$set": {"department_ids": ["operations"],
-                                          "department_roles": {"operations": "editor"}}})
+                                {"$set": {"department_ids": [default_id],
+                                          "department_roles": {default_id: "editor"}}})
+    # 部门仅保留管理员和编辑者；补齐旧默认角色，未知非法值原样保留且不授写。
+    roles_changed = False
+    for user in mongo.db().users.find({}, {"department_ids": 1, "department_roles": 1}):
+        roles = user.get("department_roles", {})
+        if not isinstance(roles, dict):
+            continue
+        updated = dict(roles)
+        for department in user.get("department_ids", []):
+            if department not in roles or roles[department] == "member":
+                updated[department] = "editor"
+        if updated != roles:
+            # 账号权限可能同时被管理员修改，只更新我们实际读取到的版本。
+            result = mongo.db().users.update_one(
+                {"_id": user["_id"], "department_roles": user.get("department_roles"),
+                 "department_ids": user.get("department_ids", [])},
+                {"$set": {"department_roles": updated}},
+            )
+            roles_changed = roles_changed or bool(result.modified_count)
+    if roles_changed:
+        bump_access_revision()
 
 
 def list_departments() -> list[dict]:
     rows = [{"id": row["_id"], "name": row.get("name", row["_id"])}
             for row in mongo.db().departments.find({}).sort("name", ASCENDING)]
-    return rows or [{"id": "operations", "name": "运维部门"}]
+    return rows or [{"id": "operations", "name": "默认部门"}]
 
 
-def save_department(department_id: str, name: str) -> dict:
+def default_department_id() -> str:
+    """内部录入或历史迁移的缺省归属，优先保留仍存在的历史默认部门。"""
+    departments = list_departments()
+    return next((row["id"] for row in departments if row["id"] == "operations"), departments[0]["id"])
+
+
+def department_names(department_ids) -> dict[str, str]:
+    """仅查询调用方已获授权文档涉及的部门，不向公共端暴露完整组织目录。"""
+    ids = set(department_ids)
+    if not ids:
+        return {}
+    names = {row["_id"]: row.get("name") or "未命名部门"
+             for row in mongo.db().departments.find({"_id": {"$in": list(ids)}}, {"name": 1})}
+    return {key: names.get(key, "默认部门" if key == "operations" else "未命名部门") for key in ids}
+
+
+def save_department(department_id: str, name: str, *, create: bool | None = None) -> dict:
     import re
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,47}", department_id):
         raise ValueError("部门编号须为小写字母开头的字母、数字、下划线或短横线")
     name = name.strip()
     if not 1 <= len(name) <= 60:
         raise ValueError("部门名称须为1–60个字符")
-    mongo.db().departments.update_one({"_id": department_id},
-        {"$set": {"name": name}, "$setOnInsert": {"created_at": now_iso()}}, upsert=True)
-    bump_access_revision()
+    with department_mutation_lock:
+        departments = mongo.db().departments
+        if create is True:
+            departments.insert_one({"_id": department_id, "name": name, "created_at": now_iso()})
+        elif create is False:
+            if not departments.update_one({"_id": department_id}, {"$set": {"name": name}}).matched_count:
+                raise DepartmentNotFound(department_id)
+        else:
+            # 内部初始化与维护脚本保留幂等写入，HTTP 创建/重命名严格区分。
+            departments.update_one({"_id": department_id},
+                {"$set": {"name": name}, "$setOnInsert": {"created_at": now_iso()}}, upsert=True)
+        bump_access_revision()
     return {"id": department_id, "name": name}
+
+
+class DepartmentNotFound(LookupError):
+    pass
+
+
+class DepartmentDeleteConflict(ValueError):
+    pass
+
+
+def _department_owner_query(department_id: str) -> dict:
+    # 兼容尚未运行启动迁移的历史文档；空归属只属于当前缺省部门。
+    values = [department_id, "", None] if department_id == default_department_id() else [department_id]
+    return {"department_id": {"$in": values}}
+
+
+def _department_member_query(department_id: str) -> dict:
+    choices = [{"department_ids": department_id}, {f"department_roles.{department_id}": {"$exists": True}}]
+    if department_id == default_department_id():
+        choices.append({"department_ids": {"$exists": False}})
+    return {"$or": choices}
+
+
+def department_deletion_info(department_id: str) -> dict:
+    department = mongo.db().departments.find_one({"_id": department_id})
+    if department is None:
+        raise DepartmentNotFound(department_id)
+    return {
+        "department": {"id": department_id, "name": department.get("name") or "未命名部门"},
+        "documents": _docs().count_documents(_department_owner_query(department_id)),
+        "members": mongo.db().users.count_documents(_department_member_query(department_id)),
+        "shared_documents": _docs().count_documents({"shared_department_ids": department_id}),
+        "departments": [row for row in list_departments() if row["id"] != department_id],
+    }
+
+
+def delete_department(department_id: str, target_department_id: str = "") -> dict:
+    """转移资料并移除部门关联；不删除任何企业账号、正文或附件。"""
+    with department_mutation_lock:
+        info = department_deletion_info(department_id)
+        targets = {row["id"] for row in info["departments"]}
+        if not targets:
+            raise DepartmentDeleteConflict("至少保留一个部门，请先创建其他部门")
+        target = target_department_id.strip()
+        if target and target not in targets:
+            raise ValueError("迁移目标必须是其他现存部门")
+        if info["documents"] and not target:
+            raise DepartmentDeleteConflict("该部门仍有文档，请选择迁移目标部门")
+        default_id = default_department_id()
+        # 起止均刷新权限版本：并发问答与旧周报不能沿用迁移过程中的上下文。
+        bump_access_revision()
+        moved = 0
+        if info["documents"]:
+            moved = _docs().update_many(_department_owner_query(department_id), {
+                "$set": {"department_id": target},
+                "$pull": {"shared_department_ids": {"$in": [department_id, target]}},
+            }).modified_count
+        _docs().update_many({"shared_department_ids": department_id},
+                            {"$pull": {"shared_department_ids": department_id}})
+        users = mongo.db().users
+        removed = users.update_many(_department_member_query(department_id), {
+            "$pull": {"department_ids": department_id},
+            "$unset": {f"department_roles.{department_id}": ""},
+        }).modified_count
+        if department_id == default_id:
+            # 显式空归属阻止旧账号在下次启动时被重新分配给另一个部门。
+            users.update_many({"department_ids": {"$exists": False}},
+                              {"$set": {"department_ids": [], "department_roles": {}}})
+        mongo.db().departments.delete_one({"_id": department_id})
+        bump_access_revision()
+        return {"deleted": True, "department_id": department_id, "target_department_id": target,
+                "moved_documents": moved, "removed_memberships": removed,
+                "revoked_shared_documents": info["shared_documents"]}
+
+
+def _validate_document_departments(department_id: str, shared_department_ids: list[str]) -> None:
+    from fastapi import HTTPException
+    existing = {row["id"] for row in list_departments()}
+    if any(value not in existing for value in [department_id, *shared_department_ids]):
+        raise HTTPException(status_code=409, detail="部门已变更，请刷新页面后重试")
 
 
 def set_document_access(doc_id: str, department_id: str, visibility: str,
                         shared_department_ids: list[str]) -> bool:
-    result = _docs().update_one({"_id": doc_id}, {"$set": {
-        "department_id": department_id, "visibility": visibility,
-        "shared_department_ids": list(shared_department_ids),
-    }})
-    if result.matched_count:
-        bump_access_revision()
+    with department_mutation_lock:
+        _validate_document_departments(department_id, shared_department_ids)
+        result = _docs().update_one({"_id": doc_id}, {"$set": {
+            "department_id": department_id, "visibility": visibility,
+            "shared_department_ids": list(shared_department_ids),
+        }})
+        if result.matched_count:
+            bump_access_revision()
     return bool(result.matched_count)
 
 

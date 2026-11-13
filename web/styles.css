@@ -1385,3 +1385,17 @@ tr.doc-day td { background: #f6fbfa; color: var(--muted); font-size: 11px; }
   .hints-heading span { display: none; }
   .composer-help > span:last-child { display: none; }
 }
+:root .department-filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 2px 0 16px; }
+:root .department-filter-row label { color: var(--muted); font-size: 12px; }
+:root .department-filter-row select, .tl-range > label > select { min-width: 180px; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; color: var(--text); background: var(--panel); font: inherit; font-size: 13px; }
+:root .department-filter-row select:focus-visible, .tl-range > label > select:focus-visible { outline: 2px solid var(--theme-focus, var(--accent)); outline-offset: 2px; }
+@media (max-width: 560px) { :root .department-filter-row select { flex: 1; min-width: 0; } .tl-range > label > select { min-width: 145px; } }
+.department-directory-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.department-deletion-content { display: grid; gap: 14px; width: 100%; }
+.department-deletion-content p { margin: 0; line-height: 1.7; }
+.department-deletion-counts { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--theme-tint, var(--panel)); font-size: 13px; }
+.department-deletion-counts strong { margin-left: 7px; }
+.department-deletion-content label { display: grid; gap: 8px; font-size: 13px; }
+.department-deletion-content select { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--panel); font: inherit; }
+.enterprise-dialog .primary.danger { background: #a03d34; border-color: #a03d34; color: #fff; }
+.enterprise-dialog .primary.danger:hover:not(:disabled) { background: #87332c; border-color: #87332c; }
