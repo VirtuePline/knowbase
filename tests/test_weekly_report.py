@@ -108,10 +108,31 @@ class WeeklyDisplayNameTest(unittest.TestCase):
              patch.object(weekly.database, "get", return_value=None), \
              patch.object(weekly.mongo, "db") as db_mock:
             db_mock.return_value.weekly_reports.find.return_value.sort.return_value = [row]
+            db_mock.return_value.users.find.return_value = []   # 无部门资料 → 未分配部门
             with patch.object(weekly, "_account_record",
                               return_value={"display_name": "强生三"}):
                 reports = weekly.visible_reports()
         self.assertEqual(reports[0]["person_name"], "强生三")
+        self.assertEqual(reports[0]["owner_departments"], [])
+
+    def test_visible_reports_attach_owner_departments(self):
+        """周报附带所属部门名，供前端按「部门 → 个人」分组展示。"""
+        row = {"week_start": "2026-11-09", "person": "qsl", "owner_account": "qsl",
+               "owner_account_id": "", "items": [], "markdown": "# x", "generated_at": "",
+               "access_revision": 0}
+        with patch.object(weekly, "_can_generate_for", return_value=True), \
+             patch.object(weekly.database, "access_revision", return_value=0), \
+             patch.object(weekly.database, "get", return_value=None), \
+             patch.object(weekly.database, "department_names",
+                          return_value={"operations": "运维部", "hr": "人事部"}), \
+             patch.object(weekly.mongo, "db") as db_mock:
+            db_mock.return_value.weekly_reports.find.return_value.sort.return_value = [row]
+            db_mock.return_value.users.find.return_value = [
+                {"_id": "qsl", "department_ids": ["operations", "hr"]}]
+            with patch.object(weekly, "_account_record",
+                              return_value={"display_name": "强生三"}):
+                reports = weekly.visible_reports()
+        self.assertEqual(reports[0]["owner_departments"], ["运维部", "人事部"])
 
 
 @online_api_test

@@ -399,18 +399,6 @@
       </div>
       <p class="muted wr-settings-note">到点自动汇总本人本周（周一起 7 天）的工作记录，无需管理员授权。个人设置仅影响自己的周报。</p>
     </div>
-    <div class="panel-card super-admin-only" id="wr-global-settings" hidden>
-      <h2>统一周报生成设置</h2>
-      <div class="row wr-settings-row">
-        <label><input type="checkbox" id="wr-global-enabled" /> 启用定时生成</label>
-        <label class="wr-schedule-label">生成日期<select id="wr-global-weekday" aria-label="生成日期"><option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option><option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="7">每周日</option></select></label>
-        <label class="wr-schedule-label">生成时间<input type="time" id="wr-global-time" value="18:00" required aria-label="生成时间" /></label>
-        <button class="ghost" type="button" id="wr-global-save" disabled>保存设置</button>
-        <span class="muted" id="wr-global-status" role="status"></span>
-      </div>
-      <p class="muted wr-settings-note">勾选统一排程的记录人；员工已保存的个人设置优先，未设置的员工使用此排程。</p>
-      <div id="wr-global-owners" class="wr-owners"></div>
-    </div>
     <div class="panel-card">
       <div class="row wr-reports-heading">
         <h2>周报列表</h2>
@@ -431,6 +419,18 @@
       <h2>部门目录</h2>
       <div id="department-directory" class="department-directory"></div>
       <div class="row super-admin-only department-create-row"><label>部门标识<input id="department-id" placeholder="例如 finance" maxlength="40" /></label><label>部门名称<input id="department-name" placeholder="例如 财务部" maxlength="60" /></label><button type="button" class="ghost" id="department-create">创建部门</button></div>
+    </div>
+    <div class="panel-card super-admin-only" id="wr-global-settings" hidden>
+      <h2>定时工作周报</h2>
+      <div class="row wr-settings-row">
+        <label><input type="checkbox" id="wr-global-enabled" /> 启用定时生成</label>
+        <label class="wr-schedule-label">生成日期<select id="wr-global-weekday" aria-label="生成日期"><option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option><option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="7">每周日</option></select></label>
+        <label class="wr-schedule-label">生成时间<input type="time" id="wr-global-time" value="18:00" required aria-label="生成时间" /></label>
+        <button class="ghost" type="button" id="wr-global-save" disabled>保存设置</button>
+        <span class="muted" id="wr-global-status" role="status"></span>
+      </div>
+      <p class="muted wr-settings-note">勾选统一排程的记录人；员工已保存的个人设置优先，未设置的员工使用此排程。生成的周报在「工作周报」页按部门查看。</p>
+      <div id="wr-global-owners" class="wr-owners"></div>
     </div>
     <div class="panel-card admin-only">
       <h2>成员与部门角色</h2>
@@ -2250,7 +2250,7 @@ const catDialog = {
   render() {
     const items = [];
     if (this.allowAuto) {
-      items.push(`<label class="multicat-opt${this.draft.size ? "" : " checked"}"><input type="checkbox" value=""><span>自动判定</span></label>`);
+      items.push(`<label class="multicat-opt${this.draft.size ? "" : " checked"}"><input type="checkbox" value=""${this.draft.size ? "" : " checked"}><span>自动判定</span></label>`);
     }
     for (const name of selectableCategories()) {
       items.push(`<label class="multicat-opt${this.draft.has(name) ? " checked" : ""}"><input type="checkbox" value="${escapeAttr(name)}"${this.draft.has(name) ? " checked" : ""}><span>${escapeHtml(name)}</span></label>`);
@@ -2917,17 +2917,42 @@ async function loadWeeklyReports() {
     if (requestId !== wrReportsRequestId) return;
     if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "周报加载失败，请点击刷新重试");
     const reports = data.reports || [];
-    $("#wr-reports").innerHTML = reports.map((r) => `
+    // 按部门 → 个人分组展示：组头为部门名，组内每人一张周报卡（每人的多周依次排列）
+    const groups = new Map();
+    for (const r of reports) {
+      const dept = (r.owner_departments || []).join("、") || "未分配部门";
+      if (!groups.has(dept)) groups.set(dept, new Map());
+      const byPerson = groups.get(dept);
+      const person = r.person_name || r.person || "未知成员";
+      if (!byPerson.has(person)) byPerson.set(person, []);
+      byPerson.get(person).push(r);
+    }
+    const renderCard = (r) => `
       <div class="wr-card" style="border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:#fff;overflow:hidden">
         <div style="display:flex;align-items:center;gap:10px;padding:9px 12px">
-          <span style="font-size:13.5px;font-weight:600">${escapeHtml(r.person_name || r.person)}</span>
-          <span class="muted" style="font-size:12px">${escapeHtml(r.week_start)} 那周 · ${(r.items || []).length} 条记录 · 生成于 ${escapeHtml(r.generated_at || "")}</span>
+          <span style="font-size:13.5px;font-weight:600">${escapeHtml(r.week_start)} 那周</span>
+          <span class="muted" style="font-size:12px">${(r.items || []).length} 条记录 · 生成于 ${escapeHtml(r.generated_at || "")}</span>
           <button class="ghost" type="button" data-wr-toggle style="margin-left:auto;font-size:12px;padding:3px 10px">查看</button>
         </div>
         <div class="wr-detail" hidden style="border-top:1px solid var(--line);padding:10px 14px">
           <div class="md" style="font-size:13.5px">${renderMarkdown(r.markdown || weeklyFallbackMarkdown(r))}</div>
         </div>
-      </div>`).join("") || '<div class="muted" style="font-size:13px">还没有周报，点击「生成我的本周周报」，或启用个人定时生成。</div>';
+      </div>`;
+    const renderGroup = (dept, byPerson) => `
+      <div class="wr-dept" style="margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:var(--muted);letter-spacing:1px;margin:4px 0 8px">${escapeHtml(dept)}</div>
+        ${[...byPerson.entries()].map(([person, list]) => `
+          <div class="wr-person" style="margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span style="font-size:14px;font-weight:600">${escapeHtml(person)}</span>
+              <span class="muted" style="font-size:12px">${list.length} 份周报</span>
+            </div>
+            ${list.map(renderCard).join("")}
+          </div>`).join("")}
+      </div>`;
+    $("#wr-reports").innerHTML = groups.size
+      ? [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], "zh")).map(([dept, byPerson]) => renderGroup(dept, byPerson)).join("")
+      : '<div class="muted" style="font-size:13px">还没有周报，点击「生成我的本周周报」，或启用个人定时生成。</div>';
   } catch (error) {
     if (requestId === wrReportsRequestId) $("#wr-reports").innerHTML = `<div class="muted">${escapeHtml(error.message || "周报加载失败，请点击刷新重试")}</div>`;
   }
@@ -3089,7 +3114,7 @@ function switchTo(tab, { preserveEditor = false } = {}) {
   if (tab === "settings") refreshSettings();
   if (tab === "weekly") refreshWeeklyReport();
   if (tab === "edits") loadEditsLog();
-  if (tab === "accounts") loadUsers();
+  if (tab === "accounts") { loadUsers(); refreshWeeklyReport(); }   // 统一周报设置已在用户管理页
   if (tab === "logs") { auditPage = 1; loadAuditLogs(); }
   try { localStorage.setItem(LAST_TAB_KEY, tab); } catch { /* 隐私模式忽略 */ }
 }

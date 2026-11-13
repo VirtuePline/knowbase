@@ -652,7 +652,7 @@ def read_source(doc_id: str) -> dict:
 
 def save_markdown(content: str, doc_id: str = "", filename: str = "",
                   category: str = "", vendor: str = "", resolved: str = "", *,
-                  categories: str = "", uploaded_by: str = "", uploaded_by_name: str = "",
+                  categories: str | None = None, uploaded_by: str = "", uploaded_by_name: str = "",
                   parent_id: str = "", edited_by: str = "", edited_by_name: str = "",
                   department_id: str = "", visibility: str = "department",
                   shared_department_ids: list[str] | None = None) -> dict:
@@ -660,7 +660,8 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
 
     doc_id 为空时新建；传入已有 doc_id 时覆盖原文件与分块。
     categories 为多标签（| 或逗号分隔），非空时按其落库（首标签为主分类），覆盖自动判定；
-    category 为单值兜底。两者都为空时保留自动判定结果。
+    category 为单值兜底。显式传入空 categories 且无 category 时恢复自动判定；
+    编辑时省略 categories 则保留原分类，兼容旧调用方。
     vendor 仅对挂有「厂商系统」标签的记录有意义：其余分类忽略。
     resolved 为录入时选择的解决状态；空串时保留原状态（新建则为未标记）。
     uploaded_by / uploaded_by_name / parent_id 仅用于创建，编辑保留原始创建账号、记录人与跟踪关系。
@@ -674,6 +675,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     if not cats and (category or "").strip():
         cats = [normalize_doc_category(category)]
     primary = cats[0] if cats else ""
+    reset_categories = categories is not None and not primary
 
     if doc_id:
         if parent_id:
@@ -743,13 +745,16 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
             last_edited_at=database.now_iso(),
             **scope,
         )
+    if reset_categories:
+        # 删除最后一个人工标签后，从内容重新归类，不能让旧标签或厂商覆盖分析结果。
+        new_record = replace_record(new_record, category="", categories=[], vendor="")
     database.add(new_record)
     _bind_images(doc_id, content)
     # 编辑溯源日志：谁在何时新建 / 修改了这份记录（重复内容跳过时不记）
     database.add_edit_log(doc_id, (edited_by or "").strip() or uploaded_by,
                           (edited_by_name or "").strip() or uploaded_by_name,
                           "修改" if record else "创建")
-    doc = _ingest(new_record, target, category=primary or (record.category if record else ""))
+    doc = _ingest(new_record, target, category=primary or new_record.category)
     if cats:   # 人工选择的分类标签优先于自动判定
         database.set_categories(doc.id, cats)
         doc = _require(doc.id)
@@ -760,7 +765,7 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
             doc = _require(doc.id)
     if "厂商系统" not in record_categories(doc):
         vendor = ""   # 厂商只对挂有「厂商系统」标签的记录有意义，换分类时清空避免残留
-    if vendor and doc.vendor != vendor:
+    if doc.vendor != vendor and (vendor or "厂商系统" not in record_categories(doc)):
         database.set_vendor(doc.id, vendor)
         doc = replace_record(doc, vendor=vendor)
     return {"duplicated": False, "created": record is None, "doc": _doc_dict(doc)}

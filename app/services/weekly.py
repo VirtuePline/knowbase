@@ -167,6 +167,18 @@ def display_name(account: str) -> str:
     return ((user or {}).get("display_name") or "").strip() or account
 
 
+def _owner_departments(accounts) -> dict[str, list[str]]:
+    """账号 → 所属部门名称列表（按 users 部门归属）；无部门的账号不出现在映射里。"""
+    ids = {str(a).strip() for a in accounts or [] if str(a).strip()}
+    if not ids:
+        return {}
+    rows = list(mongo.db().users.find({"_id": {"$in": list(ids)}}, {"department_ids": 1}))
+    names = database.department_names(
+        {dept for row in rows for dept in row.get("department_ids", [])})
+    return {row["_id"]: [names.get(dept, dept) for dept in row.get("department_ids", []) if dept]
+            for row in rows}
+
+
 def visible_reports(limit: int = 12) -> list[dict]:
     """按稳定账号读取，并在返回缓存摘要前重新检查全部来源文档。"""
     query = {} if access.is_platform_admin() else {"owner_account": {"$exists": True}}
@@ -189,6 +201,10 @@ def visible_reports(limit: int = 12) -> list[dict]:
         result.append(row)
         if len(result) >= limit:
             break
+    departments = _owner_departments(row.get("owner_account") or row.get("person", "") for row in result)
+    for row in result:
+        row["owner_departments"] = departments.get(row.get("owner_account") or row.get("person", ""), [])
+    return result
     return result
 
 

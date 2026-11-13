@@ -215,6 +215,73 @@ class MultiCategoryTest(unittest.TestCase):
         self.assertEqual([d["id"] for d in kb.list_documents("网络问题")], [doc["id"]])
         self.assertEqual([d["id"] for d in kb.list_documents("MES系统")], [doc["id"]])
 
+    def test_clearing_editor_categories_reclassifies_document_and_chunks(self):
+        database.add_vendor("测试厂商")
+        content = "# 贴标机电机异响\n\n更换轴承后恢复正常。"
+        doc = kb.save_markdown(content, filename="分类恢复.md",
+                               categories="厂商系统|网络问题", vendor="测试厂商")["doc"]
+
+        updated = kb.save_markdown(content, doc["id"], doc["name"], categories="")["doc"]
+
+        self.assertEqual(updated["category"], "硬件问题")
+        self.assertEqual(updated["categories"], [])
+        self.assertEqual(updated["vendor"], "")
+        stored = database.get(doc["id"])
+        self.assertEqual((stored.category, stored.categories, stored.vendor), ("硬件问题", [], ""))
+        self.assertEqual(Ingester().read_chunks(doc["id"])[0].category, "硬件问题")
+        self.assertEqual(kb.list_documents("网络问题"), [])
+        self.assertEqual(kb.list_documents("厂商系统"), [])
+        self.assertEqual([d["id"] for d in kb.list_documents("硬件问题")], [doc["id"]])
+
+    def test_omitting_editor_categories_preserves_existing_tags_and_vendor(self):
+        database.add_vendor("测试厂商")
+        doc = kb.save_markdown("# 厂商维修\n\n厂商工程师协助排查。", filename="保留分类.md",
+                               categories="厂商系统|网络问题", vendor="测试厂商")["doc"]
+
+        updated = kb.save_markdown("# 贴标机电机异响\n\n更换轴承后恢复正常。",
+                                   doc["id"], doc["name"])["doc"]
+
+        self.assertEqual(updated["category"], "厂商系统")
+        self.assertEqual(updated["categories"], ["厂商系统", "网络问题"])
+        self.assertEqual(updated["vendor"], "测试厂商")
+        self.assertEqual(Ingester().read_chunks(doc["id"])[0].category, "厂商系统")
+
+    def test_removing_vendor_category_clears_vendor_in_storage(self):
+        database.add_vendor("测试厂商")
+        content = "# 接口超时\n\nMES 接口超时，同时涉及网络设备问题。"
+        doc = kb.save_markdown(content, filename="移除厂商.md",
+                               categories="厂商系统|网络问题", vendor="测试厂商")["doc"]
+
+        updated = kb.save_markdown(content, doc["id"], doc["name"], categories="网络问题")["doc"]
+
+        self.assertEqual(updated["categories"], ["网络问题"])
+        self.assertEqual(updated["vendor"], "")
+        self.assertEqual(database.get(doc["id"]).vendor, "")
+
+    def test_automatic_vendor_category_does_not_restore_removed_vendor(self):
+        database.add_vendor("测试厂商")
+        content = "# 供应商远程支持记录\n\n第三方系统对接，厂商工程师协助处理授权问题。"
+        doc = kb.save_markdown(content, filename="厂商自动判断.md",
+                               categories="厂商系统", vendor="测试厂商")["doc"]
+
+        updated = kb.save_markdown(content, doc["id"], doc["name"], categories="")["doc"]
+
+        self.assertEqual(updated["category"], "厂商系统")
+        self.assertEqual(updated["categories"], [])
+        self.assertEqual(updated["vendor"], "")
+        self.assertEqual(database.get(doc["id"]).vendor, "")
+
+    def test_legacy_single_category_overrides_explicit_empty_categories(self):
+        content = "# 贴标机电机异响\n\n更换轴承后恢复正常。"
+        doc = kb.save_markdown(content, filename="旧接口分类.md", categories="网络问题")["doc"]
+
+        updated = kb.save_markdown(content, doc["id"], doc["name"],
+                                   category="流程问题", categories="")["doc"]
+
+        self.assertEqual(updated["category"], "流程问题")
+        self.assertEqual(updated["categories"], ["流程问题"])
+        self.assertEqual(Ingester().read_chunks(doc["id"])[0].category, "流程问题")
+
     def test_set_categories_updates_multiple_tags(self):
         doc = kb.save_markdown("# 点检记录\n\n点检规范执行情况。", "", "改标签.md")["doc"]
 

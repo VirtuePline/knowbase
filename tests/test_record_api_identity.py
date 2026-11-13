@@ -34,6 +34,16 @@ class RecordIdentityTest(unittest.TestCase):
         self.assertEqual(save.call_args.kwargs["parent_id"], "parent")
         self.assertEqual(save.call_args.args[5], "improving")
 
+    def test_markdown_categories_distinguish_omitted_from_explicit_empty(self):
+        for method, url in (("post", "/api/documents/markdown"), ("put", "/api/documents/record")):
+            for fields, expected in (({}, None), ({"categories": ""}, ""),
+                                     ({"categories": "网络问题"}, "网络问题")):
+                with self.subTest(method=method, fields=fields), \
+                        patch.object(routes.kb, "save_markdown", return_value={"doc": {"id": "record"}}) as save:
+                    response = getattr(self.api, method)(url, json={"content": "记录内容", **fields})
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(save.call_args.kwargs["categories"], expected)
+
     def test_file_upload_owner_cannot_be_overridden(self):
         with patch.object(routes.kb, "upload", return_value={"doc": {"id": "child"}}) as save:
             response = self.api.post("/api/documents", files={"file": ("record.md", b"record")},

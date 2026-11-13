@@ -245,7 +245,7 @@ class MarkdownRequest(BaseModel):
     doc_id: str = Field(default="", description="为空则新建，否则覆盖该文档")
     filename: str = Field(default="", description="文件名，缺省时自动生成")
     category: str = Field(default="", description="人工指定的单一记录分类（兼容）；为空时按内容自动归类")
-    categories: str = Field(default="", description="多分类标签，| 或逗号分隔；非空时优先于 category")
+    categories: str = Field(default="", description="多分类标签，| 或逗号分隔；非空时优先于 category；显式为空且未指定 category 时恢复自动分类，省略时编辑保留原分类")
     vendor: str = Field(default="", description="厂商（厂商系统类记录必填）")
     resolved: str = Field(default="", description="解决状态：resolved / improving / temporary / unresolved；空保留原值")
     uploaded_by_name: str = Field(default="", description="记录人用户名（默认当前登录用户名）；仅创建时写入")
@@ -419,7 +419,7 @@ def read_source(doc_id: str) -> dict:
 def create_markdown(req: MarkdownRequest, identity: dict = Depends(require_login)) -> dict:
     try:
         return kb.save_markdown(req.content, "", req.filename, req.category, req.vendor, req.resolved,
-                                categories=req.categories,
+                                categories=req.categories if "categories" in req.model_fields_set else None,
                                 uploaded_by=identity["username"],
                                 uploaded_by_name=req.uploaded_by_name or identity.get("display_name", ""),
                                 parent_id=req.parent_id, department_id=req.department_id,
@@ -434,7 +434,7 @@ def create_markdown(req: MarkdownRequest, identity: dict = Depends(require_login
 def update_markdown(doc_id: str, req: MarkdownRequest, identity: dict = Depends(require_login)) -> dict:
     try:
         return kb.save_markdown(req.content, doc_id, req.filename, req.category, req.vendor, req.resolved,
-                                categories=req.categories,
+                                categories=req.categories if "categories" in req.model_fields_set else None,
                                 uploaded_by=identity["username"], parent_id=req.parent_id,
                                 edited_by=identity["username"],
                                 edited_by_name=identity.get("display_name", ""))
