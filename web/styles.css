@@ -761,8 +761,9 @@ button.primary:disabled { background: #8aafa8; }
 .chat-toggle::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #c4cfd8; transition: background .15s; }
 .chat-toggle.on { color: var(--accent); border-color: #bfe0d5; background: #f2faf6; }
 .chat-toggle.on::before { background: #22a06b; }
-.chat-toggle.new-chat { color: #588e80; }
-.chat-toggle.new-chat:hover { color: var(--accent); border-color: #bfe0d5; background: #f2faf6; }
+.chat-session-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 4px 0; }
+.chat-session-actions .history-fab { position: static; inset: auto; z-index: auto; margin: 0; box-shadow: none; }
+.chat-session-actions .new-chat { color: var(--accent); }
 .composer-help { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 15px; color: #8b99a6; font-size: 10px; padding: 10px 3px 0; }
 .composer-help kbd { font: inherit; color: #768895; }
 .answer-note { text-align: center; color: #9aa6b1; font-size: 10px; margin: 18px 0 0; }

@@ -43,7 +43,10 @@
   <div class="workspace-bar"><div><span class="workspace-label">知识中心</span><span class="breadcrumb-sep" aria-hidden="true">/</span><span id="current-view">智能问答</span></div><div class="workspace-tools"><span class="workspace-context">企业公共知识与部门知识</span><div class="theme-switcher" role="group" aria-label="主题颜色"><span class="theme-label">主题颜色</span><div class="theme-options"><button type="button" class="theme-option" data-theme-option="teal" aria-label="切换为青绿主题" title="青绿主题" aria-pressed="true"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="blue" aria-label="切换为蓝色主题" title="蓝色主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="violet" aria-label="切换为紫色主题" title="紫色主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="amber" aria-label="切换为琥珀主题" title="琥珀主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button></div><span class="theme-status" data-theme-status aria-live="polite"></span></div></div></div>
   <!-- 问答 -->
   <section class="tab active" id="tab-chat">
-    <button type="button" class="history-fab" id="history-btn" title="查看最近的问答记录（仅保存在本机浏览器）">历史记录</button>
+    <div class="chat-session-actions" role="group" aria-label="对话操作">
+      <button type="button" class="ghost new-chat" id="new-chat" title="清空当前会话并返回问答首页" disabled>新对话</button>
+      <button type="button" class="history-fab" id="history-btn" title="查看最近的问答记录（仅保存在本机浏览器）">历史记录</button>
+    </div>
     <div class="chat-hero">
       <div class="hero-eyebrow"><span aria-hidden="true"></span> 企业知识，授权共享</div>
       <h1>让每一次提问，<br class="mobile-break" />都有据可循。</h1>
@@ -80,7 +83,6 @@
         <button type="button" class="chat-toggle" id="fastmode-toggle" aria-pressed="false">快速问答</button>
         <button type="button" class="chat-toggle" id="llm-toggle" aria-pressed="false" hidden>大模型整理</button>
         <button type="button" class="chat-toggle" id="context-toggle" aria-pressed="false" hidden>结合上文</button>
-        <button type="button" class="chat-toggle new-chat" id="new-chat" title="清空对话记录与上下文，开始新对话" hidden>新对话</button>
         <button type="button" class="chat-toggle" id="websearch-toggle" aria-pressed="false" hidden>联网搜索</button>
       </div>
       <div class="composer-help"><span>支持粘贴或拖入图片，发送前可补充描述</span><span><kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行</span></div>
@@ -770,6 +772,8 @@ const sendBtn = $("#send");
 sendBtn.disabled = true;
 const history = [];
 let historyConversationId = "";
+let chatSessionVersion = 0;
+const chatRequests = new Set();
 
 function addMessage(role, html, raw) {
   const wrap = document.createElement("div");
@@ -920,7 +924,7 @@ function renderChatAnswer(bubble, data, question, started, rejected = []) {
 }
 
 // 「答案不对」：把当前回答的知识库来源计入惩罚参数，重新请求并原位替换回答
-log.addEventListener("click", async (e) => {
+async function reaskAnswer(e) {
   const btn = e.target.closest("[data-reask]");
   if (!btn) return;
   const bubble = btn.closest(".bubble");
@@ -934,9 +938,13 @@ log.addEventListener("click", async (e) => {
   btn.textContent = "正在重新检索…";
   const started = performance.now();
   const llmOn = !fmState.enabled && llmState.enabled;
+  const version = chatSessionVersion;
+  const controller = new AbortController();
+  chatRequests.add(controller);
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question,
@@ -949,15 +957,20 @@ log.addEventListener("click", async (e) => {
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
+    if (version !== chatSessionVersion || controller.signal.aborted) return;
     historyConversationId = String(data.conversation_id || "");
     renderChatAnswer(bubble, data, question, started, allRejected);
     log.scrollTop = log.scrollHeight;
   } catch (err) {
+    if (version !== chatSessionVersion || controller.signal.aborted) return;
     btn.disabled = false;
     btn.textContent = oldText;
     toast(`重新回答失败：${String(err.message || err)}`);
+  } finally {
+    chatRequests.delete(controller);
   }
-});
+}
+log.addEventListener("click", reaskAnswer);
 
 let lastAnswered = false;   // 上一轮是否已成功回答（快速问答据此自动开启新对话）
 
@@ -967,10 +980,19 @@ async function ask(question, userLabel) {
 
   // 快速问答：每轮问答互相独立，上一轮已回答后再次提问自动开启新对话
   if (fmState.enabled && lastAnswered && log.children.length) {
-    startNewChat();
-    lastAnswered = false;
+    startNewChat({ preserveDraft: true, focus: false });
   }
 
+  const version = chatSessionVersion;
+  const controller = new AbortController();
+  chatRequests.add(controller);
+  const image = pendingImage;
+  const inputAtStart = questionBox.value;
+  const fastOn = fmState.enabled;
+  const llmOn = !fastOn && llmState.enabled;
+  const keepContext = ctxState.enabled && !fastOn;
+  const contextOn = ctxState.enabled && llmOn;
+  const webOn = llmOn && wsState.enabled;
   const hero = document.querySelector(".chat-hero");
   if (hero) hero.style.display = "none";   // 发出第一条问题后隐藏欢迎标题
   hintsBox.style.display = "none";
@@ -980,20 +1002,24 @@ async function ask(question, userLabel) {
   // 附了图片：发送时才调视觉模型识别，识别结果与文字描述合并成最终问题
   let q = desc;
   let label = userLabel;
-  if (pendingImage) {
+  if (image) {
     const rec = addMessage("bot", '<span class="muted">正在识别图片内容…</span>');
     try {
       const form = new FormData();
-      form.append("image", pendingImage.file);
-      const resp = await fetch("/api/chat/image", { method: "POST", body: form });
+      form.append("image", image.file);
+      const resp = await fetch("/api/chat/image", { method: "POST", body: form, signal: controller.signal });
       const data = await resp.json().catch(() => ({}));
+      if (version !== chatSessionVersion || controller.signal.aborted) return;
       if (!resp.ok) throw new Error(data.detail || "图片识别失败");
-      rec.parentElement.remove();
       const imgQ = String(data.question || "").trim();
+      if (!imgQ && !desc) throw new Error("未识别到可用问题，请补充文字描述");
+      rec.parentElement.remove();
       if (desc) q = imgQ ? desc + "\n（图片识别：" + imgQ + "）" : desc;
       else q = imgQ;
       label = "[图片]" + (desc ? " " + desc : imgQ ? " " + imgQ : "");
     } catch (err) {
+      chatRequests.delete(controller);
+      if (version !== chatSessionVersion || controller.signal.aborted) return;
       // 识别失败：输入框文字与图片附件都保留，用户可直接重发
       rec.innerHTML = `<div class="notice">${escapeHtml(String(err.message || err))}</div>`;
       sendBtn.disabled = false;
@@ -1001,31 +1027,37 @@ async function ask(question, userLabel) {
       log.scrollTop = log.scrollHeight;
       return;
     }
-    clearAttachImage();
+    if (pendingImage === image) clearAttachImage();
   }
-  if (!q.trim()) { sendBtn.disabled = false; log.setAttribute("aria-busy", "false"); return; }
+  if (!q.trim()) {
+    chatRequests.delete(controller);
+    sendBtn.disabled = false;
+    log.setAttribute("aria-busy", "false");
+    return;
+  }
 
   addMessage("user", label || q);
-  questionBox.value = "";
+  if (questionBox.value === inputAtStart) questionBox.value = "";
   const pending = addMessage("bot", '<span class="muted">正在查找解决方案…</span>');
   const started = performance.now();
-  const llmOn = !fmState.enabled && llmState.enabled;   // 快速模式下不整理、不联网
 
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question: q,
-        history: ctxState.enabled && llmOn ? history : [],
-        conversation_id: ctxState.enabled && llmOn && history.length ? historyConversationId : "",
-        fast_mode: fmState.enabled,
+        history: contextOn ? history : [],
+        conversation_id: contextOn && history.length ? historyConversationId : "",
+        fast_mode: fastOn,
         llm_polish: llmOn,
-        web_search: llmOn && wsState.enabled,
+        web_search: webOn,
       }),
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
+    if (version !== chatSessionVersion || controller.signal.aborted) return;
     historyConversationId = String(data.conversation_id || "");
     renderChatAnswer(pending, data, q, started);
     if (data.status !== "guide") {
@@ -1039,16 +1071,20 @@ async function ask(question, userLabel) {
         time: Date.now(),
       });
     }
-    if (ctxState.enabled && !fmState.enabled) {
+    if (keepContext) {
       history.push({ role: "user", content: q }, { role: "assistant", content: data.answer });
       if (history.length > 6) history.splice(0, history.length - 6);
     }
   } catch (err) {
+    if (version !== chatSessionVersion || controller.signal.aborted) return;
     pending.innerHTML = `<div class="notice">请求失败：${escapeHtml(String(err.message || err))}，请确认服务已启动。</div>`;
   } finally {
-    sendBtn.disabled = false;
-    log.setAttribute("aria-busy", "false");
-    log.scrollTop = log.scrollHeight;
+    chatRequests.delete(controller);
+    if (version === chatSessionVersion) {
+      sendBtn.disabled = false;
+      log.setAttribute("aria-busy", "false");
+      log.scrollTop = log.scrollHeight;
+    }
   }
 }
 
@@ -2375,7 +2411,7 @@ $("#audit-next").addEventListener("click", () => { if (auditPage * AUDIT_PAGE_SI
 
 /* ---------- 提问开关：快速问答 / 大模型整理 / 结合上文 / 新对话 / 联网搜索（随请求发送，不改全局设置） ---------- */
 // 三档模式：快速问答（跳过精排、不调模型，秒回原文）→ 默认（精排 + 规则提取，不调模型）
-// → 大模型整理（在默认基础上由模型整理答案，结合上文 / 新对话 / 联网搜索挂在该模式下）
+// → 大模型整理（在默认基础上整理答案，结合上文 / 联网搜索随该模式显示）；新对话始终独立可用。
 const fmToggle = $("#fastmode-toggle");
 const llmToggle = $("#llm-toggle");
 const wsToggle = $("#websearch-toggle");
@@ -2410,17 +2446,34 @@ function renderToggles() {
   if (ctxToggle) ctxToggle.title = ctxState.enabled
     ? "已开启：追问会结合之前的问题与回答检索（点击关闭）"
     : "已关闭：每次提问互相独立（点击开启）";
-  // 显隐：快速问答只留自己；大模型整理开启后才显示结合上文 / 新对话 / 联网搜索
+  // 模型相关开关按模式显示，新对话由独立工具栏提供。
   if (llmToggle) llmToggle.hidden = fmState.enabled;
   if (wsToggle) wsToggle.hidden = fmState.enabled || !llmState.enabled;
   if (ctxToggle) ctxToggle.hidden = fmState.enabled || !llmState.enabled;
-  if (newChatBtn) newChatBtn.hidden = fmState.enabled || !llmState.enabled;
 }
 
-function startNewChat() {
+function startNewChat({ preserveDraft = false, focus = true } = {}) {
+  chatSessionVersion += 1;
+  chatRequests.forEach((controller) => controller.abort());
+  chatRequests.clear();
   history.length = 0;
   historyConversationId = "";
+  lastAnswered = false;
   log.innerHTML = "";
+  log.scrollTop = 0;
+  log.setAttribute("aria-busy", "false");
+  sendBtn.disabled = newChatBtn?.disabled === true;
+  const hero = document.querySelector(".chat-hero");
+  if (hero) hero.style.display = "";
+  hintsBox.style.display = "";
+  if (!preserveDraft) {
+    questionBox.value = "";
+    clearAttachImage();
+  }
+  if (focus) {
+    questionBox.focus({ preventScroll: true });
+    window.scrollTo?.({ top: 0, behavior: "auto" });
+  }
 }
 
 renderToggles();
@@ -2436,7 +2489,7 @@ if (ctxToggle) ctxToggle.addEventListener("click", () => {
   if (!ctxState.enabled) startNewChat();   // 关闭结合上文：立即开始新对话，已有上下文不再带入
   renderToggles();
 });
-if (newChatBtn) newChatBtn.addEventListener("click", startNewChat);
+if (newChatBtn) newChatBtn.addEventListener("click", () => startNewChat());
 
 /* ---------- 历史记录：最近 10 条问答，仅存浏览器 localStorage，不上传后端 ---------- */
 const HISTORY_KEY = "kb_chat_history"; // 旧键只在迁移时清除，新历史按账号与权限版本隔离
@@ -4290,6 +4343,7 @@ async function initPage() {
   } catch {
     // 会话状态读取失败：清除角色可见性并回到公共页签，避免残留管理员界面
     isAuthenticated = isAdmin = isSuperAdmin = isAccountAdmin = false;
+    $("#new-chat").disabled = sendBtn.disabled = true;
     applyRoleVisibility();
     document.body.classList.remove("admin-mode", "account-admin");
     switchTo("chat");
@@ -4319,6 +4373,7 @@ async function initPage() {
   await loadCategories();   // 记录分类清单：内置 + 后台自定义，选择窗体用
   await Promise.all([loadKnowledgeStats(), loadDocuments()]);
   sendBtn.disabled = false;
+  $("#new-chat").disabled = false;
   if (isAdmin) {
     await loadVendors();
     await loadTemplates();

@@ -29,7 +29,10 @@ function enterpriseHistoryKey() {
 }
 function enterpriseClearSession() {
   try { localStorage.removeItem(enterpriseHistoryKey()); localStorage.removeItem("kb_chat_history"); } catch {}
-  try { history.length = 0; historyConversationId = ""; log.innerHTML = ""; } catch {}
+  try {
+    if (typeof startNewChat === "function") startNewChat({ focus: false });
+    else { history.length = 0; historyConversationId = ""; log.innerHTML = ""; }
+  } catch {}
 }
 function enterpriseOptions(departments, selected = []) {
   return departments.map((d) => `<option value="${enterpriseEscape(d.id)}"${selected.includes(d.id) ? " selected" : ""}>${enterpriseEscape(d.name)}</option>`).join("");
