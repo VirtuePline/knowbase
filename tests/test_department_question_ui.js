@@ -62,12 +62,11 @@ function page(portal = "admin") {
     const history = [], chatRequests = new Set();
     const fmState = {enabled:false}, llmState = {enabled:false}, ctxState = {enabled:true}, wsState = {enabled:false};
     const log = $("#chat-log"), questionBox = $("#question"), sendBtn = $("#send"), newChatBtn = $("#new-chat");
-    const hintsBox = $("#hints"), questionDepartmentSelect = $("#question-department");
-    const questionDepartmentControl = $("#question-department-control"), questionHintsTitle = $("#question-hints-title");
+    const hintsBox = $("#hints"), questionHintsTitle = $("#question-hints-title");
     const questionHintsScope = $("#question-hints-scope"), questionHintsState = $("#question-hints-state");
     function clearAttachImage() { pendingImage = null; }
     ${["escapeHtml", "currentQuestionDepartment", "clearQuestionHints", "renderQuestionDepartment",
-      "loadTopQuestions", "changeQuestionDepartment", "startNewChat", "ask", "reaskAnswer"].map(shippedFunction).join("\n")}
+      "loadTopQuestions", "startNewChat", "ask", "reaskAnswer"].map(shippedFunction).join("\n")}
     const originalReset = startNewChat;
     startNewChat = (...args) => { resetCount += 1; originalReset(...args); };
   `, context);
@@ -84,56 +83,41 @@ function department(id = "hr", questions = [{ question: "如何请假", count: 3
 }
 function answer(text = "本人可见回答") { return {status: "ok", answer: text, conversation_id: "current", sources: []}; }
 
-test("FAQ markup has no fixed technical defaults and labels the department selector", () => {
+test("FAQ markup no longer shows a department selector", () => {
   const markup = html.slice(html.indexOf('id="hints"'), html.indexOf('id="chat-log"'));
   assert.doesNotMatch(markup, /网页打不开|音响没声音|华智剔废乱剔|箱签出不来/);
-  assert.match(markup, /aria-label="常见问题所属部门"/);
-  assert.match(markup, /id="question-department-control" hidden/);
+  assert.doesNotMatch(markup, /question-department-control/, "常见问题区不应再有部门选择器");
+  assert.doesNotMatch(markup, /所属部门/, "不应展示所属部门标签");
   assert.match(markup, /id="question-hints-state" role="status"/);
 });
 
-test("department suggestions and directory names are rendered as text and use only endpoint options", async () => {
+test("department suggestions and directory names are rendered as text", async () => {
   const ui = page();
   await ui.load(department("hr", [{question:"<img src=x>请假",count:4}], [{id:"hr",name:"人事<部门>"}]));
   assert.equal(ui.requests[0].url, "/api/questions/top");
   assert.deepEqual(ui.hintTexts(), ["<img src=x>请假"]);
   assert.equal(ui.node("#question-hints-title").textContent, "人事<部门>常见问题");
-  assert.equal(ui.node("#question-department").children[0].textContent, "人事<部门>");
-  assert.equal(ui.node("#question-department-control").hidden, true);
   assert.equal(ui.node("#question-hints-state").hidden, true);
 });
 
-test("switching departments clears old suggestions, resets the chat, and ignores older responses", async () => {
-  const ui = page(); await ui.load(department());
-  ui.run('history.push({role:"assistant",content:"旧部门内容"}); historyConversationId="old";');
-  ui.node("#question-department").value = "ops";
-  const older = ui.run("changeQuestionDepartment()");
-  assert.deepEqual(ui.hintTexts(), []);
-  assert.match(ui.requests[1].url, /department_id=ops/);
-  assert.equal(ui.state().historyConversationId, "");
-  assert.equal(ui.node("#question-department-control").hidden, false);
-  ui.node("#question-department").value = "hr";
-  const newer = ui.run("changeQuestionDepartment()");
-  ui.requests[2].resolve(reply(department("hr", [{question:"新的人事问题"}]))); await newer;
-  ui.requests[1].resolve(reply(department("ops", [{question:"过期信息问题"}]))); await older;
-  assert.deepEqual(ui.hintTexts(), ["新的人事问题"]);
-  assert.equal(ui.state().questionDepartmentId, "hr");
-  assert.equal(ui.state().resetCount, 2);
-  assert.equal(ui.node("#question-department").value, "hr");
+test("stale FAQ responses never overwrite newer department questions", async () => {
+  const ui = page(); await ui.load(department("hr", []));
+  const older = ui.run("loadTopQuestions()");      // 旧请求（慢）
+  const newer = ui.run("loadTopQuestions()");      // 新请求（先回）
+  ui.requests.at(-2).resolve(reply(department("hr", [{question:"过期问题"}])));
+  await older;
+  ui.requests.at(-1).resolve(reply(department("hr", [{question:"最新人事问题"}])));
+  await newer;
+  assert.deepEqual(ui.hintTexts(), ["最新人事问题"]);
 });
 
-test("empty department and failed requests never reuse another department's questions", async () => {
-  const ui = page(); await ui.load(department());
-  ui.node("#question-department").value = "ops";
-  const pending = ui.run("changeQuestionDepartment()");
+test("failed requests never reuse another department's questions", async () => {
+  const ui = page(); await ui.load(department("hr", []));
+  const pending = ui.run("loadTopQuestions()");
   ui.requests.at(-1).resolve(reply({detail:"无权限"}, false)); await pending;
   assert.deepEqual(ui.hintTexts(), []);
   assert.match(ui.node("#question-hints-state").textContent, /无法加载/);
-  assert.equal(ui.state().questionDepartmentId, "ops");
   assert.equal(ui.node("#hints").attrs["aria-busy"], "false");
-  await ui.load(department("ops", []));
-  assert.match(ui.node("#question-hints-state").textContent, /本部门暂无/);
-  assert.deepEqual(ui.hintTexts(), []);
 });
 
 test("public pages share a public pool and cannot render department data or a stale department selection", async () => {
@@ -143,7 +127,6 @@ test("public pages share a public pool and cannot render department data or a st
   assert.equal(ui.requests.at(-1).url, "/api/questions/top");
   assert.deepEqual(ui.hintTexts(), ["公共常见问题"]);
   assert.equal(ui.state().questionDepartmentId, "");
-  assert.equal(ui.node("#question-department-control").hidden, true);
   await ui.load(department());
   assert.deepEqual(ui.hintTexts(), []);
   assert.match(ui.node("#question-hints-title").textContent, /公共/);

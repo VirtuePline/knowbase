@@ -58,7 +58,7 @@
       </div>
     </div>
     <div class="hints" id="hints" aria-label="常见问题">
-      <div class="hints-heading"><strong id="question-hints-title">常见问题</strong><span id="question-hints-scope"></span><label class="question-department-control" id="question-department-control" hidden>所属部门<select id="question-department" aria-label="常见问题所属部门" title="切换部门将开始新对话，历史记录保留"></select></label></div>
+      <div class="hints-heading"><strong id="question-hints-title">常见问题</strong><span id="question-hints-scope"></span></div>
       <p class="hints-state" id="question-hints-state" role="status">正在加载常见问题…</p>
     </div>
     <div id="chat-log" role="log" aria-label="问答记录" aria-live="polite" aria-relevant="additions text"></div>
@@ -1100,8 +1100,6 @@ async function ask(question, userLabel) {
 }
 
 const hintsBox = $("#hints");
-const questionDepartmentSelect = $("#question-department");
-const questionDepartmentControl = $("#question-department-control");
 const questionHintsTitle = $("#question-hints-title");
 const questionHintsScope = $("#question-hints-scope");
 const questionHintsState = $("#question-hints-state");
@@ -1141,30 +1139,7 @@ function renderQuestionDepartment() {
     : selected ? `${selected.name}常见问题` : "常见问题";
   questionHintsScope.textContent = isPublic || questionScope === "public" ? "最近 7 天公共提问"
     : questionScope === "department" ? "最近 7 天本部门提问" : "未分配部门";
-  questionDepartmentControl.hidden = isPublic || questionScope !== "department" || questionDepartments.length < 2;
-  questionDepartmentSelect.disabled = questionDepartmentControl.hidden;
-  questionDepartmentSelect.innerHTML = "";
-  if (!isPublic && questionScope === "department") {
-    for (const department of questionDepartments) {
-      const option = document.createElement("option");
-      option.value = department.id;
-      option.textContent = department.name;
-      questionDepartmentSelect.appendChild(option);
-    }
-    questionDepartmentSelect.value = questionDepartmentId;
-  }
 }
-
-async function changeQuestionDepartment() {
-  if (typeof portal !== "undefined" && portal === "search") return;
-  const departmentId = questionDepartmentSelect.value;
-  if (departmentId === questionDepartmentId || !questionDepartments.some((department) => department.id === departmentId)) return;
-  questionDepartmentId = departmentId;
-  questionScope = "department";
-  startNewChat({ focus: false });
-  await loadTopQuestions();
-}
-questionDepartmentSelect.addEventListener("change", changeQuestionDepartment);
 
 // 热门问题只使用当前部门或公共端的独立统计，无数据时不借用其他范围的问题。
 async function loadTopQuestions() {
