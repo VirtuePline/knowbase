@@ -2,6 +2,60 @@
 
 面向企业各部门的文档管理与知识问答服务，支持企业公共资料、部门内部资料和跨部门只读共享。各部门均可使用文档问答、工作记录、记录追踪、时间线与工作周报。
 
+## 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 后端 | Python 3.12 · FastAPI · Uvicorn（查询端 / 管理端双端口隔离） |
+| 数据库 | MongoDB：文档登记、账号与会话、审计日志、周报；向量存储与余弦检索 |
+| 检索 | BM25 关键词 + 嵌入向量（本地 fastembed / API）双路召回，RRF 融合，本地 Cross-Encoder 重排序 |
+| 模型接入 | OpenAI 兼容 `/chat/completions` 协议（DeepSeek、内网网关均可）；未配置密钥时退回本地规则与原文方案提取 |
+| 联网参考 | Tavily Search API（可选，问题脱敏后发送） |
+| 文档解析 | PDF / DOCX / XLSX / CSV / TXT / MD，按章节结构切分并生成摘要 |
+| 前端 | 原生 HTML / CSS / JavaScript 单页应用，无构建步骤；问答、文档管理、工作记录、时间线、周报一体 |
+| 部署 | 本地 venv 直接运行，或 Docker Compose（支持离线镜像发布） |
+
+## 快速部署
+
+### 方式一：本地运行
+
+使用 Python 3.12，并先启动 MongoDB。默认数据库地址为 `mongodb://127.0.0.1:27017`，数据库名为 `knowbase`；可通过 `config.local.yaml` 的 `database` 段或 `KB_MONGO_URI` 环境变量指定其他地址。
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+pip install -r requirements.txt
+
+# 可选：新建 config.local.yaml 填入密钥，见下文「配置」
+
+python scripts/seed_demo.py       # 生成演示数据（虚构内容，生产前删除）
+python -m app.cli ingest knowledge_base/demo
+python -m app.cli serve
+# 检索端（只读）：http://127.0.0.1:8000
+# 管理端（上传 / 编辑）：http://127.0.0.1:8001
+```
+
+未配置 `llm.api_key` 时不会调用模型：文档分析使用本地规则，问答优先提取原文中的处理方案与记录结果，不做推断。只包含问题描述的命中不会被当成已找到解决方案。
+
+问答正文不单独列出来源，统一在「参考来源」中查看。记录直接引用的文档库文档放在该记录的索引位置下方，可点击文档名预览。快速模式、原文摘录和大模型整理均支持；同一记录内的重复引用只展示一次，已删除或未就绪的文档自动跳过，引用文档不参与本次检索评分。
+
+联网搜索使用独立的密钥；未配置 `web_search.api_key` 时不会发送搜索请求，仍可使用本地知识库。
+
+本地嵌入与重排序独立于问答模型运行。嵌入模型首次使用可能下载文件；离线机器需要预先准备 `data/models/fastembed` 与 `data/models/bge-reranker-base`。不使用本地模型时，可在配置中关闭 `embedding.enabled` 和 `rerank.enabled`，保留关键词检索。
+
+### 方式二：Docker Compose
+
+准备好 `config.local.yaml`（无需覆盖参数时可写入 `{}`）与 `data/models` 中的两个模型目录，然后：
+
+```bash
+docker compose up -d --build
+
+# 查询端：http://localhost（默认宿主机 80 端口）
+# 管理端：http://127.0.0.1:8001（仅宿主机可访问）
+```
+
+MongoDB 由外部提供，默认连接宿主机 `host.docker.internal:27017`（Linux 通过 `host-gateway` 映射）。离线镜像发布、端口覆盖与升级备份的完整步骤见下文「Docker 部署」。
+
 ## 部门与文档权限
 
 - 普通查询端口免登录，只能访问标记为“公共”的文档；即使带有管理端登录 Cookie，也不会显示部门或共享文档。管理端须登录，按部门成员身份与共享授权访问资料。
@@ -68,32 +122,6 @@ data/index/                 索引与分块（可随时重建）
 data/images/                编辑器上传的图片
 data/models/                本地嵌入与重排序模型
 ```
-
-## 快速开始
-
-使用 Python 3.12，并先启动 MongoDB。默认数据库地址为 `mongodb://127.0.0.1:27017`，数据库名为 `knowbase`；可通过 `config.local.yaml` 的 `database` 段或 `KB_MONGO_URI` 环境变量指定其他地址。
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate            # Windows
-pip install -r requirements.txt
-
-# 可选：新建 config.local.yaml 填入密钥，见下文「配置」
-
-python scripts/seed_demo.py       # 生成演示数据（虚构内容，生产前删除）
-python -m app.cli ingest knowledge_base/demo
-python -m app.cli serve
-# 检索端（只读）：http://127.0.0.1:8000
-# 管理端（上传 / 编辑）：http://127.0.0.1:8001
-```
-
-未配置 `llm.api_key` 时不会调用模型：文档分析使用本地规则，问答优先提取原文中的处理方案与记录结果，不做推断。只包含问题描述的命中不会被当成已找到解决方案。
-
-问答正文不单独列出来源，统一在「参考来源」中查看。记录直接引用的文档库文档放在该记录的索引位置下方，可点击文档名预览。快速模式、原文摘录和大模型整理均支持；同一记录内的重复引用只展示一次，已删除或未就绪的文档自动跳过，引用文档不参与本次检索评分。
-
-联网搜索使用独立的密钥；未配置 `web_search.api_key` 时不会发送搜索请求，仍可使用本地知识库。
-
-本地嵌入与重排序独立于问答模型运行。嵌入模型首次使用可能下载文件；离线机器需要预先准备 `data/models/fastembed` 与 `data/models/bge-reranker-base`。不使用本地模型时，可在配置中关闭 `embedding.enabled` 和 `rerank.enabled`，保留关键词检索。
 
 ## 文档分析与端口隔离
 
