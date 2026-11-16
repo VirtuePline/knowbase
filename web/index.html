@@ -1788,9 +1788,9 @@ function tlEffective(event) {
 function tlStatusControl(event) {
   const badge = tlBadge(tlEffective(event));
   if (!enterpriseCanWrite(event)) return badge;
-  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "";   // 存量 unknown 显示为未完成
+  const value = event.status === "resolved" ? "resolved" : event.status === "improving" ? "improving" : event.status === "temporary" ? "temporary" : "unresolved";   // 未标记及存量 unknown 显示为未完成；选择时提交明确状态
   const options = [
-    ["", "未完成（默认）"],
+    ["unresolved", "未完成"],
     ["improving", "处理中"],
     ["temporary", "阶段完成"],
     ["resolved", "已完成"],
@@ -2086,7 +2086,7 @@ tlBody.addEventListener("change", async (e) => {
       throw new Error(data.detail || "标记失败");
     }
     await loadTimeline();
-    toast(status ? "完成情况已标记" : "已恢复按内容判定");
+    toast("完成情况已标记");
   } catch (err) {
     toast(String(err.message || err));
     sel.disabled = false;

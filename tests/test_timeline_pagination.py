@@ -144,6 +144,52 @@ class TimelinePaginationTest(unittest.TestCase):
         self.assertEqual(result["status_counts"]["no"], 2)
         self.assertEqual(sum(row["count"] for row in result["departments"]), 2)
 
+    def test_explicit_unresolved_overrides_saved_status_in_reload_filters_counts_and_children(self):
+        self.add("parent")
+        for previous in ("improving", "temporary", "resolved"):
+            with self.subTest(previous=previous):
+                self.add(previous, resolved=previous, parent_id="parent", root_id="parent")
+                before = next(event for event in timeline.children("parent")["events"]
+                              if event["doc_id"] == previous)
+                self.assertEqual(before["status"], previous)
+
+                result = routes.update_event_status(routes.EventStatusRequest(
+                    chunk_id=previous, doc_id=previous, status="unresolved"))
+                self.assertEqual(result, {"chunk_id": previous, "status": "unresolved"})
+                stored = self.db.event_status.find_one({"_id": previous})
+                self.assertEqual(stored["doc_id"], previous)
+                self.assertEqual(stored["status"], "unresolved")
+                self.assertEqual(database.get(previous).resolved, previous)
+
+        # 重新查询数据库后，主列表、后续记录及所有筛选计数均采用显式未完成状态。
+        page = timeline.build()
+        self.assertEqual({event["doc_id"] for event in page["events"]},
+                         {"parent", "improving", "temporary", "resolved"})
+        self.assertTrue(all(event["status"] == "unresolved" for event in page["events"]))
+        self.assertEqual(page["status_counts"], {"": 4, "yes": 0, "no": 4, "improving": 0, "temporary": 0})
+        unfinished = timeline.build(status="no")
+        self.assertEqual(unfinished["total"], 4)
+        for status in ("yes", "improving", "temporary"):
+            with self.subTest(status=status):
+                self.assertEqual(timeline.build(status=status)["events"], [])
+        children = timeline.children("parent")
+        self.assertEqual(children["total"], 3)
+        self.assertTrue(all(event["status"] == "unresolved" for event in children["events"]))
+        self.assertTrue(all(event["resolved"] == "no" for event in children["events"]))
+
+    def test_empty_manual_status_still_clears_override_and_restores_saved_status(self):
+        self.add("record", resolved="improving")
+        routes.update_event_status(routes.EventStatusRequest(
+            chunk_id="record", doc_id="record", status="unresolved"))
+        result = routes.update_event_status(routes.EventStatusRequest(
+            chunk_id="record", doc_id="record", status=""))
+        self.assertEqual(result, {"chunk_id": "record", "status": ""})
+        self.assertIsNone(self.db.event_status.find_one({"_id": "record"}))
+        page = timeline.build(status="improving")
+        self.assertEqual([event["status"] for event in page["events"]], ["improving"])
+        self.assertEqual(page["status_counts"], {"": 1, "yes": 0, "no": 0, "improving": 1, "temporary": 0})
+        self.assertEqual(timeline.build(status="no")["total"], 0)
+
     def test_children_paginate_independently_and_include_failed_and_empty_records(self):
         self.add("parent", summary="2026年1月1日，现象：报工失败。")
         for number in range(25):
