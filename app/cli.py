@@ -15,53 +15,14 @@ from app.services.retrieval_service import retrieval
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    import threading
     import uvicorn
 
-    search_host = args.host or settings.host
-    search_port = args.port or settings.port
-    admin_host = args.admin_host or settings.admin_host
-    admin_port = args.admin_port or settings.admin_port
+    host = args.host or settings.host
+    port = args.port or settings.port
     # KB_RELOAD=1 时监听代码文件变化并自动重启（配合整项目挂载：改宿主机代码容器即时生效）。
-    # reload 要求 signal handler 在主线程，因此两端各起一个独立子进程，而不是同进程双线程。
     reload_on = os.environ.get("KB_RELOAD", "").strip() == "1"
-
-    def run_search():
-        uvicorn.run("app.main:search_app", host=search_host, port=search_port, log_level="info", reload=reload_on)
-
-    def run_admin():
-        uvicorn.run("app.main:admin_app", host=admin_host, port=admin_port, log_level="info", reload=reload_on)
-
-    if reload_on:
-        import subprocess
-
-        def uvicorn_cmd(app: str, host: str, port: int) -> list[str]:
-            return [sys.executable, "-m", "uvicorn", app, "--host", host, "--port", str(port), "--reload"]
-
-        admin_proc = None
-        if not args.search_only:
-            admin_proc = subprocess.Popen(uvicorn_cmd("app.main:admin_app", admin_host, admin_port))
-        try:
-            if not args.admin_only:
-                subprocess.run(uvicorn_cmd("app.main:search_app", search_host, search_port))
-        finally:
-            if admin_proc:
-                admin_proc.terminate()
-        return
-
-    if args.admin_only:
-        print(f"管理端：http://{admin_host}:{admin_port}")
-        run_admin()
-        return
-    if args.search_only:
-        print(f"查询端：http://{search_host}:{search_port}")
-        run_search()
-        return
-
-    print(f"查询端：http://{search_host}:{search_port}  |  管理端：http://{admin_host}:{admin_port}")
-    t = threading.Thread(target=run_admin, daemon=True)
-    t.start()
-    run_search()  # 主线程跑查询端，Ctrl-C 可中断整个进程
+    print(f"知识库：http://{host}:{port}（可免登录查询公共资料，登录后使用账号权限）")
+    uvicorn.run("app.main:app", host=host, port=port, log_level="info", reload=reload_on)
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -189,13 +150,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="企业知识库助手")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("serve", help="同时启动查询端与管理端")
-    p.add_argument("--host", default="", help="查询端主机（默认 config.yaml server.host）")
-    p.add_argument("--port", type=int, default=0, help="查询端端口（默认 config.yaml server.port）")
-    p.add_argument("--admin-host", dest="admin_host", default="", help="管理端主机")
-    p.add_argument("--admin-port", dest="admin_port", type=int, default=0, help="管理端端口")
-    p.add_argument("--search-only", dest="search_only", action="store_true", help="只启动查询端")
-    p.add_argument("--admin-only", dest="admin_only", action="store_true", help="只启动管理端")
+    p = sub.add_parser("serve", help="启动统一知识库服务（可选登录）")
+    p.add_argument("--host", default="", help="监听主机（默认 config.yaml server.host）")
+    p.add_argument("--port", type=int, default=0, help="监听端口（默认 config.yaml server.port）")
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("ingest", help="批量导入文件或目录")

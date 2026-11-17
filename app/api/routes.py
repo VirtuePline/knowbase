@@ -1,7 +1,7 @@
 """HTTP 接口。
 
-search_router — 只读：问答、文档列表、预览、下载。查询端与管理端都挂载。
-admin_router  — 读写：上传、替换、编辑、删除、重建。只挂在管理端，查询端请求这些地址会得到 404 / 405。
+search_router — 读取与问答：按当前访客或账号身份限定可见资料。
+admin_router  — 上传、替换、编辑、删除、重建等操作：须登录并校验账号权限。
 """
 from __future__ import annotations
 

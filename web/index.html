@@ -83,7 +83,7 @@
         <button type="button" class="chat-toggle" id="websearch-toggle" aria-pressed="false" hidden>联网搜索</button>
       </div>
       <div class="composer-help"><span>支持粘贴或拖入图片，发送前可补充描述</span><span><kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行</span></div>
-      <div class="answer-note">回答依据当前可访问的文档，参考来源可点击预览。公开查询端仅使用公共文档。</div>
+      <div class="answer-note">回答依据当前可访问的文档，参考来源可点击预览。未登录时仅使用公共文档。</div>
     </div>
 
     <!-- 历史记录：最近 10 条问答，仅存浏览器 localStorage，不上传后端 -->
@@ -1271,7 +1271,7 @@ function applyRoleVisibility() {
 let isAccountAdmin = false;   // 账号管理员：可创建普通账号
 let currentUser = "";          // 稳定英文账号，用于身份标识
 let currentDisplayName = "";   // 可包含中文，仅用于展示
-let portal = "search";         // "search" 检索端口 | "admin" 管理端口
+let portal = "search";         // "search" 公共访问 | "admin" 已登录成员
 let replaceTargetId = "";
 let editorRequest = 0;
 
@@ -3071,17 +3071,18 @@ let authEnabled = false;
 function openLogin() { window.location.assign("/login"); }
 function closeLogin() { loginMask.classList.remove("show"); }
 
-$("#mode-badge").addEventListener("click", async () => {
-  if (portal === "search" || !currentUser) return;
+async function handleAccountAccess() {
+  if (portal === "search" || !currentUser) { openLogin(); return; }
   const button = $("#mode-badge");
   button.disabled = true;
   try {
     const response = await fetch("/api/admin/logout", { method: "POST" });
     if (!response.ok) throw new Error("退出失败，请重试");
     enterpriseClearSession();
-    window.location.assign("/login");
+    window.location.assign("/");
   } catch (error) { toast(String(error.message || error)); button.disabled = false; }
-});
+}
+$("#mode-badge").addEventListener("click", handleAccountAccess);
 
 function updateNavigation(tab) {
   const selected = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
@@ -4580,10 +4581,11 @@ async function initPage() {
   if (operatorInput && !operatorInput.value) operatorInput.value = currentDisplayName || currentUser || "";
   $("#change-password-link").hidden = !currentUser;
   const badge = $("#mode-badge");
-  badge.textContent = portal === "search" ? "公共访问 · 仅公共文档" : "退出登录";
+  badge.textContent = portal === "search" ? "登录企业账号" : "退出登录";
   badge.className = "mode-badge " + (isAdmin ? "admin" : "search");
-  badge.title = portal === "search" ? "无需登录，仅查询企业公开发布的文档" : "退出当前账号";
-  badge.disabled = portal === "search";
+  badge.title = portal === "search" ? "当前为公共访问；登录后使用部门资料与工作台" : "退出当前账号，返回公共知识库";
+  badge.setAttribute("aria-label", badge.textContent);
+  badge.disabled = false;
   $("#docs-tab-btn").textContent = portal === "search" ? "文档检索" : "文档管理";
   await loadCategories();   // 记录分类清单：内置 + 后台自定义，选择窗体用
   await Promise.all([loadKnowledgeStats(), loadDocuments()]);

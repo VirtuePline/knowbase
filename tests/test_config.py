@@ -44,6 +44,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(s.top_k, 3)
         self.assertEqual(s.min_coverage, 0.32)
 
+    def test_legacy_admin_port_can_match_the_unified_port(self):
+        s = self._load(BASE, "server:\n  admin_host: 127.0.0.1\n  admin_port: 8000\n")
+        self.assertEqual(s.port, 8000)
+        self.assertEqual(s.admin_port, 8000, "旧端口配置继续兼容读取，不再要求端口分离")
+
     def test_unknown_key_is_rejected(self):
         with self.assertRaises(ConfigError):
             self._load(BASE, "retrieval:\n  min_coverge: 0.5\n")

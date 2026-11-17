@@ -15,8 +15,7 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    KB_HOST=0.0.0.0 \
-    KB_ADMIN_HOST=0.0.0.0
+    KB_HOST=0.0.0.0
 
 # 先装依赖，充分利用 Docker 层缓存（国内网络用清华 PyPI 镜像，加大超时重试）
 COPY requirements.txt .
@@ -34,5 +33,5 @@ COPY data/models/fastembed data/models/fastembed
 # 私有覆盖由运行时只读挂载，不进入镜像层。
 COPY config.yaml ./
 
-EXPOSE 8000 8001
-CMD ["python", "-m", "app.cli", "serve"]
+EXPOSE 80
+CMD ["python", "-m", "app.cli", "serve", "--port", "80"]

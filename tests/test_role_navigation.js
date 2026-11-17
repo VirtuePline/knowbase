@@ -7,6 +7,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+const loginHtml = fs.readFileSync(path.join(__dirname, "../web/login.html"), "utf8");
 const css = fs.readFileSync(path.join(__dirname, "../web/styles.css"), "utf8");
 const enterpriseSource = fs.readFileSync(path.join(__dirname, "../web/enterprise.js"), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -65,6 +66,7 @@ function createPage(mode, savedTab = "") {
   const redirects = [];
   const storage = new Map([["kb_last_tab", savedTab]]);
   let currentMode = mode;
+  let clearedSessions = 0;
   const document = {
     body: elements.find((el) => el.tag === "body"),
     querySelector: find,
@@ -74,8 +76,8 @@ function createPage(mode, savedTab = "") {
     document,
     $: find,
     localStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
-    window: { location: { replace: (url) => redirects.push(url) } },
-    openLogin: () => redirects.push("/login"),
+    window: { location: { replace: (url) => redirects.push(url), assign: (url) => redirects.push(url) } },
+    enterpriseClearSession: () => { clearedSessions++; },
     fetch: async (url) => {
       requests.push(url);
       if (url === "/api/mode") {
@@ -86,6 +88,7 @@ function createPage(mode, savedTab = "") {
         { username: "admin", display_name: "管理员", role: "admin" },
         { username: "operator", display_name: "运维员", role: "user" },
       ] }) };
+      if (url === "/api/admin/logout") return { ok: true };
       if (url.startsWith("/api/audit-logs?")) return { ok: true, json: async () => ({ total: 0, logs: [] }) };
       throw new Error(`Unexpected request: ${url}`);
     },
@@ -100,7 +103,7 @@ function createPage(mode, savedTab = "") {
     "portal", "authEnabled", "LAST_TAB_KEY", "PUBLIC_TABS", "SESSION_TABS", "SUPER_ADMIN_TABS", "ADMIN_TABS",
     "AUDIT_PAGE_SIZE", "auditPage", "auditTotal", "usersBody", "usersStatus", "sendBtn"];
   const functions = ["escapeHtml", "escapeAttr", "applyRoleVisibility", "canAccessTab", "lastTab",
-    "updateNavigation", "switchTo", "loadUsers", "loadAuditLogs", "initPage"];
+    "updateNavigation", "switchTo", "loadUsers", "loadAuditLogs", "openLogin", "handleAccountAccess", "initPage"];
   // 列表排序状态与通用排序器（loadUsers / loadAuditLogs 依赖）
   const sortParts = [
     `let docSortMode = "time-desc", recSortMode = "time-desc", tlSortMode = "time-desc",
@@ -121,6 +124,7 @@ function createPage(mode, savedTab = "") {
     ...functions.map((name) => shippedFunction(script, name)), sortParts, enterpriseParts].join("\n"), context);
   return {
     document, find, requests, redirects,
+    clearedSessions: () => clearedSessions,
     setMode: (value) => { currentMode = value; },
     run: (source) => vm.runInContext(source, context),
     async init() {
@@ -198,13 +202,13 @@ test("search portal remains public even with an administrator role in a stale pa
   assert.deepEqual(page.requests, ["/api/mode"]);
 });
 
-test("anonymous public portal opens without login and hides account controls", async () => {
+test("anonymous public portal opens without login and offers member login", async () => {
   const page = createPage(guest, "accounts");
   await page.init();
   assert.equal(page.activeTab(), "tab-chat");
   assert.deepEqual(page.redirects, []);
-  assert.equal(page.find("#mode-badge").textContent, "公共访问 · 仅公共文档");
-  assert.equal(page.find("#mode-badge").disabled, true);
+  assert.equal(page.find("#mode-badge").textContent, "登录企业账号");
+  assert.equal(page.find("#mode-badge").disabled, false);
   assert.equal(page.find("#account-summary").hidden, true);
   assert.equal(page.find("#change-password-link").hidden, true);
   assert.equal(page.document.body.classList.contains("public-access"), true);
@@ -212,6 +216,27 @@ test("anonymous public portal opens without login and hides account controls", a
   assert.equal(page.run('canAccessTab("accounts")'), false);
   assert.equal(page.find("#send").disabled, false);
   assert.deepEqual(page.requests, ["/api/mode"]);
+  await page.run("handleAccountAccess()");
+  assert.deepEqual(page.redirects, ["/login"]);
+  assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
+test("login page offers public access without submitting credentials", () => {
+  const guestLink = loginHtml.match(/<a\b[^>]*\bid="guest-access"[^>]*>[\s\S]*?<\/a>/)?.[0];
+  assert.ok(guestLink);
+  assert.match(guestLink, /href="\/"/);
+  assert.match(guestLink, /暂不登录/);
+  assert.ok(loginHtml.indexOf(guestLink) > loginHtml.indexOf("</form>"));
+});
+
+test("logout clears the member conversation and returns to the public homepage", async () => {
+  const page = createPage(admin, "accounts");
+  await page.init();
+  assert.equal(page.find("#mode-badge").textContent, "退出登录");
+  await page.run("handleAccountAccess()");
+  assert.equal(page.clearedSessions(), 1);
+  assert.deepEqual(page.redirects, ["/"]);
+  assert.ok(page.requests.includes("/api/admin/logout"));
 });
 
 test("anonymous management portal continues to require login", async () => {

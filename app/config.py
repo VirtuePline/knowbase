@@ -133,6 +133,7 @@ class Settings:
 
     host: str
     port: int
+    # 兼容旧配置字段；统一服务只使用 host / port，不再启动独立管理端。
     admin_host: str
     admin_port: int
     admin_password: str
@@ -251,8 +252,6 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
 
     port = _int(server, "port", 8000)
     admin_port = _int(server, "admin_port", 8001)
-    if port == admin_port:
-        raise ConfigError(f"server.port 与 server.admin_port 不能相同（当前均为 {port}），查询端与管理端必须分开")
 
     # 环境变量优先于配置文件：容器内监听 0.0.0.0 才能映射端口，
     # 而同一份 config.yaml 在宿主机保持 127.0.0.1 仅本机可用

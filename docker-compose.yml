@@ -8,11 +8,9 @@ services:
       context: .
     container_name: knowbase
     ports:
-      - "${KB_SEARCH_PORT:-80}:8000"
-      - "127.0.0.1:${KB_ADMIN_PORT:-8001}:8001"  # 管理端仅允许宿主机访问
+      - "${KB_PORT:-8000}:80"
     environment:
       KB_HOST: 0.0.0.0        # 容器内必须监听所有网卡，端口才能映射到宿主机
-      KB_ADMIN_HOST: 0.0.0.0
       KB_MONGO_URI: ${KB_MONGO_URI:-mongodb://host.docker.internal:27017}
       KB_WEB_SEARCH_API_KEY: ${KB_WEB_SEARCH_API_KEY:-}
     extra_hosts:

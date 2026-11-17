@@ -149,7 +149,6 @@ async function initializeAccountPage() {
     const response = await fetch("/api/mode");
     if (!response.ok) throw new Error("无法读取登录状态，请刷新重试");
     const mode = await response.json();
-    if (isRegisterPage && mode.portal !== "admin") throw new Error("请从管理端地址创建账号");
     const authenticated = mode.authenticated === true || mode.admin === true;
     if (isChangePasswordPage) {
       if (!authenticated) { window.location.replace("/login"); return; }

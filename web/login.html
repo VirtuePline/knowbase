@@ -23,7 +23,7 @@
     <div class="account-form-wrap">
       <div class="account-theme-row"><div class="theme-switcher" role="group" aria-label="主题颜色"><span class="theme-label">主题颜色</span><div class="theme-options"><button type="button" class="theme-option" data-theme-option="teal" aria-label="切换为青绿主题" title="青绿主题" aria-pressed="true"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="blue" aria-label="切换为蓝色主题" title="蓝色主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="violet" aria-label="切换为紫色主题" title="紫色主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button><button type="button" class="theme-option" data-theme-option="amber" aria-label="切换为琥珀主题" title="琥珀主题" aria-pressed="false"><span class="theme-swatch-check" aria-hidden="true"></span></button></div><span class="theme-status" data-theme-status aria-live="polite"></span></div></div>
       <span class="account-access-note"><span class="access-dot" aria-hidden="true"></span>企业成员访问入口</span>
-      <div class="account-heading"><span class="account-section-label">欢迎回来</span><h2 id="account-title">登录企业知识工作台</h2><p>使用您的账号，在授权范围内查找企业公共知识与部门资料。</p></div>
+      <div class="account-heading"><span class="account-section-label">欢迎回来</span><h2 id="account-title">登录企业知识工作台</h2><p>登录后可使用部门资料与工作台，也可不登录，直接查询公共知识。</p></div>
       
       <form id="account-form" novalidate>
         <fieldset id="account-fields" disabled>
@@ -35,6 +35,7 @@
           <button class="account-submit" id="account-submit" type="submit">登录并进入工作台<span aria-hidden="true">↗</span></button>
         </fieldset>
       </form>
+      <a class="account-guest-link" id="guest-access" href="/">暂不登录，访问公共知识库<span aria-hidden="true">↗</span></a>
       <p class="account-note" id="account-login-note">新账号由管理员创建，初始密码为空。首次登录请将密码留空，随后设置自己的密码。</p>
       <div class="account-status" id="account-status" role="status">正在连接企业知识库…</div>
     </div>
