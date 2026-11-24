@@ -859,13 +859,70 @@ function renderSourceReferences(references, label = "引用文档") {
     const id = escapeAttr(escapeHtml(String(reference.doc_id || "")));
     const name = escapeHtml(String(reference.doc_name || "未命名文档"));
     const uploadDay = escapeHtml(String(reference.uploaded_at || "").slice(0, 10));
+    const pdfPage = isPdfPage(reference.pdf_page) ? reference.pdf_page : 0;
     const title = id
-      ? `<button type="button" class="source-name" data-src-pv="${id}" title="点击预览">${name}</button>`
+      ? `<button type="button" class="source-name" data-src-pv="${id}"${pdfPage ? ` data-src-page="${pdfPage}"` : ""} title="点击预览">${name}</button>`
       : `<span>${name}</span>`;
-    return `<li>${title}${uploadDay ? `<span class="source-reference-date">${uploadDay}</span>` : ""}</li>`;
+    const pdf = id && reference.pdf_available === true ? ` ${originalPdfLink(reference.doc_id, pdfPage)}` : "";
+    return `<li>${title}${uploadDay ? `<span class="source-reference-date">${uploadDay}</span>` : ""}${pdf}</li>`;
   }).join("");
   return items ? `<div class="source-references"><span class="source-references-label">${escapeHtml(label)}</span><ul>${items}</ul></div>` : "";
 }
+
+function isPdfPage(page) {
+  return Number.isSafeInteger(page) && page > 0;
+}
+
+function pdfDocumentPath(id) {
+  return `/api/documents/${encodeURIComponent(id)}`;
+}
+
+function originalPdfLink(id, page) {
+  const pageAnchor = isPdfPage(page) ? `#page=${page}` : "";
+  const label = pageAnchor ? `打开原始 PDF（第 ${page} 页）` : "打开原始 PDF";
+  return `<a class="original-pdf-link" href="${pdfDocumentPath(id)}/pdf${pageAnchor}" target="_blank" rel="noopener noreferrer">${label}<span aria-hidden="true"> ↗</span></a>`;
+}
+
+function renderPdfPages(sources) {
+  const seen = new Set();
+  const withImages = new Set();
+  const figures = [];
+  const originals = new Map();
+  for (const source of sources || []) {
+    const { doc_id: id, pdf_pages: pages } = source;
+    if (!id || source.kind === "web" || ["web", "reference", "search_context"].includes(source.scoring_method) || source.pdf_available !== true) continue;
+    const name = escapeHtml(String(source.doc_name || "PDF"));
+    if (!originals.has(id)) originals.set(id, { name, page: source.pdf_page });
+    if (!Array.isArray(pages)) continue;
+    for (const page of pages) {
+      if (!isPdfPage(page)) continue;
+      const imageUrl = `${pdfDocumentPath(id)}/pages/${page}.png`;
+      if (seen.has(imageUrl)) continue;
+      seen.add(imageUrl);
+      withImages.add(id);
+      figures.push(`<figure class="answer-pdf-page">
+        <figcaption><span>${name}</span>${originalPdfLink(id, page)}</figcaption>
+        <a class="answer-pdf-page-image" href="${imageUrl}" target="_blank" rel="noopener noreferrer" title="查看原图">
+          <img src="${imageUrl}" alt="${escapeAttr(name)}第 ${page} 页原图" loading="lazy" decoding="async" />
+        </a>
+        <p class="answer-pdf-error" hidden>此页原图暂时无法加载。可打开原始 PDF 查看。</p>
+      </figure>`);
+    }
+  }
+  const links = [...originals].filter(([id]) => !withImages.has(id)).map(([id, { name, page }]) =>
+    `<li><span>${name}</span>${originalPdfLink(id, page)}</li>`).join("");
+  return (figures.length ? `<div class="answer-pdf-pages">${figures.join("")}</div>` : "") +
+    (links ? `<ul class="answer-pdf-originals">${links}</ul>` : "");
+}
+
+// 图片请求沿用浏览器会话，失败时保留原文入口。
+document.addEventListener("error", (event) => {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.matches(".answer-pdf-page-image > img")) return;
+  const link = image.parentElement;
+  link.hidden = true;
+  link.nextElementSibling.hidden = false;
+}, true);
 
 function renderSources(sources) {
   if (!sources || !sources.length) return "";
@@ -893,11 +950,13 @@ function renderSources(sources) {
     });
     const id = escapeAttr(escapeHtml(String(s.doc_id || "")));
     const uploadDay = String(s.uploaded_at || "").slice(0, 10);   // 年月日
+    const pdfPage = isPdfPage(s.pdf_page) ? s.pdf_page : 0;
     return `<div class="source">
-      <button type="button" class="who source-name" data-src-pv="${id}" title="点击预览">${name}</button>
+      <button type="button" class="who source-name" data-src-pv="${id}"${pdfPage ? ` data-src-page="${pdfPage}"` : ""} title="点击预览">${name}</button>
       <span class="source-kind">知识库</span>
       <span class="where">${escapeHtml(String(s.location || "全文"))}</span>
       ${uploadDay ? `<span class="where" title="来源文档上传时间">${uploadDay}</span>` : ""}
+      ${id && s.pdf_available === true ? `<div class="source-original-pdf">${originalPdfLink(s.doc_id, pdfPage)}</div>` : ""}
       ${renderSourceReferences(references)}
       ${renderSourceMetrics(s)}
       ${s.summary ? `<div class="sum">摘要：${escapeHtml(String(s.summary).split("\n")[0])}</div>` : ""}
@@ -911,10 +970,14 @@ function renderSources(sources) {
 // 来源条目「预览 / 下载」：复用文档管理页的预览弹窗与下载逻辑
 document.addEventListener("click", (e) => {
   const pv = e.target.closest("[data-src-pv]");
-  if (pv) { openPreview(pv.dataset.srcPv); return; }
+  if (pv) { openPreview(pv.dataset.srcPv, Number(pv.dataset.srcPage)); return; }
   const dl = e.target.closest("[data-src-dl]");
   if (dl) downloadDoc(dl.dataset.srcDl);
 });
+
+function renderAnswerContent(answer, sources) {
+  return renderPdfPages(sources) + renderMarkdown(String(answer || "")) + renderSources(sources);
+}
 
 // 渲染一条机器人回答气泡；rejected 为本次已累计排除的来源文档（「重新回答」链）
 function renderChatAnswer(bubble, data, question, started, rejected = []) {
@@ -932,7 +995,7 @@ function renderChatAnswer(bubble, data, question, started, rejected = []) {
     bubble.dataset.kbdocs = JSON.stringify(kbDocs);
     reAsk = `<div class="re-ask"><button class="ghost" type="button" data-reask title="把命中来源计入惩罚参数并重新检索：本次排除直接命中的文档，后续提问也会降低它们的权重">答案不对？排除命中来源重新回答</button></div>`;
   }
-  bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + renderMarkdown(data.answer) + renderSources(data.sources) + elapsed + reAsk;
+  bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + renderAnswerContent(data.answer, data.sources) + elapsed + reAsk;
 }
 
 // 「答案不对」：把当前回答的知识库来源计入惩罚参数，重新请求并原位替换回答
@@ -2683,7 +2746,7 @@ if (historyList) historyList.addEventListener("click", (e) => {
   if (!body) return;
   if (body.hidden) {
     body.innerHTML = item
-      ? renderMarkdown(String(item.answer || "")) + renderSources(item.sources || [])
+      ? renderAnswerContent(item.answer, item.sources)
       : '<span class="muted">记录已失效</span>';
     body.hidden = false;
     btn.setAttribute("aria-expanded", "true");
@@ -3130,8 +3193,19 @@ function switchTo(tab, { preserveEditor = false } = {}) {
 
 /* ---------- 文档预览 ---------- */
 const pvMask = $("#preview-mask");
+const pvBody = $("#pv-body");
+const pvDownload = $("#pv-download");
+let previewId = "";
+let previewRequest = 0;
+let previewPdf = null;
 
-function closePreview() { pvMask.classList.remove("show"); }
+function closePreview() {
+  previewRequest += 1;
+  previewId = "";
+  previewPdf = null;
+  pvMask.classList.remove("show");
+  pvBody.replaceChildren();
+}
 $("#pv-close").addEventListener("click", closePreview);
 pvMask.addEventListener("click", (e) => { if (e.target === pvMask) closePreview(); });
 document.addEventListener("keydown", (e) => {
@@ -3179,27 +3253,105 @@ async function downloadDoc(id) {
   }
 }
 
-let previewId = "";
-$("#pv-download").addEventListener("click", () => { if (previewId) downloadDoc(previewId); });
+pvDownload.addEventListener("click", () => { if (previewId) downloadDoc(previewId); });
 
-async function openPreview(id) {
+function renderPdfPreviewPage(state) {
+  const { id, page, pageCount } = state;
+  const imageUrl = `${pdfDocumentPath(id)}/pages/${page}.png`;
+  return `<div class="preview-pdf-toolbar">
+    <button type="button" class="ghost" data-pdf-step="-1"${page <= 1 ? " disabled" : ""}>上一页</button>
+    <label>第 <input type="number" min="1"${pageCount ? ` max="${pageCount}"` : ""} value="${page}" data-pdf-page-input aria-label="PDF 页码" />${pageCount ? ` / ${pageCount}` : ""} 页</label>
+    <button type="button" class="ghost" data-pdf-jump>跳转</button>
+    <button type="button" class="ghost" data-pdf-step="1"${pageCount && page >= pageCount ? " disabled" : ""}>下一页</button>
+    <a class="original-pdf-link" href="${imageUrl}" target="_blank" rel="noopener noreferrer">放大原图 ↗</a>
+    ${originalPdfLink(id, page)}
+  </div>
+  <p class="muted preview-pdf-status" data-pdf-status role="status">正在加载第 ${page} 页原图…</p>
+  <a class="preview-pdf-image" href="${imageUrl}" target="_blank" rel="noopener noreferrer" title="放大查看原图">
+    <img data-pdf-preview-image src="${imageUrl}" alt="${escapeAttr(escapeHtml(state.name || "PDF"))}第 ${page} 页原图" decoding="async" />
+  </a>`;
+}
+
+function changePdfPreviewPage(page) {
+  if (!previewPdf || previewPdf.request !== previewRequest) return false;
+  const viewer = pvBody.querySelector("[data-pdf-viewer]");
+  if (!viewer || !isPdfPage(page) || (previewPdf.pageCount && page > previewPdf.pageCount)) return false;
+  previewPdf.page = page;
+  // 替换旧图片，迟到的 load/error 事件不能影响当前页。
+  viewer.innerHTML = renderPdfPreviewPage(previewPdf);
+  return true;
+}
+
+pvBody.addEventListener("click", (event) => {
+  if (!previewPdf) return;
+  const step = event.target.closest("[data-pdf-step]");
+  if (step) { changePdfPreviewPage(previewPdf.page + Number(step.dataset.pdfStep)); return; }
+  if (event.target.closest("[data-pdf-jump]")) {
+    const input = pvBody.querySelector("[data-pdf-page-input]");
+    if (input && !changePdfPreviewPage(Number(input.value))) {
+      input.value = previewPdf.page;
+      toast("请输入有效的 PDF 页码");
+    }
+  } else if (event.target.closest("[data-pdf-retry]")) {
+    changePdfPreviewPage(previewPdf.page);
+  }
+});
+pvBody.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && event.target.matches("[data-pdf-page-input]")) {
+    event.preventDefault();
+    if (!changePdfPreviewPage(Number(event.target.value)) && previewPdf) event.target.value = previewPdf.page;
+  }
+});
+function pdfPreviewImageState(event) {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.matches("[data-pdf-preview-image]") || !pvBody.contains(image)) return;
+  const status = pvBody.querySelector("[data-pdf-status]");
+  if (!status) return;
+  if (event.type === "error") {
+    image.parentElement.hidden = true;
+    status.hidden = false;
+    status.innerHTML = '此页原图暂时无法加载。<button type="button" class="ghost" data-pdf-retry>重试</button> 也可打开原始 PDF 查看。';
+  } else {
+    status.hidden = true;
+    image.parentElement.hidden = false;
+  }
+}
+pvBody.addEventListener("load", pdfPreviewImageState, true);
+pvBody.addEventListener("error", pdfPreviewImageState, true);
+
+async function openPreview(id, page) {
+  const request = ++previewRequest;
   previewId = id;
-  const body = $("#pv-body");
-  body.innerHTML = '<p class="muted">加载中…</p>';
+  previewPdf = null;
+  $("#pv-title").textContent = "文档预览";
+  $("#pv-sub").textContent = "";
+  pvDownload.hidden = true;
+  pvBody.innerHTML = '<p class="muted">加载中…</p>';
+  pvBody.scrollTop = 0;
   pvMask.classList.add("show");
   try {
     const resp = await fetch("/api/documents/" + encodeURIComponent(id) + "/preview");
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
+    if (request !== previewRequest) return;
     const doc = data.doc;
     $("#pv-title").textContent = doc.name;
     const skipped = doc.skipped ? ` · 已忽略 ${doc.skipped} 个非主要部分` : "";
     const owner = doc.department_name || enterpriseDepartmentName(doc.department_id || "operations");
     const kind = doc.doc_type === "record" ? catName(doc.category) : owner;
     $("#pv-sub").textContent = `${kind} · ${doc.ext} · ${doc.chunks} 个检索单元${skipped} · ${String(doc.uploaded_at || "").slice(0, 10)} · ${doc.doc_type === "record" ? "记录人" : "上传人"}：${doc.uploaded_by_name || doc.uploaded_by || "历史记录"}`;
-    $("#pv-download").style.display = doc.has_source ? "" : "none";
+    pvDownload.hidden = !doc.has_source;
+    const pageCount = isPdfPage(data.pdf_page_count) ? data.pdf_page_count : 0;
+    if (doc.has_source && String(doc.ext).toLowerCase() === ".pdf") {
+      previewPdf = { id, name: doc.name, pageCount, request,
+        page: isPdfPage(page) && (!pageCount || page <= pageCount) ? page : 1 };
+    }
+    const originalPdf = previewPdf
+      ? `<section class="preview-pdf-viewer" data-pdf-viewer aria-label="PDF 原文预览">${renderPdfPreviewPage(previewPdf)}</section>` : "";
     if (!data.sections.length) {
-      body.innerHTML = '<p class="muted">该文档暂无可预览内容，可能仍在处理或解析失败。</p>';
+      pvBody.innerHTML = originalPdf + (originalPdf
+        ? '<p class="muted">该文档暂无可预览的提取文本。</p>'
+        : '<p class="muted">该文档暂无可预览内容，可能仍在处理或解析失败。</p>');
       return;
     }
     const docSummary = doc.summary
@@ -3208,7 +3360,7 @@ async function openPreview(id) {
       ? `<div class="attach-box"><span class="label">附件（${doc.attachments.length}）</span><div class="attach-list">${doc.attachments.slice().reverse().map((a) =>
           `<a class="attach-item" href="/api/documents/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.stored)}" target="_blank" rel="noopener" title="打开附件（不参与检索）">${escapeHtml(a.name || "附件")}<span class="attach-size">${fmtSize(a.size)}</span></a>`).join("")}</div></div>`
       : "";
-    body.innerHTML = attachHtml + docSummary + data.sections.map((s) => {
+    const extractedText = docSummary + data.sections.map((s) => {
       if (s.kind === "notice") return `<div class="notice">${escapeHtml(s.text)}</div>`;
       const head = s.heading ? `<h3>${escapeHtml(s.heading)}</h3>` : "";
       const loc = s.location ? `<div class="loc">${escapeHtml(s.location)}</div>` : "";
@@ -3218,8 +3370,11 @@ async function openPreview(id) {
       if (s.kind === "table") return head + loc + sum + tableHtml(s.table);
       return head + loc + sum + renderMarkdown(s.text);
     }).join("");
+    pvBody.innerHTML = originalPdf + attachHtml + (originalPdf
+      ? `<details class="preview-extracted-text"><summary>查看提取文本与摘要</summary>${extractedText}</details>`
+      : extractedText);
   } catch (err) {
-    body.innerHTML = `<div class="notice">预览失败：${escapeHtml(String(err.message || err))}</div>`;
+    if (request === previewRequest) pvBody.innerHTML = `<div class="notice">预览失败：${escapeHtml(String(err.message || err))}</div>`;
   }
 }
 

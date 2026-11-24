@@ -1127,6 +1127,29 @@ button.primary:disabled, #md-save:disabled { background: #8aada8; border-color: 
 .source .where, .source .web-source-host { color: var(--muted); font-size: 12px; }
 .source .sum { color: #537c77; font-size: 12px; line-height: 1.85; margin-top: 7px; }
 .source .snip { color: #72807e; font-size: 12px; line-height: 1.9; margin-top: 6px; }
+.answer-pdf-pages { display: grid; gap: 12px; margin-block: 14px 18px; }
+.answer-pdf-page { margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.answer-pdf-page figcaption, .answer-pdf-originals li, .preview-original-pdf {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; overflow-wrap: anywhere;
+}
+.answer-pdf-page figcaption { padding: 8px 12px; font-size: 12px; line-height: 1.5; }
+.answer-pdf-page-image:not([hidden]) { display: block; background: var(--bg); }
+.answer-pdf-page-image:focus-visible { outline-offset: -3px; }
+.answer-pdf-page-image img { display: block; max-width: 100%; max-height: 68vh; height: auto; margin-inline: auto; }
+.answer-pdf-error { padding: 0 12px 8px; color: var(--muted); font-size: 12px; }
+.original-pdf-link { color: var(--accent); font-size: 12px; text-underline-offset: 2px; }
+.answer-pdf-originals { list-style: none; margin: 12px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.preview-original-pdf { margin-bottom: 12px; font-size: 12px; }
+.preview-pdf-viewer { margin-bottom: 18px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel); }
+.preview-pdf-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.preview-pdf-toolbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+.preview-pdf-toolbar input { width: 66px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
+.preview-pdf-status { padding: 10px 14px; margin: 0; font-size: 12px; }
+.preview-pdf-status[hidden], .preview-pdf-image[hidden] { display: none; }
+.preview-pdf-image:not([hidden]) { display: block; background: #edf0f2; }
+.modal .body .preview-pdf-image img { display: block; width: 100%; height: auto; margin: 0; border: 0; border-radius: 0; }
+.preview-extracted-text { margin-top: 14px; }
+.preview-extracted-text > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding-block: 8px; }
 .source-kind { color: #5d817c; background: #edf5f4; font-size: 11px; padding: 2px 6px; }
 .source-references { margin: 10px 0 9px 9px; padding-left: 12px; border-left-color: #cfe1df; }
 .source-references-label, .source-reference-date { font-size: 11px; color: var(--muted); }

@@ -20,7 +20,7 @@ from app.core.ingest.pipeline import rebuild_index
 from app.core.retrieval.bm25 import BM25Index
 from app.core.retrieval.embeddings import EmbeddingError, get_embedder
 from app.core.retrieval.reranker import RerankError, get_reranker
-from app.core.retrieval.relevance import filter_fault_hits
+from app.core.retrieval.relevance import filter_fault_hits, manual_code_match
 from app.core.retrieval.vector_store import VectorStore
 from app.domain.schemas import Chunk, ScoredChunk
 from app.domain.taxonomy import classify, vendor_hint, vendor_in_chunk
@@ -206,6 +206,11 @@ class RetrievalService:
         if operations_mode(question):
             candidates = filter_fault_hits(question, candidates)
 
+        # 目录和下载页常有“二维码”字样。明确写出所问设置的原页先进入精排窗口。
+        code_hits = {hit.chunk.id for hit in candidates if manual_code_match(question, hit)}
+        if code_hits:
+            candidates.sort(key=lambda hit: hit.chunk.id not in code_hits)
+
         if vendor:
             # 厂商文档置顶：问题描述与文档用词差异大时 rerank 会低估它们，
             # 这里强制保证厂商文档参与重排并排在最前
@@ -231,7 +236,7 @@ class RetrievalService:
                 for hit, score in zip(picks, scores):
                     hit.rerank = score
                     hit.rerank_used = True
-                ranked = sorted(picks, key=lambda h: h.rerank, reverse=True)
+                ranked = sorted(picks, key=lambda h: (h.chunk.id in code_hits, h.rerank), reverse=True)
                 if vendor:
                     m = [h for h in ranked if vendor_in_chunk(h.chunk, vendor)]
                     ranked = m + [h for h in ranked if h not in m]

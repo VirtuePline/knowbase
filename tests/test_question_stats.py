@@ -46,11 +46,13 @@ class QuestionStatsTest(unittest.TestCase):
 
     def test_record_and_top_recent(self):
         stats = FakeQuestionStats(database.now_iso())
-        # 让每条记录的 last_at 依次递增，验证「同频次取最近提问」的排序规则
+        # 让每条记录的 last_at 依次递增，验证「同频次取最近提问」的排序规则；
+        # 时间基于当前时刻生成，避免固定日期超出 top_questions 的 7 天窗口。
         counter = [0]
+        base = datetime.now(database.CN_TZ) - timedelta(minutes=10)
         def tick():
             counter[0] += 1
-            return f"2026-11-13 00:00:{counter[0]:02d}"
+            return (base + timedelta(seconds=counter[0])).strftime("%Y-%m-%d %H:%M:%S")
         with self._db(stats), patch.object(database, "now_iso", tick):
             for q in ["扫码枪扫不上", "扫码枪扫不上", "扫码枪扫不上", "音响没声音", "  网页  打不开 "]:
                 database.record_question(q)

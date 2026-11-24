@@ -19,6 +19,12 @@ def hit(text="箱签格式不正确", table=None):
 
 LEDGER_HEADER = ["序号", "品名", "IP", "使用人"]
 LEDGER_HEADING = "主机、显示器台账"
+SCANNER_MANUAL = "海康机器人通用型无线手持读码器用户手册V1.4.0_12763_202610302007.pdf"
+SCANNER_HISTORY = [
+    {"role": "user", "content": "扫码器出厂设置扫描的二维码"},
+    {"role": "assistant", "content": "参阅手册。私有操作备注",
+     "source_docs": [{"doc_id": "scanner", "doc_name": SCANNER_MANUAL}]},
+]
 
 
 def ledger_chunk(seq: int, rows: list[list[str]]) -> Chunk:
@@ -63,6 +69,10 @@ class SolutionFlowTest(unittest.TestCase):
         fast_patch = patch.object(service, "fast_mode_enabled", return_value=False)
         fast_patch.start()
         self.addCleanup(fast_patch.stop)
+        for name in ("uploaded_dates", "answer_penalty_counts"):
+            metadata_patch = patch.object(service, name, return_value={})
+            metadata_patch.start()
+            self.addCleanup(metadata_patch.stop)
 
     def test_table_solution_is_presented_first_without_model_or_search(self):
         record = hit(table=[["故障现象", "处理方案", "处理结果"],
@@ -165,13 +175,183 @@ class SolutionFlowTest(unittest.TestCase):
 
     def test_search_snippets_are_not_mislabelled_as_solution_without_model(self):
         """联网只搜到论坛提问等无方案内容：不把网页片段伪装成解决方案。"""
-        self.search.return_value = [WebResult("论坛问题", "https://example.com/question", "我的打印机坏了")]
+        self.search.return_value = [WebResult("论坛问题", "https://example.com/question", "我的贴标机不出标签")]
         with patch.object(service, "_top_hits", return_value=[hit()]):
             response = service.answer("贴标机不出标签", llm_polish=True, web_search=True)
         self.assertFalse(response.solution_found)
         self.assertEqual(response.answer_origin, "web")
         self.assertEqual(response.status, "not_found")
         self.assertIn("未能从中确认可执行方案", response.answer)
+
+    def test_ambiguous_followup_search_uses_public_terms_from_previous_manual(self):
+        self.search.return_value = [
+            WebResult("OpenAI 快速模式", "https://example.com/openai", "介绍 OpenAI 快速模式。", 1.0),
+            WebResult("海康机器人读码器", "https://example.com/scanner", "手持条码扫描器快速模式说明。", .8),
+        ]
+        with patch.object(service, "settings", replace(self.config, llm_api_key="llm-test")), \
+                patch.object(service, "_top_hits", return_value=[]) as top, \
+                patch.object(service, "rewrite_query", side_effect=client.LLMError("超时")), \
+                patch.object(service, "llm_complete", return_value="读码器快速模式说明。") as qa:
+            response = service.answer("什么是快速模式", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        top.assert_called_once()
+        self.assertEqual(top.call_args.kwargs["allowed_doc_ids"], {"scanner"})
+        self.search.assert_called_once_with("海康机器人 无线手持读码器 什么是快速模式")
+        self.assertTrue(qa.call_args.kwargs["web"])
+        self.assertNotIn("OpenAI", qa.call_args.args[1])
+        self.assertEqual(response.status, "ok")
+        self.assertFalse(response.solution_found)
+        self.assertEqual(response.answer_origin, "web")
+        self.assertEqual([source.url for source in response.sources if source.kind == "web"],
+                         ["https://example.com/scanner"])
+        self.assertEqual(response.sources[-1].doc_id, "scanner")
+        self.assertEqual(response.sources[-1].scoring_method, "search_context")
+
+    def test_unrelated_web_hits_fall_back_to_manually_supported_related_function(self):
+        manual_hit = ScoredChunk(Chunk("c1", "scanner", SCANNER_MANUAL, "pdf",
+                                       "第 31 页", "支持快速输出功能。"), score=1.0, coverage=1.0)
+        self.search.return_value = [
+            WebResult("OpenAI 快速模式", "https://example.com/openai", "介绍 OpenAI 快速模式。", 1.0),
+            WebResult("霍尼韦尔读码器", "https://example.com/other", "无线读码器快速模式。", .9),
+        ]
+        with patch.object(service, "_top_hits", return_value=[hit("快速模式"), manual_hit]):
+            response = service.answer("什么是快速模式", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        self.search.assert_called_once()
+        self.assertEqual(response.answer_origin, "knowledge_base")
+        self.assertFalse(response.solution_found)
+        self.assertIn("快速输出", response.answer)
+        self.assertIn("快速输出", response.notice)
+        self.assertIn("暂未确认", response.notice)
+        self.assertEqual([source.doc_id for source in response.sources], ["scanner"])
+
+    def test_short_and_action_followups_keep_the_previous_product_without_model_rewrite(self):
+        for question in ("怎么开启快速模式", "如何设置", "它支持哪些码制",
+                         "快速模式和普通模式有什么区别", "支持哪些通讯接口", "传输距离多远", "规格参数是什么",
+                         "支持USB2.0接口吗", "防护等级达到IP65吗"):
+            with self.subTest(question=question), \
+                    patch.object(service, "_top_hits", return_value=[]) as top:
+                self.search.reset_mock()
+                response = service.answer(question, SCANNER_HISTORY, llm_polish=True, web_search=True)
+                self.assertEqual(top.call_args.kwargs["allowed_doc_ids"], {"scanner"})
+                self.search.assert_called_once_with(f"海康机器人 无线手持读码器 {question}")
+                self.assertEqual(response.sources[-1].doc_id, "scanner")
+
+    def test_mode_comparison_keeps_authorized_history_for_rewrite_and_retrieval(self):
+        question = "快速模式和普通模式有什么区别"
+        with patch.object(service, "settings", replace(self.config, llm_api_key="llm-test")), \
+                patch.object(service, "_top_hits", return_value=[]) as top, \
+                patch.object(service, "rewrite_query", return_value=question) as rewrite:
+            service.answer(question, SCANNER_HISTORY, llm_polish=True, web_search=True)
+        rewrite.assert_called_once_with(question, SCANNER_HISTORY)
+        self.assertEqual(top.call_args.kwargs["allowed_doc_ids"], {"scanner"})
+        self.search.assert_called_once_with(f"海康机器人 无线手持读码器 {question}")
+
+    def test_new_product_and_non_product_feature_questions_do_not_inherit_previous_product(self):
+        for question in ("斑马DS2208支持哪些通讯接口", "霍尼韦尔普通模式怎么用", "Zebra支持哪些通讯接口",
+                         "OpenAI快速模式和普通模式有什么区别", "股票快速模式和普通模式有什么区别",
+                         "数据库支持哪些接口"):
+            with self.subTest(question=question), \
+                    patch.object(service, "settings", replace(self.config, llm_api_key="llm-test")), \
+                    patch.object(service, "rewrite_query") as rewrite, \
+                    patch.object(service, "_top_hits", return_value=[]) as top:
+                self.search.reset_mock()
+                service.answer(question, SCANNER_HISTORY, llm_polish=True, web_search=True)
+                self.assertNotIn("allowed_doc_ids", top.call_args.kwargs)
+                self.search.assert_not_called()
+                rewrite.assert_not_called()
+
+    def test_search_failure_retains_product_context_and_never_retries_an_unqualified_query(self):
+        self.search.side_effect = WebSearchError("搜索超时")
+        with patch.object(service, "_top_hits", return_value=[]):
+            response = service.answer("什么是快速模式", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        self.search.assert_called_once_with("海康机器人 无线手持读码器 什么是快速模式")
+        self.assertEqual(response.sources[-1].doc_id, "scanner")
+        self.assertEqual(response.sources[-1].scoring_method, "search_context")
+        self.assertNotIn("私有操作备注", self.search.call_args.args[0])
+
+    def test_pointer_with_an_explicit_other_model_does_not_inherit_previous_product(self):
+        with patch.object(service, "_top_hits", return_value=[]) as top:
+            service.answer("那台DS2208怎么设置", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        self.assertNotIn("allowed_doc_ids", top.call_args.kwargs)
+        self.search.assert_not_called()
+
+    def test_untrusted_client_history_does_not_supply_search_product_context(self):
+        with service.access.identity_scope({"username": "guest:test", "public_only": True}), \
+                patch.object(service, "allowed_document_ids", return_value={"scanner"}), \
+                patch.object(service, "authorized_hits", side_effect=lambda hits: hits), \
+                patch.object(service, "_top_hits", return_value=[]) as top:
+            service.answer("什么是快速模式", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        self.assertNotIn("allowed_doc_ids", top.call_args.kwargs)
+        self.search.assert_not_called()
+
+    def test_unreadable_previous_source_does_not_supply_search_product_context(self):
+        with patch.object(service, "allowed_document_ids", return_value={"other"}), \
+                patch.object(service, "_top_hits", return_value=[]) as top:
+            service.answer("什么是快速模式", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        self.assertNotIn("allowed_doc_ids", top.call_args.kwargs)
+        self.search.assert_not_called()
+
+    def test_ambiguous_previous_products_do_not_supply_an_arbitrary_search_scope(self):
+        history = [{"role": "assistant", "content": "两类设备。", "source_docs": [
+            {"doc_id": "scanner", "doc_name": SCANNER_MANUAL},
+            {"doc_id": "printer", "doc_name": "霍尼韦尔标签打印机用户手册.pdf"},
+        ]}]
+        with patch.object(service, "_top_hits", return_value=[]):
+            response = service.answer("什么是快速模式", history, llm_polish=True, web_search=True)
+        self.search.assert_not_called()
+        self.assertEqual(response.answer_origin, "none")
+
+    def test_current_manual_adds_search_scope_on_first_turn(self):
+        manual_hit = ScoredChunk(Chunk("c1", "scanner", SCANNER_MANUAL, "pdf", "第 31 页",
+                                       "通过工具配置扫码器。"), score=1.0, coverage=1.0)
+        self.search.return_value = [
+            WebResult("扫码器技术说明", "https://example.com/scanner", "手持扫码器切换语言说明。", .8),
+        ]
+        with patch.object(service, "_top_hits", return_value=[manual_hit]):
+            response = service.answer("扫码器如何切换语言", llm_polish=True, web_search=True)
+        self.search.assert_called_once_with("海康机器人 无线手持读码器 扫码器如何切换语言")
+        self.assertEqual(response.sources[-1].doc_id, "scanner")
+        self.assertEqual(response.sources[-1].scoring_method, "search_context")
+
+    def test_current_manual_does_not_override_explicit_model(self):
+        manual_hit = ScoredChunk(Chunk("c1", "scanner", SCANNER_MANUAL, "pdf", "第 31 页",
+                                       "通过工具配置扫码器。"), score=1.0, coverage=1.0)
+        self.search.return_value = [
+            WebResult("海康机器人技术说明", "https://example.com/scanner", "手持扫码器切换语言说明。", .9),
+            WebResult("斑马技术 DS2208", "https://example.com/explicit", "DS2208扫码器切换语言说明。", .8),
+        ]
+        with patch.object(service, "_top_hits", return_value=[manual_hit]):
+            response = service.answer("DS2208扫码器如何切换语言", llm_polish=True, web_search=True)
+        self.search.assert_called_once_with("DS2208扫码器如何切换语言")
+        self.assertEqual([source.url for source in response.sources], ["https://example.com/explicit"])
+
+    def test_explicit_new_topic_does_not_inherit_scanner_scope(self):
+        with patch.object(service, "settings", replace(self.config, llm_api_key="llm-test")), \
+                patch.object(service, "_top_hits", return_value=[]) as top, \
+                patch.object(service, "rewrite_query") as rewrite:
+            service.answer("OpenAI 快速模式是什么", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        rewrite.assert_not_called()
+        self.assertEqual(top.call_args.args[0], "OpenAI 快速模式是什么")
+        self.assertNotIn("allowed_doc_ids", top.call_args.kwargs)
+        self.search.assert_not_called()
+
+    def test_explicit_mode_question_rejects_a_different_products_mode_page(self):
+        self.search.return_value = [
+            WebResult("读码器快速模式", "https://example.com/scanner", "手持条码扫描器快速模式说明。", .9),
+            WebResult("OpenAI 快速模式", "https://example.com/openai", "介绍 OpenAI 快速模式。", .8),
+        ]
+        with patch.object(service, "_top_hits", return_value=[hit("OpenAI 快速模式")]):
+            response = service.answer("OpenAI 快速模式是什么", SCANNER_HISTORY, llm_polish=True, web_search=True)
+        self.search.assert_called_once_with("OpenAI 快速模式是什么")
+        self.assertEqual([source.url for source in response.sources], ["https://example.com/openai"])
+
+    def test_rejected_manual_does_not_supply_public_search_terms(self):
+        with patch.object(service, "settings", replace(self.config, llm_api_key="llm-test")), \
+                patch.object(service, "_top_hits", return_value=[]), \
+                patch.object(service, "rewrite_query") as rewrite:
+            service.answer("什么是快速模式", SCANNER_HISTORY, llm_polish=True, web_search=True,
+                           rejected_doc_ids=["scanner"])
+        rewrite.assert_not_called()
+        self.search.assert_not_called()
 
     def test_out_of_scope_question_never_searches(self):
         """既无设备/系统关键词、也非厂商问题：不联网，直接说明超出范围。"""

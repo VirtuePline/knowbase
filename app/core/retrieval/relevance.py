@@ -53,6 +53,29 @@ _ACCESS_OBJECT = re.compile(r"网页|页面|网站|网址|浏览器|链接|软�
 _PHYSICAL_DEVICES = {"computer", "speaker", "printer", "network_device", "camera", "scanner", "motor",
                      "labeler", "filler", "display"}
 
+_VISUAL_CODE = re.compile(r"二维码|设置码|配置码")
+_CODE_QUERY_WORDS = re.compile(r"二维码|设置码|配置码|扫码器|读码器|扫码枪|扫描枪|扫描器|"
+                               r"扫描|扫码|条码|请问|请给我|如何|怎么|需要|在哪里|在哪|[的用和及\s，。？、]+")
+
+
+def manual_code_match(question: str, hit: ScoredChunk) -> bool:
+    """优先提供写明所问功能的设置码页，避免把手册下载链接等其他二维码排在前面。"""
+    if not _VISUAL_CODE.search(question):
+        return False
+    chunk = hit.chunk
+    if chunk.doc_type.lower().lstrip(".") != "pdf" and not chunk.doc_name.lower().endswith(".pdf"):
+        return False
+    devices = _device_groups(question)
+    named_devices = _device_groups(chunk.doc_name)
+    if devices and named_devices and devices.isdisjoint(named_devices):
+        return False
+    passage = re.sub(r"\s+", "", f"{chunk.heading}\n{chunk.text}").lower()
+    if not _VISUAL_CODE.search(passage):
+        return False
+    terms = _CODE_QUERY_WORDS.split(question.lower())
+    return any(len(term) >= 2 and term not in {"设置", "功能", "设备", "手册"}
+               and term in passage for term in terms)
+
 
 def normalize_fault_label(value: str) -> str:
     """去除列表标记和括号说明，保留字段本义（如“现象（遇到什么问题）”）。"""

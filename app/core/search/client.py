@@ -1,4 +1,4 @@
-"""联网搜索客户端（DeepSeek Search / Tavily），只发送脱敏后的问题并读取搜索摘要，不抓取网页。
+"""联网搜索客户端（DeepSeek Search / Tavily），发送脱敏查询词并读取搜索摘要。
 
 DeepSeek Search：POST {base_url}/v1/tools/search，Bearer 鉴权，响应 results[].summary 为长摘要。
 Tavily：POST {base_url}/search，响应 results[].content 为摘要。
@@ -79,7 +79,7 @@ def _valid_result_url(value: object) -> bool:
 
 
 def _request_spec(query: str) -> tuple[str, dict]:
-    """按提供方给出 (请求地址, 请求体)。两家都只接收问题本身，不传历史或文档原文。"""
+    """按提供方给出搜索地址和请求体，查询可包含当前来源的公开产品词。"""
     base = settings.web_search_base_url.rstrip("/")
     limit = settings.web_search_max_results
     if settings.web_search_provider == "deepseek":

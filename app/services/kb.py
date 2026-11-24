@@ -25,7 +25,7 @@ from app.domain.taxonomy import (
     normalize_doc_category,
     record_categories,
 )
-from app.services import access, database, mongo, recordmeta
+from app.services import access, database, mongo, pdf_preview, recordmeta
 from app.services.preview import is_editable, merge_preview
 from app.services.retrieval_service import retrieval
 
@@ -504,7 +504,42 @@ def preview(doc_id: str) -> dict:
     chunks = Ingester().read_chunks(doc_id)
     doc = _doc_dict(record)
     doc["attachments"] = database.get_attachments(doc_id)
-    return {"doc": doc, "sections": merge_preview(chunks)}
+    result = {"doc": doc, "sections": merge_preview(chunks)}
+    if record.ext.lower() == ".pdf" and doc["has_source"]:
+        result["pdf_page_count"] = pdf_preview.page_count(_raw_path(record))
+    return result
+
+
+def add_pdf_source_previews(sources: list[dict], question: str = "") -> None:
+    """按授权来源附加原页，宽范围或旧索引根据原文定位具体页。"""
+    available: dict[str, bool] = {}
+    paths: dict[str, Path] = {}
+
+    def add(sources: list[dict]) -> None:
+        for source in sources:
+            doc_id = source.get("doc_id")
+            if doc_id and doc_id not in available:
+                record = database.get(doc_id)
+                available[doc_id] = bool(record and record.ext.lower() == ".pdf"
+                                         and access.can_read(record) and _raw_path(record).is_file())
+                if available[doc_id]:
+                    paths[doc_id] = _raw_path(record)
+            if available.get(doc_id):
+                source["pdf_available"] = True
+                pages = pdf_preview.cited_pages(source.get("location") or "")
+                if pages:
+                    first, last = pages
+                    source["pdf_page"] = first
+                # 只限定联网产品的来源不是本轮答案证据，不能据问题猜测并展示原页。
+                exact_pages = (pdf_preview.source_pages(paths[doc_id], source.get("location") or "", question,
+                                                       source.get("snippet") or "")
+                               if source.get("scoring_method") != "search_context" else [])
+                if exact_pages:
+                    source["pdf_pages"] = exact_pages
+                    source["pdf_page"] = exact_pages[0]
+            add(source.get("references", []))
+
+    add(sources)
 
 
 # ---------- 记录附件：只随记录保存，不进文档库、不参与切分与向量索引 ----------

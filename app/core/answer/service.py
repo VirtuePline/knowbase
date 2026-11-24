@@ -9,7 +9,7 @@ from app.core.answer.context import is_stats_question, render_excerpts, render_h
 from app.core.answer.solutions import extract_solutions, render_solutions
 from app.core.answer.references import append_references, attach_reference_sources
 from app.core.ingest.chunker import is_title_row
-from app.core.retrieval.relevance import filter_fault_hits
+from app.core.retrieval.relevance import filter_fault_hits, manual_code_match
 from app.core.llm.client import (
     LLMError,
     SolutionDraft,
@@ -17,7 +17,10 @@ from app.core.llm.client import (
     draft_solution,
     rewrite_query,
 )
-from app.core.search.client import WebSearchError, search as web_search
+from app.core.search.client import WebSearchError, sanitize_query, search as web_search
+from app.core.search.relevance import (
+    document_matches_search, filter_web_results, product_context_conflicts, public_document_terms,
+)
 from app.domain.schemas import AnswerResponse, ScoredChunk, SourceRef
 from app.domain.taxonomy import (
     CONFLICT_NOTICE,
@@ -70,6 +73,91 @@ _STATS_MAX_ROWS = 300
 # ---------- 正文中的【记录 N】占位转可点击文档引用 ----------
 
 _RECORD_REF = re.compile(r"【记录\s*(\d+)】")
+_MODE_DEFINITION = re.compile(r"(?:请问[，, ]*)?(?:什么是|什么叫|何谓|怎么开启|如何开启|怎么设置|如何设置|怎么使用|如何使用)?"
+                              r"(?P<mode>[一-鿿]{1,8}模式)(?:是什么|是什么意思|指什么|什么意思|"
+                              r"怎么用|如何使用|怎么开启|如何设置)?")
+_GENERIC_MODE_NAMES = {
+    "快速", "普通", "标准", "连续", "自动", "手动", "低功耗", "省电", "高速", "单次", "批量",
+    "触发", "静音", "调试", "安全", "学习", "高级", "兼容", "性能", "默认", "节能", "高性能",
+}
+_CONTEXT_POINTER = re.compile(r"^(?:请问[，, ]*)?(?:(?:这|那)(?:个|项|种|台|款)"
+                              r"(?:的|是|怎么|如何|能|会|有|指|功能|模式)|"
+                              r"它(?:的|是|怎么|如何|能|会|有|支持|需要)|该设备|"
+                              r"(?:上面|前面|刚才)(?:提到的|的))")
+_SHORT_FOLLOWUP = re.compile(r"(?:那|那么|然后)?(?:要|应该)?(?:怎么|如何|怎样)"
+                             r"(?:设置|配置|开启|关闭|启用|停用|使用|切换|连接|操作|升级|安装)"
+                             r"(?:一下|呢|啊|吗)?[？?。\s]*")
+_PRODUCT_FEATURE = re.compile(
+    r"(?:快速|普通|标准|连续|自动|手动|低功耗|省电|高速|单次|批量|触发|静音|工作|扫描|传输)模式|"
+    r"(?:有哪些|哪些|哪种|支持|切换)(?:工作)?模式|"
+    r"(?:通讯|通信|连接|数据)?接口|(?:通讯|通信|传输)协议|串口|蓝牙|\b(?:USB|RS[- ]?232|Wi-?Fi)\b|"
+    r"(?:传输|通信|通讯|无线|扫码|扫描|识读|读取)距离|码制|条码|二维码|解码|"
+    r"技术参数|规格|分辨率|精度|续航|电池|充电|功率|供电|电压|尺寸|重量|防护等级",
+    re.I,
+)
+_OTHER_TOPIC = re.compile(
+    r"换个话题|另外一个问题|另一个问题|不说这个|股票|基金|投资|汇率|天气|菜谱|球赛|"
+    r"数据库|编程语言|商业模式|设计模式|大语言模型|大模型|人工智能|机器学习|深度学习",
+    re.I,
+)
+_FEATURE_WORDS = r"输出|读取|识别|解码|响应|扫描|传输|处理|打印|显示|连接|查询|播放"
+
+
+def _followup_documents(question: str, history: list[dict] | None,
+                        rejected_doc_ids: list[str]) -> tuple[dict[str, str], str, str]:
+    """Resolve an underspecified follow-up against the immediately preceding authorized sources."""
+    previous = next((turn for turn in reversed(history or []) if turn.get("role") == "assistant"), {})
+    docs = previous.get("source_docs") or []
+    mode = _MODE_DEFINITION.fullmatch(question.strip("？?。 "))
+    mode_term = mode["mode"] if mode else ""
+    if (mode_term and mode_term.removesuffix("模式") not in _GENERIC_MODE_NAMES
+            and mode_term not in previous.get("content", "")):
+        mode_term = ""
+    feature_followup = (len(question) <= 80 and bool(_PRODUCT_FEATURE.search(question))
+                        and not _OTHER_TOPIC.search(question))
+    if not docs or (not mode_term and not _CONTEXT_POINTER.match(question)
+                    and not _SHORT_FOLLOWUP.fullmatch(question) and not feature_followup):
+        return {}, "", mode_term
+    allowed = allowed_document_ids()
+    rejected = set(rejected_doc_ids)
+    scoped_docs: dict[str, str] = {}
+    document_terms = ""
+    for source in docs:
+        doc_id = source.get("doc_id")
+        if not doc_id or doc_id in rejected or (allowed is not None and doc_id not in allowed):
+            continue
+        name = source.get("doc_name") or ""
+        terms = public_document_terms(name)
+        if product_context_conflicts(question, name, terms):
+            continue
+        scoped_docs[doc_id] = name
+        if not document_terms:
+            document_terms = terms
+    # Several different products in the previous answer are not a safe public search topic.
+    topics = {public_document_terms(name) for name in scoped_docs.values()} - {""}
+    if len(topics) > 1:
+        document_terms = ""
+    return scoped_docs, document_terms, mode_term
+
+
+def _current_manual_document(question: str, hits: list[ScoredChunk]) -> tuple[dict[str, str], str]:
+    """Use a current manual only when the strongest hit gives a clear product topic."""
+    if not hits or hits[0].context_only:
+        return {}, ""
+    best = hits[0]
+    chunk = best.chunk
+    if chunk.doc_type.lower() != "pdf" and not re.search(r"说明书|手册|manual", chunk.doc_name, re.I):
+        return {}, ""
+    document_terms = public_document_terms(chunk.doc_name)
+    passage = f"{chunk.heading}\n{chunk.text}\n{table_to_markdown(chunk.table or [])}"
+    if not document_terms or not document_matches_search(question, chunk.doc_name, passage, document_terms):
+        return {}, ""
+    for hit in hits[1:4]:
+        if hit.chunk.doc_id != chunk.doc_id and hit.score >= best.score * .85:
+            competing_terms = public_document_terms(hit.chunk.doc_name)
+            if competing_terms and competing_terms != document_terms:
+                return {}, ""
+    return {chunk.doc_id: chunk.doc_name}, document_terms
 
 
 def _link_kb_records(text: str, hits: list[ScoredChunk]) -> str:
@@ -200,20 +288,23 @@ def _apply_answer_penalties(hits: list[ScoredChunk], reject_docs: list[str]) -> 
 
 
 def _top_hits(question: str, vendor: str = "", fast: bool = False,
-              reject_docs: list[str] | None = None) -> list[ScoredChunk]:
+              reject_docs: list[str] | None = None,
+              allowed_doc_ids: set[str] | None = None) -> list[ScoredChunk]:
     # vendor 非空时检索层已把该厂商的文档置顶，这里只做相关性门槛过滤
     # fast=True 跳过 Cross-Encoder 精排（省 2~3 秒），按 BM25 + 向量融合顺序给结果
     stats = is_stats_question(question)
     # 统计类问题放宽召回宽度：台账窗口块的关键词覆盖低，常规 top_k 的候选常被
     # 正文含"IP"等字样的故障记录占满，台账反而进不了候选
     top_k = max(settings.top_k, 12) if stats else settings.top_k
-    hits = retrieval.search(question, top_k=top_k, vendor=vendor, use_rerank=not fast)
+    hits = retrieval.search(question, top_k=top_k, vendor=vendor, use_rerank=not fast,
+                            allowed_doc_ids=allowed_doc_ids)
     hits = _apply_answer_penalties(hits, reject_docs or [])
     if not hits:
         return []
+    code_pages = {hit.chunk.id for hit in hits if manual_code_match(question, hit)}
     if not operations_mode(question):
         # 制度、财务、人事等知识没有“同类故障”语义，关键词召回可独立支持原文查询。
-        return [hit for hit in hits if hit.coverage >= settings.min_coverage
+        return [hit for hit in hits if hit.chunk.id in code_pages or hit.coverage >= settings.min_coverage
                 or hit.semantic >= settings.semantic_threshold or hit.rerank >= settings.rerank_threshold]
     # 相关性门槛：rerank / 语义相似度单路强信号即可放行；仅关键词覆盖达标时
     # 要求语义不低于下限（semantic_floor）双确认——防止只碰上「网页」「系统」这类
@@ -223,7 +314,7 @@ def _top_hits(question: str, vendor: str = "", fast: bool = False,
     best_coverage = max(h.coverage for h in hits)
     best_semantic = max(h.semantic for h in hits)
     best_rerank = max(h.rerank for h in hits)
-    if (best_coverage < settings.min_coverage
+    if (not code_pages and best_coverage < settings.min_coverage
             and best_semantic < settings.semantic_threshold
             and best_rerank < settings.rerank_threshold):
         # 统计类问题（"几台设备没有IP"）的关键词是量词与字段名，往往不在台账正文
@@ -236,7 +327,7 @@ def _top_hits(question: str, vendor: str = "", fast: bool = False,
                 return tables[:1]
         return []
     kept = [h for h in hits
-            if h.rerank >= settings.rerank_threshold
+            if h.chunk.id in code_pages or h.rerank >= settings.rerank_threshold
             or h.semantic >= settings.semantic_threshold
             or (h.coverage >= settings.min_coverage and h.semantic >= settings.semantic_floor)]
     if stats:
@@ -287,49 +378,54 @@ def _kb_excerpts(question: str, category: str, hits: list[ScoredChunk], notice: 
 
 
 def _web_fallback(question: str, category: str, hits: list[ScoredChunk],
-                  *, model_failed: bool = False,
-                  web_enabled: bool | None = None) -> AnswerResponse:
+                  *, model_failed: bool = False, web_enabled: bool | None = None,
+                  document_terms: str = "", definition: bool = False,
+                  related_notice: str = "") -> AnswerResponse:
     """只把搜索结果当外部参考；没有具体方案时不把网页摘要伪装成答案。
 
     web_enabled 为本次提问的选择：True 表示用户明确要求联网，联网拿不到结果时
     回退展示知识库相关记录原文；缺省沿用服务端全局开关。
     """
-    base = "知识库中未找到与当前问题直接对应的处理方案。"
+    base = ("知识库中未找到与当前问题直接对应的说明。" if definition
+            else "知识库中未找到与当前问题直接对应的处理方案。")
+
+    def excerpts(notice: str) -> AnswerResponse:
+        return _kb_excerpts(question, category, hits, " ".join(filter(None, (notice, related_notice))))
+
     if not network_policy.external_apis_enabled():
         if hits:
-            return _kb_excerpts(question, category, hits, "离线查询：以下为本地知识库记录原文。")
+            return excerpts("离线查询：以下为本地知识库记录原文。")
         return AnswerResponse(status="not_found", answer="本地知识库中未找到相关内容，请补充关键词或相关资料。",
                               category=category, answer_origin="none", notice="当前为离线查询模式，未调用外部接口。")
     web_on = web_search_runtime_enabled() if web_enabled is None else web_enabled
     if not settings.web_search_available:
         if hits:
-            return _kb_excerpts(question, category, hits,
-                                "联网搜索未配置（缺少搜索密钥），以下为知识库相关记录原文，请按需取用。")
+            return excerpts("联网搜索未配置（缺少搜索密钥），以下为知识库相关记录原文，请按需取用。")
         return AnswerResponse(
             status="not_found", answer=base + "请补充设备型号、错误码或处理记录，以便进一步定位。",
             category=category, sources=_sources(hits),
             notice="联网搜索未配置，尚未取得外部参考。", answer_origin="none")
     if not web_on:
         if hits:
-            return _kb_excerpts(question, category, hits,
-                                "本次未开启联网搜索，以下为知识库相关记录原文，请按需取用。")
+            return excerpts("本次未开启联网搜索，以下为知识库相关记录原文，请按需取用。")
         return AnswerResponse(
             status="not_found", answer=base + "请补充设备型号、错误码或处理记录，以便进一步定位。",
             category=category, sources=_sources(hits),
             notice="联网搜索未开启；如需外部参考，可在提问前打开「联网搜索」开关。", answer_origin="none")
+    public_question = sanitize_query(question)
+    public_query = f"{document_terms} {public_question}".strip()
     try:
-        results = web_search(question)
+        results = web_search(public_query) if public_question else []
+        results = filter_web_results(public_question, results, document_terms=document_terms)
     except WebSearchError:
         if hits:
-            return _kb_excerpts(question, category, hits,
-                                "联网搜索暂时失败，以下为知识库相关记录原文，请按需取用。")
+            return excerpts("联网搜索暂时失败，以下为知识库相关记录原文，请按需取用。")
         return AnswerResponse(
             status="not_found", answer=base + "联网搜索暂时失败，请稍后重试或补充设备型号与错误码。",
             category=category, sources=_sources(hits), answer_origin="none")
     if not results:
         if hits:
-            return _kb_excerpts(question, category, hits,
-                                "联网搜索也未找到可用参考，以下为知识库相关记录原文，请按需取用。")
+            return excerpts("联网搜索也未找到可用参考，以下为知识库相关记录原文，请按需取用。")
         return AnswerResponse(
             status="not_found", answer=base + "联网搜索也未找到可用参考，请补充设备型号、错误码或联系负责人员。",
             category=category, sources=_sources(hits), answer_origin="none")
@@ -349,11 +445,23 @@ def _web_fallback(question: str, category: str, hits: list[ScoredChunk],
             doc_id="", doc_name=result.title, location="联网搜索", score=result.score,
             snippet=content[:settings.max_excerpt_chars], kind="web", url=result.url, scoring_method="web"))
     if not sources:
+        if hits:
+            return excerpts("未能取得足够的联网参考内容，以下为知识库相关记录原文。")
         return AnswerResponse(status="not_found", answer=base + "未能取得足够的联网参考内容。",
                               category=category, answer_origin="none")
-    if settings.llm_available and not model_failed and network_policy.external_apis_enabled():
+    if definition and settings.llm_available and network_policy.external_apis_enabled():
         try:
-            plan = _draft(question, "\n\n".join(context_blocks), len(sources))
+            reply = llm_complete(public_query, "\n\n".join(context_blocks), web=True).strip()
+        except LLMError:
+            reply = ""
+        if reply and "NO_ANSWER" not in reply.upper()[:200]:
+            return AnswerResponse(
+                status="ok", answer=reply, category=category, sources=sources,
+                notice="以下为联网参考，请核对产品型号、版本和适用条件。",
+                llm_used=True, answer_origin="web", solution_found=False)
+    elif settings.llm_available and not model_failed and network_policy.external_apis_enabled():
+        try:
+            plan = _draft(public_query, "\n\n".join(context_blocks), len(sources))
         except LLMError:
             plan = None
         if plan:
@@ -362,6 +470,11 @@ def _web_fallback(question: str, category: str, hits: list[ScoredChunk],
                 status="ok", answer=_render_plan(plan, web=True), category=category,
                 sources=selected, notice="以下为联网参考，尚未在本知识库或现场验证；请核对型号、版本和适用条件。",
                 llm_used=True, answer_origin="web", solution_found=True)
+    if definition:
+        return AnswerResponse(
+            status="not_found", answer=base + "已找到相关网页，可查看下方来源。",
+            category=category, sources=sources, answer_origin="web",
+            notice="网页内容仅供参考，请核对产品型号和版本。")
     return AnswerResponse(
         status="not_found", answer="### 暂未找到可靠解决方案\n\n" + base
         + "已找到相关网页，但未能从中确认可执行方案，可查看下方来源继续核对。",
@@ -405,6 +518,10 @@ def _answer(question: str, history: list[dict] | None = None,
     # 浏览器回传的旧对话不能作为已获授权的证据；只有服务端验证的上下文可复用。
     if not access.is_internal() and not access.history_is_trusted():
         history = []
+    rejected_docs = set(rejected_doc_ids or [])
+    if rejected_docs and any(source.get("doc_id") in rejected_docs for turn in history or []
+                             for source in turn.get("source_docs", [])):
+        history = []
     ops = operations_mode(question or "")
     text = (question or "").strip()
     if not text:
@@ -433,27 +550,61 @@ def _answer(question: str, history: list[dict] | None = None,
     # 大模型整理开启时结合对话历史改写检索查询：上一轮聊过的设备/字段，追问里
     # 只有"那几台""它"这类指代，单看问题检不到目标记录。改写失败回退原问题，
     # 不影响回答流程（回答阶段的上下文仍由 history 提供给模型）。
+    scoped_docs, document_terms, mode_term = _followup_documents(text, history, rejected_doc_ids or [])
+    scoped_ids = set(scoped_docs)
+    previous = next((turn for turn in reversed(history or []) if turn.get("role") == "assistant"), {})
+    previous_docs = previous.get("source_docs") or []
+    new_subject = bool(previous_docs) and (
+        bool(_OTHER_TOPIC.search(text)) or all(
+            product_context_conflicts(text, source.get("doc_name") or "",
+                                      public_document_terms(source.get("doc_name") or ""))
+            for source in previous_docs))
+    if not scoped_docs and (new_subject or (not mode_term and not _CONTEXT_POINTER.match(text)
+                                            and re.search(r"模式|\bmode\b", text, re.I))):
+        history = []
     search_query = text
     if use_llm and history and settings.llm_available:
         try:
             search_query = rewrite_query(text, history)
         except LLMError:
             search_query = text
+    qualifier = mode_term.removesuffix("模式")
+    if mode_term and mode_term not in search_query:
+        search_query = text
+    retrieval_query = f"{mode_term} {qualifier}" if scoped_ids and mode_term and search_query == text else search_query
     # 改写补出的厂商名也参与检索置顶；分类仍按工程师原话判定
     vendor = (vendor_hint(text) or vendor_hint(search_query)) if ops else ""
-    context_hint = "已结合上一轮对话补全检索关键词" if search_query != text else ""
+    context_hint = "已结合上一轮对话补全检索关键词" if search_query != text or scoped_ids else ""
 
     def _notice(*parts: str) -> str:
         return "；".join(part for part in parts if part)
 
-    hits = authorized_hits(_top_hits(search_query, vendor, fast=fast, reject_docs=rejected_doc_ids or []))
+    scope = {"allowed_doc_ids": scoped_ids} if scoped_ids else {}
+    hits = authorized_hits(_top_hits(retrieval_query, vendor, fast=fast,
+                                    reject_docs=rejected_doc_ids or [], **scope))
+    if scoped_ids:
+        hits = [hit for hit in hits if hit.chunk.doc_id in scoped_ids]
     # 排名高不代表同一种故障。所有作答、模型与摘录路径共用此门禁，
     # 也核对原始问题，避免历史改写把“电脑打不开”带回上一轮的音响故障。
     if ops:
         hits = filter_fault_hits(search_query, hits)
         if search_query != text:
             hits = filter_fault_hits(text, hits)
-    evidence = extract_solutions(hits, text) if ops else []
+    related_hits: list[ScoredChunk] = []
+    related_notice = ""
+    if mode_term:
+        passages = [(hit, f"{hit.chunk.heading}\n{hit.chunk.text}\n{table_to_markdown(hit.chunk.table or [])}")
+                    for hit in hits]
+        hits = [hit for hit, passage in passages if mode_term in passage]
+        if not hits and scoped_ids:
+            related_feature = re.compile(rf"{re.escape(qualifier)}(?:{_FEATURE_WORDS})")
+            matched = [(hit, match.group()) for hit, passage in passages
+                       if (match := related_feature.search(passage))]
+            related_hits = [hit for hit, _ in matched]
+            if matched:
+                names = "、".join(f"「{name}」" for name in list(dict.fromkeys(name for _, name in matched))[:3])
+                related_notice = f"原文提到{names}，暂未确认是否与「{mode_term}」为同一功能。"
+    evidence = extract_solutions(hits, text) if ops and not mode_term else []
     evidence_response = None
     if evidence:
         selected = list({item.hit.chunk.id: item.hit for item in evidence}.values())
@@ -477,7 +628,7 @@ def _answer(question: str, history: list[dict] | None = None,
                                   answer_origin="none")
         model_context = append_references(render_hits(hits, question=text), hits)
         try:
-            plan = _draft(text, model_context, len(hits), history) if ops else None
+            plan = _draft(text, model_context, len(hits), history) if ops and not mode_term else None
         except LLMError:
             plan = None
             model_failed = True
@@ -506,10 +657,23 @@ def _answer(question: str, history: list[dict] | None = None,
                                    "模型无法确认的部分请以下方原文来源为准。", context_hint))
     if evidence_response is not None:
         return evidence_response
-    if not fast and use_llm and web_search is True and hits:
+    if use_llm and web_search is True and not scoped_docs:
+        scoped_docs, document_terms = _current_manual_document(text, authorized_hits(hits))
+    if (use_llm and web_search is True and (hits or document_terms)
+            and (document_terms or not (scoped_docs or mode_term))):
         # 用户本次明确开启联网，且知识库有相关记录但未能给出可执行方案：
         # 先走联网参考，联网拿不到结果时回退展示知识库相关记录原文。
-        return _web_fallback(text, category, hits, model_failed=model_failed, web_enabled=True)
+        response = _web_fallback(text, category, hits or related_hits, model_failed=model_failed,
+                                 web_enabled=True, document_terms=document_terms, definition=bool(mode_term),
+                                 related_notice=related_notice)
+        if scoped_docs and not any(source.doc_id for source in response.sources):
+            doc_id, name = next((doc_id, name) for doc_id, name in scoped_docs.items()
+                                if public_document_terms(name) == document_terms)
+            response.sources.append(SourceRef(doc_id=doc_id, doc_name=name, location="用于确定联网搜索主题",
+                                              score=0.0, snippet="", scoring_method="search_context"))
+        return response
+    if related_hits:
+        return _kb_excerpts(text, category, related_hits, related_notice)
     if hits:
         # 知识库命中但没有可执行方案（如「某某的 IP 是多少」这类台账查询）：
         # 直接回相关记录原文，不转联网，避免把知识库里已有的信息盖掉。

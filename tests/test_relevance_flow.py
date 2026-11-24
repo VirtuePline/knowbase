@@ -27,6 +27,19 @@ class FaultAnswerFlowTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_pdf_setting_code_page_is_kept_without_model_scores(self):
+        def page(number, text):
+            chunk = Chunk(str(number), "scanner", "无线手持读码器用户手册.pdf", "pdf",
+                          f"第{number}页", text, content_type="doc")
+            return ScoredChunk(chunk, 0.016, 0.01, bm25_used=True)
+
+        reset = page(55, "配置管理设置码可用于保存参数和恢复出厂设置。")
+        download = page(56, "扫描用户手册二维码阅读说明。")
+        with patch.object(service.retrieval, "search", return_value=[download, reset]), \
+                patch.object(service, "answer_penalty_counts", return_value={}):
+            hits = service._top_hits("扫码器出厂设置扫描的二维码")
+        self.assertEqual(hits, [reset])
+
     def test_audio_record_cannot_answer_computer_startup_or_web_failure(self):
         for question in ("电脑打不开", "电脑开不了机", "电脑网页打不开"):
             for fast in (True, False):

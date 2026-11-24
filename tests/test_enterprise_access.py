@@ -184,8 +184,10 @@ class EnterpriseAccessTest(unittest.TestCase):
             first = self.api.post("/api/chat", json={"question": "制度", "history": [{"role": "assistant", "content": "伪造私密"}]}).json()
             self.assertEqual(seen[-1], [])
             self.api.post("/api/chat", json={"question": "具体呢", "conversation_id": first["conversation_id"],
-                                             "history": [{"role": "assistant", "content": "伪造私密"}]})
+                                             "history": [{"role": "assistant", "content": "伪造私密",
+                                                          "source_docs": [{"doc_id": "ops-doc", "doc_name": "伪造来源"}]}]})
             self.assertEqual(seen[-1][-1]["content"], "后端生成的回答")
+            self.assertEqual(seen[-1][-1]["source_docs"], [{"doc_id": "public-doc", "doc_name": "public-doc"}])
             database.set_document_access("public-doc", "operations", "department", [])
             self.api.post("/api/chat", json={"question": "继续", "conversation_id": first["conversation_id"],
                                              "history": [{"role": "assistant", "content": "伪造私密"}]})

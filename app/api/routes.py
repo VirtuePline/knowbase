@@ -13,7 +13,7 @@ from urllib.parse import quote
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -22,7 +22,7 @@ from app.core.answer import service as answer_service
 from app.core.llm import client as llm
 from app.config import settings
 from app.domain import taxonomy
-from app.services import access, audit, conversations, database, kb, mongo, recordmeta
+from app.services import access, audit, conversations, database, kb, mongo, pdf_preview, recordmeta
 from app.services import timeline as timeline_service
 from app.services import weekly as weekly_service
 
@@ -55,6 +55,7 @@ def chat(req: ChatRequest) -> dict:
                 fast_mode=req.fast_mode, llm_polish=req.llm_polish, web_search=req.web_search,
                 rejected_doc_ids=rejected,
             ).to_dict()
+        kb.add_pdf_source_previews(result["sources"], req.question)
         result["conversation_id"] = conversations.save(req.conversation_id, req.question, result)
         # 提问频率统计（用于首页「从一个问题开始」展示最近 7 天热门问题）
         if result.get("status") != "error":
@@ -200,6 +201,40 @@ def preview_document(doc_id: str) -> dict:
         return kb.preview(doc_id)
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="文档不存在") from exc
+
+
+_PDF_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+
+
+def _pdf_source(doc_id: str) -> tuple[Path, str]:
+    try:
+        path, name = kb.source_file(doc_id)
+    except (kb.DocumentNotFound, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="PDF 原文件不可用") from exc
+    if Path(name).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=404, detail="PDF 原文件不可用")
+    return path, name
+
+
+@search_router.get("/documents/{doc_id}/pdf")
+def open_pdf(doc_id: str) -> FileResponse:
+    """在浏览器中预览原件，保留全部图文和原始清晰度。"""
+    path, name = _pdf_source(doc_id)
+    return FileResponse(path, media_type="application/pdf", filename=name,
+                        content_disposition_type="inline", headers=_PDF_HEADERS)
+
+
+@search_router.get("/documents/{doc_id}/pages/{page}.png")
+def preview_pdf_page(doc_id: str, page: int) -> Response:
+    """返回授权文档的一张原页，包含正文、图片和矢量图形。"""
+    path, _ = _pdf_source(doc_id)
+    try:
+        image = pdf_preview.render_page(path, page)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="PDF 页面不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(image, media_type="image/png", headers=_PDF_HEADERS)
 
 
 @search_router.get("/documents/{doc_id}/download")
