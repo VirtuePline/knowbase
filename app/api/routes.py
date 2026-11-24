@@ -230,6 +230,8 @@ def preview_pdf_page(doc_id: str, page: int) -> Response:
     path, _ = _pdf_source(doc_id)
     try:
         image = pdf_preview.render_page(path, page)
+    except pdf_preview.PDFPreviewUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
     except IndexError as exc:
         raise HTTPException(status_code=404, detail="PDF 页面不存在") from exc
     except ValueError as exc:

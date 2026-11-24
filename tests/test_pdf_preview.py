@@ -115,3 +115,20 @@ def test_only_authorized_answer_evidence_is_used_to_locate_pdf_images(pdf_docume
     assert sources[2]["pdf_available"] is True
     assert "pdf_pages" not in sources[2]
     assert len(calls) == 1
+
+
+def test_missing_pdfium_degrades_gracefully(pdf_documents, public_client, monkeypatch):
+    """离线镜像未安装 pypdfium2 时：问答来源照常返回，页数/页码/渲染降级，绝不 500。"""
+    monkeypatch.setattr(pdf_preview, "pdfium", None)
+    sources = [{"doc_id": "manual", "location": "第1-2页"}]
+    with access.identity_scope({"public_only": True}):
+        kb.add_pdf_source_previews(sources, "factory reset barcode")
+    assert sources[0]["pdf_available"] is True        # 原件仍可打开
+    assert sources[0]["pdf_page"] == 1                # 引用页码仍按索引保留
+    assert "pdf_pages" not in sources[0]              # 不做逐页定位
+    assert pdf_preview.page_count(pdf_documents) == 0
+    assert pdf_preview.source_pages(pdf_documents, "", "q") == []
+    with pytest.raises(pdf_preview.PDFPreviewUnavailable):
+        pdf_preview.render_page(pdf_documents, 1)
+    response = public_client.get("/api/documents/manual/pages/1.png")
+    assert response.status_code == 501

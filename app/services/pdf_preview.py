@@ -10,6 +10,19 @@ from threading import Lock
 
 from app.core.retrieval.tokenizer import query_terms
 
+try:
+    import pypdfium2 as pdfium
+except ImportError:   # 离线镜像可能未装 PDF 渲染组件：问答正常，只跳过原页预览
+    pdfium = None
+
+
+class PDFPreviewUnavailable(RuntimeError):
+    """服务器未安装 pypdfium2，无法渲染 PDF 原页。"""
+
+
+def available() -> bool:
+    return pdfium is not None
+
 
 _PAGE_LOCATION = re.compile(r"^\s*第\s*([1-9][0-9]{0,8})(?:\s*[-–—]\s*([1-9][0-9]{0,8}))?\s*页")
 _MAX_PREVIEW_EDGE = 2400
@@ -29,8 +42,8 @@ def cited_pages(location: str) -> tuple[int, int] | None:
 
 
 def page_count(path: Path) -> int:
-    import pypdfium2 as pdfium
-
+    if pdfium is None:
+        return 0
     try:
         with _PDFIUM_LOCK, pdfium.PdfDocument(path) as document:
             return len(document)
@@ -41,8 +54,8 @@ def page_count(path: Path) -> int:
 @lru_cache(maxsize=16)
 def _page_texts(filename: str, size: int, modified: int) -> tuple[str, ...]:
     """按文件版本缓存定位文本；原图始终从原件渲染，不依赖提取嵌入图片。"""
-    import pypdfium2 as pdfium
-
+    if pdfium is None:
+        raise PDFPreviewUnavailable("未安装 pypdfium2")
     with _PDFIUM_LOCK, pdfium.PdfDocument(filename) as document:
         texts = []
         for index in range(len(document)):
@@ -60,6 +73,8 @@ def _page_texts(filename: str, size: int, modified: int) -> tuple[str, ...]:
 
 def source_pages(path: Path, location: str, question: str = "", snippet: str = "") -> list[int]:
     """宽页码范围按原页文字定位；无法定位时只给原件入口，不伪造精确页码。"""
+    if pdfium is None:
+        return []
     cited = cited_pages(location)
     if cited and cited[1] - cited[0] < 3:
         # 通常索引已精确到页，避免每次问答重新读取整本手册。
@@ -98,8 +113,8 @@ def source_pages(path: Path, location: str, question: str = "", snippet: str = "
 
 
 def render_page(path: Path, page_number: int) -> bytes:
-    import pypdfium2 as pdfium
-
+    if pdfium is None:
+        raise PDFPreviewUnavailable("服务器未安装 PDF 渲染组件（pypdfium2）")
     try:
         with _PDFIUM_LOCK, pdfium.PdfDocument(path) as document:
             if not 1 <= page_number <= len(document):
