@@ -13,6 +13,7 @@ services:
       KB_HOST: 0.0.0.0        # 容器内必须监听所有网卡，端口才能映射到宿主机
       KB_MONGO_URI: ${KB_MONGO_URI:-mongodb://host.docker.internal:27017}
       KB_WEB_SEARCH_API_KEY: ${KB_WEB_SEARCH_API_KEY:-}
+      KB_PRODUCTION_SQL_URL: ${KB_PRODUCTION_SQL_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

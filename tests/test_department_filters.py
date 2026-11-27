@@ -1,6 +1,7 @@
 """部门筛选与权限交集回归；仅写随机命名的临时 MongoDB 库和临时文件。"""
 import unittest
 
+from app.domain.schemas import DocRecord
 from app.services import auth, database, kb
 from tests import test_enterprise_access as fixtures
 
@@ -76,6 +77,40 @@ class DepartmentFilterTest(unittest.TestCase):
         self.assertEqual(docs["stats"]["documents"], 2)
         self.assertEqual({key: row["count"] for key, row in self.departments(docs).items()},
                          {"operations": 2, "hr": 2})
+
+    def test_tools_list_applies_department_access_to_existing_installers(self):
+        for tool_id, department, visibility, shared in (
+                ("public-tool", "operations", "public", []),
+                ("hr-tool", "hr", "department", []),
+                ("shared-tool", "operations", "department", ["hr"]),
+                ("secret-tool", "finance", "department", [])):
+            name = f"{tool_id}.exe"
+            payload = f"installer {tool_id}".encode()
+            database.add(DocRecord(tool_id, name, name, ".exe", len(payload), tool_id, 0,
+                                   "2026-11-12 10:00:00", "ready", doc_type="doc", department_id=department,
+                                   visibility=visibility, shared_department_ids=shared))
+            (self.config.raw_dir / name).write_bytes(payload)
+
+        self.login_as("hr")
+        finance = self.get("/api/tools", department_id="finance")
+        self.assertEqual(finance["tools"], [])
+        self.assertEqual({key: row["count"] for key, row in self.departments(finance).items()},
+                         {"operations": 2, "hr": 1})
+        operations = self.get("/api/tools", department_id="operations")
+        self.assertEqual({item["id"] for item in operations["tools"]}, {"public-tool", "shared-tool"})
+        self.assertTrue(all(item["has_source"] and not item["indexed"] for item in operations["tools"]))
+        documents = self.get("/api/documents", doc_type="doc")
+        self.assertTrue(all(item["indexed"] for item in documents["documents"]))
+
+        public = self.search.get("/api/tools")
+        self.assertEqual(public.status_code, 200, public.text)
+        self.assertEqual([item["id"] for item in public.json()["tools"]], ["public-tool"])
+        for collection in ("tools", "documents"):
+            with self.subTest(collection=collection):
+                download = self.api.get(f"/api/{collection}/shared-tool/download")
+                self.assertEqual(download.status_code, 200, download.text)
+                self.assertEqual(download.content, b"installer shared-tool")
+                self.assertEqual(self.search.get(f"/api/{collection}/shared-tool/download").status_code, 404)
 
     def test_selecting_an_unreadable_department_returns_no_data_or_counts(self):
         self.login_as("hr")

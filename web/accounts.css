@@ -13,7 +13,7 @@
 body { margin: 0; color: var(--text); background: var(--canvas); font: 14px/1.7 "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; -webkit-font-smoothing: antialiased; }
 button, input, select { font: inherit; }
 button, a, input, select { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #83c5b7; outline-offset: 3px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--theme-focus, var(--accent)); outline-offset: 2px; }
 [hidden] { display: none !important; }
 .account-layout { min-height: 100dvh; display: grid; grid-template-columns: minmax(340px, .95fr) minmax(470px, 1.05fr); }
 .account-story {
@@ -52,24 +52,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .account-field { display: block; margin-bottom: 21px; }
 .account-field > span { display: block; margin-bottom: 8px; color: #375451; font-size: 13px; font-weight: 550; }
-.account-field input { display: block; width: 100%; min-height: 47px; padding: 11px 13px; border: 1px solid #d6e1dc; border-radius: 9px; background: #fbfdfc; color: var(--text); font-size: 14px; transition: border-color .15s, box-shadow .15s, background .15s; }
-.account-field input:hover:not(:disabled) { border-color: #adc6bc; }
-.account-field input:focus { border-color: #5b9b8b; background: white; outline: none; box-shadow: 0 0 0 3px #147d7710; }
-.account-field input::placeholder { color: #91a29e; font-size: 13px; }
-.account-field input:disabled, fieldset:disabled .account-field input { background: #f4f7f5; color: #91a19a; cursor: not-allowed; }
+.account-field input { display: block; width: 100%; min-height: 47px; padding: 11px 13px; border: 1px solid var(--control-border, var(--line)); border-radius: var(--control-radius, 8px); background: var(--control-background, #fff); color: var(--control-text, var(--text)); font-size: 14px; transition: border-color .15s, box-shadow .15s, background .15s; }
+.account-field input:hover:not(:disabled) { border-color: var(--theme-focus, var(--accent)); }
+.account-field input:focus { border-color: var(--theme-focus, var(--accent)); outline: none; box-shadow: 0 0 0 3px var(--theme-focus-soft, var(--accent-soft)); }
+.account-field input::placeholder { color: var(--muted); opacity: .82; font-size: 13px; }
+.account-field input:disabled { background: var(--theme-tint, var(--canvas)); color: var(--muted); cursor: not-allowed; }
 .account-field small { display: block; margin-top: 7px; color: #62766d; font-size: 12px; line-height: 1.75; }
 .password-shell { position: relative; }
 .password-shell input { padding-right: 67px; }
-.password-shell button { position: absolute; right: 7px; top: 7px; min-height: 33px; min-width: 43px; border: 0; border-radius: 6px; background: transparent; padding: 5px 8px; color: #6a817b; font-size: 12px; cursor: pointer; }
-.password-shell button:hover:not(:disabled) { background: #edf5f0; color: var(--accent); }
-.password-shell button:disabled { color: #99aaa4; cursor: not-allowed; }
-.account-submit { display: flex; justify-content: center; align-items: center; gap: 16px; width: 100%; min-height: 47px; margin-top: 25px; padding: 11px 18px; border: 1px solid transparent; border-radius: 9px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 550; cursor: pointer; box-shadow: 0 3px 9px #147d7712; transition: background .15s, box-shadow .15s; }
-.account-submit:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 4px 12px #147d7720; }
+.password-shell button { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); min-height: 33px; min-width: 43px; border: 0; border-radius: calc(var(--control-radius, 8px) - 2px); background: transparent; padding: 5px 8px; color: var(--theme-strong, var(--text)); font-size: 12px; cursor: pointer; }
+.password-shell button:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.password-shell button:disabled { color: var(--muted); cursor: not-allowed; }
+.account-submit { display: flex; justify-content: center; align-items: center; gap: 16px; width: 100%; min-height: 47px; margin-top: 25px; padding: 11px 18px; border: 1px solid var(--accent); border-radius: var(--control-radius, 8px); background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s, box-shadow .15s; }
+.account-submit:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 3px 10px var(--theme-focus-soft, var(--accent-soft)); }
 .account-submit > span { font-size: 18px; font-weight: 400; line-height: 1; }
 .account-submit #password-submit-label { font-size: 14px; font-weight: 550; line-height: 1.6; }
-.account-submit:disabled, fieldset:disabled .account-submit { background: #89b3a8; box-shadow: none; cursor: wait; }
-.account-guest-link { display: flex; justify-content: center; align-items: center; gap: 12px; min-height: 45px; margin-top: 12px; padding: 10px 15px; border: 1px solid var(--line); border-radius: 9px; color: var(--accent); background: #fff; font-size: 13px; text-align: center; text-decoration: none; }
-.account-guest-link:hover { background: var(--accent-soft); border-color: var(--accent); }
+.account-submit:disabled { background: var(--theme-focus, var(--accent)); box-shadow: none; cursor: not-allowed; }
+.account-guest-link { display: flex; justify-content: center; align-items: center; gap: 12px; min-height: 47px; margin-top: 12px; padding: 10px 15px; border: 1px solid var(--control-border, var(--line)); border-radius: var(--control-radius, 8px); color: var(--accent); background: var(--control-background, #fff); font-size: 13px; text-align: center; text-decoration: none; }
+.account-guest-link:hover { background: var(--theme-tint, var(--accent-soft)); border-color: var(--theme-focus, var(--accent)); }
 .account-note { color: #62766d; font-size: 12px; line-height: 1.85; margin: 18px 0 0; }
 .account-status { display: flex; align-items: center; gap: 7px; min-height: 22px; margin-top: 25px; padding-top: 17px; border-top: 1px solid #e8eeea; color: #62766d; font-size: 11px; line-height: 1.7; }
 .account-status:empty { display: none; }
@@ -87,14 +87,13 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .account-group-heading { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 9px; }
 .account-group-heading > span { color: #375451; font-size: 13px; font-weight: 550; }
 .account-group-heading small { color: #62766d; font-size: 11px; }
-.account-departments { display: grid; gap: 8px; max-height: 240px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #c2d3c7 transparent; }
-.account-departments:empty { min-height: 46px; border: 1px dashed #dce7df; border-radius: 9px; background: #fafcf9; }
-.account-department { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 47px; padding: 8px 10px; border: 1px solid #e1e8e2; border-radius: 9px; background: #fbfcfa; color: #526b5d; font-size: 13px; transition: background .15s, border-color .15s; }
-.account-department:has(input:checked) { border-color: #a2c6af; background: #f0f7f1; color: #2e6653; }
+.account-departments { display: grid; gap: 8px; max-height: 240px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--control-border, var(--line)) transparent; }
+.account-departments:empty { min-height: 46px; border: 1px dashed var(--control-border, var(--line)); border-radius: var(--control-radius, 8px); background: var(--theme-tint, var(--canvas)); }
+.account-department { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 47px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--control-radius, 8px); background: var(--theme-tint, var(--canvas)); color: var(--control-text, var(--text)); font-size: 13px; transition: background .15s, border-color .15s; }
+.account-department:has(input:checked) { border-color: var(--control-border, var(--line)); background: var(--accent-soft); color: var(--theme-strong, var(--text)); }
 .account-department input { width: 16px; height: 16px; flex: 0 0 16px; margin: 0; accent-color: var(--accent); }
 .account-department .department-name { min-width: 0; overflow-wrap: anywhere; }
-.account-department select { margin-left: auto; max-width: 48%; min-width: 112px; padding: 6px 7px; border: 1px solid #dbe6dd; border-radius: 6px; color: #536f60; background: #fff; font-size: 12px; }
-.account-department:has(input:not(:checked)) select { opacity: .7; }
+.account-department select { flex: 0 1 132px; min-width: 126px; margin-left: auto; }
 body[data-account-page="register"] .account-form-region { align-items: flex-start; padding-block: 35px; }
 body[data-account-page="register"] .account-heading p, body[data-account-page="change-password"] .account-heading p { margin-bottom: 22px; }
 @media (min-width: 1440px) { .account-form-wrap { max-width: 520px; padding-inline: 44px; } }
@@ -146,6 +145,6 @@ body[data-account-page="register"] .account-heading p, body[data-account-page="c
   .account-heading h2 { font-size: 25px; }
   .account-field input { font-size: 16px; }
   .account-department { gap: 7px; font-size: 12px; padding-inline: 8px; }
-  .account-department select { min-width: 105px; font-size: 11px; }
+  .account-department select { --field-font-size: 12px; min-width: 116px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

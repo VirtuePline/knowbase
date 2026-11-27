@@ -13,6 +13,7 @@ from app.services import auth, database, mongo
 
 # (方法, 路径模板, 动作名)。{xxx} 匹配任意非 / 片段。
 _ACTION_RULES: tuple[tuple[str, str, str], ...] = (
+    ("PATCH", "/api/admin/production-sql/routes/{id}", "调整生产 SQL 路由状态"),
     ("POST", "/api/admin/login", "登录管理端"),
     ("POST", "/api/admin/register", "注册账号"),
     ("POST", "/api/admin/change-password", "修改本人密码"),
@@ -28,6 +29,10 @@ _ACTION_RULES: tuple[tuple[str, str, str], ...] = (
     ("POST", "/api/documents", "上传文档"),
     ("PUT", "/api/documents/{id}/replace", "替换文档"),
     ("DELETE", "/api/documents/{id}", "删除文档"),
+    ("POST", "/api/tools", "上传工具"),
+    ("PUT", "/api/tools/{id}/replace", "替换工具"),
+    ("DELETE", "/api/tools/{id}", "删除工具"),
+    ("PATCH", "/api/tools/{id}/access", "调整工具权限"),
     ("PATCH", "/api/documents/{id}/category", "修正文档分类"),
     ("PATCH", "/api/documents/{id}/fields", "保存文档字段"),
     ("POST", "/api/documents/markdown", "保存工作记录"),

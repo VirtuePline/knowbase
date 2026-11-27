@@ -22,7 +22,7 @@ from app.core.retrieval.embeddings import EmbeddingError, get_embedder
 from app.core.retrieval.reranker import RerankError, get_reranker
 from app.core.retrieval.relevance import filter_fault_hits, manual_code_match
 from app.core.retrieval.vector_store import VectorStore
-from app.domain.schemas import Chunk, ScoredChunk
+from app.domain.schemas import Chunk, ScoredChunk, TOOL_FILE_EXTS
 from app.domain.taxonomy import classify, vendor_hint, vendor_in_chunk
 from app.services import access, database
 
@@ -38,7 +38,7 @@ def allowed_document_ids() -> set[str] | None:
     """权限来自当前数据库，不依赖可能尚未重建的共享检索索引。"""
     if access.is_internal():
         return None
-    query = {"$and": [access.read_filter(), {"status": "ready"}]}
+    query = {"$and": [access.read_filter(), {"status": "ready", "ext": {"$nin": sorted(TOOL_FILE_EXTS)}}]}
     return {str(row["_id"]) for row in database._docs().find(query, {"_id": 1})}
 
 

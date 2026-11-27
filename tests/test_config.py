@@ -44,6 +44,19 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(s.top_k, 3)
         self.assertEqual(s.min_coverage, 0.32)
 
+    def test_production_sql_defaults_and_private_overrides(self):
+        self.assertFalse(self._load(BASE).production_sql_enabled)
+        with patch.dict("os.environ", {"KB_PRODUCTION_SQL_URL": "mysql+pymysql://user:example@host/mes"}):
+            s = self._load(BASE, "production_sql:\n  enabled: true\n  url: from-file\n  departments: [dep, dep]\n")
+        self.assertTrue(s.production_sql_enabled)
+        self.assertEqual(s.production_sql_view, "production_daily")
+        self.assertEqual(s.production_sql_departments, ("dep",))
+        self.assertIn("@host/mes", s.production_sql_url)
+        self.assertNotIn(s.production_sql_url, repr(s))
+        for invalid in ("dep", "[null]", "[1]", "['']"):
+            with self.subTest(invalid=invalid), self.assertRaises(ConfigError):
+                self._load(BASE, f"production_sql:\n  departments: {invalid}\n")
+
     def test_legacy_admin_port_can_match_the_unified_port(self):
         s = self._load(BASE, "server:\n  admin_host: 127.0.0.1\n  admin_port: 8000\n")
         self.assertEqual(s.port, 8000)

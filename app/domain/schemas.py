@@ -6,6 +6,12 @@ import math
 from typing import Any
 
 
+TOOL_FILE_EXTS = frozenset({
+    ".exe", ".msi", ".msp", ".msix", ".msixbundle", ".appx", ".appxbundle",
+    ".zip", ".7z", ".rar", ".iso",
+})
+
+
 @dataclass
 class Block:
     """解析器输出的原始文本块。表格类内容额外保留二维表格。"""
@@ -142,7 +148,7 @@ class AnswerResponse:
     sources: list[SourceRef] = field(default_factory=list)
     notice: str = ""
     llm_used: bool = False
-    answer_origin: str = "knowledge_base"  # "knowledge_base" | "web" | "none"
+    answer_origin: str = "knowledge_base"  # "knowledge_base" | "production_sql" | "web" | "none"
     solution_found: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -187,6 +193,14 @@ class DocRecord:
     department_id: str = "operations"
     visibility: str = "department"  # public = 全体登录员工；department = 归属/共享部门
     shared_department_ids: list[str] = field(default_factory=list)
+
+    @property
+    def is_tool(self) -> bool:
+        return self.ext.lower() in TOOL_FILE_EXTS
+
+    @property
+    def indexable(self) -> bool:
+        return not self.is_tool
 
     def to_dict(self) -> dict[str, Any]:
         return {

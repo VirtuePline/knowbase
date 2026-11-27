@@ -10,6 +10,7 @@ const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const loginHtml = fs.readFileSync(path.join(__dirname, "../web/login.html"), "utf8");
 const css = fs.readFileSync(path.join(__dirname, "../web/styles.css"), "utf8");
 const enterpriseSource = fs.readFileSync(path.join(__dirname, "../web/enterprise.js"), "utf8");
+const productionAdminSource = fs.readFileSync(path.join(__dirname, "../web/production-admin.js"), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 function shippedFunction(source, name) {
@@ -46,6 +47,7 @@ function element(attributes = {}) {
     setAttribute: (name, value) => { attributes[name] = value; },
     removeAttribute: (name) => { delete attributes[name]; },
     getAttribute: (name) => attributes[name],
+    addEventListener(type, handler) { this["on" + type] = handler; },
   };
 }
 
@@ -67,8 +69,11 @@ function createPage(mode, savedTab = "") {
   const storage = new Map([["kb_last_tab", savedTab]]);
   let currentMode = mode;
   let clearedSessions = 0;
+  let toolLoads = 0;
+  let productionRouteEnabled = true;
   const document = {
     body: elements.find((el) => el.tag === "body"),
+    getElementById: (id) => find("#" + id),
     querySelector: find,
     querySelectorAll: (selector) => elements.filter((el) => el.classList.contains(selector.slice(1))),
   };
@@ -78,7 +83,8 @@ function createPage(mode, savedTab = "") {
     localStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     window: { location: { replace: (url) => redirects.push(url), assign: (url) => redirects.push(url) } },
     enterpriseClearSession: () => { clearedSessions++; },
-    fetch: async (url) => {
+    loadTools: () => { toolLoads++; },
+    fetch: async (url, options = {}) => {
       requests.push(url);
       if (url === "/api/mode") {
         if (currentMode instanceof Error) throw currentMode;
@@ -89,6 +95,17 @@ function createPage(mode, savedTab = "") {
         { username: "operator", display_name: "运维员", role: "user" },
       ] }) };
       if (url === "/api/admin/logout") return { ok: true };
+      if (url === "/api/admin/production-sql/routes/route-1" && options.method === "PATCH") {
+        productionRouteEnabled = JSON.parse(options.body).enabled;
+        return { ok: true, json: async () => ({}) };
+      }
+      if (url.startsWith("/api/admin/production-sql/routes?")) return { ok: true, json: async () => ({ routes: [
+        { id: "route-1", example_question: "产量 <script>", enabled: productionRouteEnabled, sql: "SELECT <tag>", parameters: ["start"], use_count: 4 },
+        ...Array.from({ length: 20 }, (_, i) => ({ id: "other-" + i, example_question: "其他问题" + i, enabled: true })),
+      ].slice(Number(new URL(url, "http://local.test").searchParams.get("offset"))) }) };
+      if (url.startsWith("/api/admin/production-sql/history?")) return { ok: true, json: async () => ({ history: [
+        { route_id: "route-1", username: "employee", question: "昨天产量", outcome: "ok", parameters: { line: "<A>" } },
+      ] }) };
       if (url.startsWith("/api/audit-logs?")) return { ok: true, json: async () => ({ total: 0, logs: [] }) };
       throw new Error(`Unexpected request: ${url}`);
     },
@@ -116,15 +133,17 @@ function createPage(mode, savedTab = "") {
     shippedDeclaration(enterpriseSource, "enterpriseUsers"),
     shippedDeclaration(enterpriseSource, "enterpriseDepartments"),
     shippedFunction(enterpriseSource, "enterpriseUsersRows"),
+    shippedFunction(enterpriseSource, "enterpriseJson"),
     `async function enterpriseInitialize(data) { enterpriseIdentity = data; }`,
     `function enterpriseEscape(value) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }`,
     `function enterpriseDepartmentName() { return ""; }`,
   ].join("\n");
   vm.runInContext([...declarations.map((name) => shippedDeclaration(script, name)),
-    ...functions.map((name) => shippedFunction(script, name)), sortParts, enterpriseParts].join("\n"), context);
+    ...functions.map((name) => shippedFunction(script, name)), sortParts, enterpriseParts, productionAdminSource].join("\n"), context);
   return {
     document, find, requests, redirects,
     clearedSessions: () => clearedSessions,
+    toolLoads: () => toolLoads,
     setMode: (value) => { currentMode = value; },
     run: (source) => vm.runInContext(source, context),
     async init() {
@@ -148,7 +167,7 @@ test("administrator-only navigation and panels stay hidden until role initializa
   const page = createPage(admin);
   assert.equal(page.document.body.classList.contains("super-admin"), false);
   assert.match(css, /body:not\(\.super-admin\)\s+\.super-admin-only\s*\{[^}]*display:\s*none\s*!important/);
-  for (const tab of ["edits", "logs"]) {
+  for (const tab of ["edits", "logs", "production-sql"]) {
     assert.ok(page.find(`.tab-btn[data-tab="${tab}"]`).classList.contains("super-admin-only"));
     assert.ok(page.find(`#tab-${tab}`).classList.contains("super-admin-only"));
   }
@@ -176,7 +195,7 @@ for (const tab of ["accounts", "logs"]) {
   });
 }
 
-for (const tab of ["accounts", "logs", "edits"]) {
+for (const tab of ["accounts", "logs", "edits", "production-sql"]) {
   test(`ordinary account rejects previously saved administrator tab ${tab}`, async () => {
     const page = createPage(operator, tab);
     await page.init();
@@ -186,10 +205,49 @@ for (const tab of ["accounts", "logs", "edits"]) {
     assert.equal(page.find("#current-role").textContent, "未分配部门");
     page.run(`switchTo("${tab}")`);
     assert.equal(page.activeTab(), "tab-chat");
-    await page.run("loadUsers(); loadAuditLogs()");
+    await page.run("loadUsers(); loadAuditLogs(); loadProductionAdmin()");
     assert.deepEqual(page.requests, ["/api/mode"]);
   });
 }
+
+test("platform administrator inspects escaped SQL and parameters and toggles a route", async () => {
+  const page = createPage(admin, "production-sql");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-production-sql");
+  assert.match(page.find("#production-routes-body").innerHTML, /产量 &lt;script&gt;/);
+  assert.match(page.find("#production-routes-body").innerHTML, /SELECT &lt;tag&gt;/);
+  assert.match(page.find("#production-history-body").innerHTML, /&lt;A&gt;/);
+  assert.match(page.find("#production-history-body").innerHTML, /昨天产量/);
+  for (const [enabled, expected] of [[false, "已停用"], [true, "已启用"]]) {
+    await page.run(`setProductionRoute({target: {closest: () => ({dataset: {productionId: "route-1", enable: "${enabled}"}})}})`);
+    assert.match(page.find("#production-routes-body").innerHTML.split("</tr>")[0], new RegExp(expected));
+  }
+});
+
+test("department manager cannot load or toggle production SQL routes", async () => {
+  const page = createPage({ ...operator, can_write: true, can_manage_users: true }, "production-sql");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-chat");
+  page.run('switchTo("production-sql")');
+  await page.run("loadProductionAdmin()");
+  await page.run('setProductionRoute({target: {closest: () => ({dataset: {productionId: "route-1", enable: "false"}})}})');
+  assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
+test("administrators reach older routes while the history page stays in place", async () => {
+  const page = createPage(admin, "production-sql");
+  await page.init();
+  assert.equal(page.find("#production-routes-next").disabled, false);
+  assert.equal(page.find("#production-history-next").disabled, true);
+  await page.find("#production-routes-next").onclick();
+  assert.ok(page.requests.includes("/api/admin/production-sql/routes?limit=21&offset=20"));
+  assert.equal(page.find("#production-routes-page").textContent, "第 2 页");
+  assert.equal(page.find("#production-history-page").textContent, "第 1 页");
+  assert.match(page.find("#production-routes-body").innerHTML, /其他问题19/);
+  assert.equal(page.find("#production-routes-next").disabled, true);
+  await page.find("#production-routes-prev").onclick();
+  assert.match(page.find("#production-routes-body").innerHTML, /route-1/);
+});
 
 test("search portal remains public even with an administrator role in a stale payload", async () => {
   const page = createPage({ ...admin, portal: "search" }, "logs");
@@ -219,6 +277,16 @@ test("anonymous public portal opens without login and offers member login", asyn
   await page.run("handleAccountAccess()");
   assert.deepEqual(page.redirects, ["/login"]);
   assert.deepEqual(page.requests, ["/api/mode"]);
+});
+
+test("the public portal restores the tools tab with upload controls gated by write permission", async () => {
+  const page = createPage(guest, "tools");
+  await page.init();
+  assert.equal(page.activeTab(), "tab-tools");
+  assert.equal(page.toolLoads(), 1);
+  assert.equal(page.document.body.classList.contains("admin-mode"), false);
+  assert.match(html, /id="tab-tools"[\s\S]*?class="[^"\n]*\badmin-only\b[^"\n]*"[\s\S]*?id="tool-file"/);
+  assert.deepEqual(page.redirects, []);
 });
 
 test("login page offers public access without submitting credentials", () => {

@@ -10,7 +10,7 @@ from unittest.mock import patch
 from app.core.answer import references, service
 from app.core.ingest import pipeline
 from app.core.ingest.loaders import load_blocks, reference_ids, _drop_no_ref_lines
-from app.domain.schemas import Block, Chunk, ScoredChunk
+from app.domain.schemas import Block, Chunk, DocRecord, ScoredChunk
 from app.services.retrieval_service import _embed_text
 
 
@@ -57,13 +57,16 @@ class InlineReferencesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "manual.md").write_text("# 手册\n\n核对端口速率", encoding="utf-8")
-            doc = SimpleNamespace(name="设备手册", stored_name="manual.md", status="ready")
+            doc = DocRecord("manual", "设备手册", "manual.md", ".md", 0, "", 1, "", "ready")
+            tool = replace(doc, id="tool", name="安装工具", stored_name="tool.exe", ext=".exe", chunks=0)
             with patch.object(references, "settings", replace(references.settings, raw_dir=root)), \
-                    patch.object(references.database, "get", side_effect=lambda rid: doc if rid == "manual" else None) as get:
-                result = references.append_references("【记录 1】交换机丢包", [hit(["manual", "manual", "missing"])])
+                    patch.object(references.database, "get", side_effect={"manual": doc, "tool": tool}.get) as get, \
+                    patch.object(references, "load_blocks", wraps=load_blocks) as load:
+                result = references.append_references("【记录 1】交换机丢包", [hit(["manual", "manual", "missing", "tool"])])
             self.assertIn("核对端口速率", result)
             self.assertEqual(result.count("的补充引用"), 1)
-            self.assertEqual(get.call_count, 2)
+            self.assertEqual(get.call_count, 3)
+            load.assert_called_once_with((root / "manual.md").resolve())
 
     def test_context_respects_budget(self):
         with patch.object(references, "settings", replace(references.settings, max_context_chars=100)), \

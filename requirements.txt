@@ -3,6 +3,10 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
 
+# 问答工作流
+langgraph>=1.0,<2
+langsmith>=0.1.95,<1
+
 # 文档解析
 pypdf>=4.2
 pypdfium2>=5.0
@@ -16,6 +20,9 @@ PyYAML>=6.0
 
 # 数据库（文档登记与向量存储）
 pymongo>=4.6
+# 生产报表只读查询，MySQL 8 的 SHA-2 认证使用 rsa 扩展。
+SQLAlchemy>=2.0,<2.1
+PyMySQL[rsa]==1.2.4
 
 # 语义向量检索（本地 ONNX 嵌入模型 + FAISS 内存索引，MongoDB 仅持久化向量）
 fastembed>=0.9

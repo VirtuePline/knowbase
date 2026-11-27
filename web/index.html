@@ -21,6 +21,7 @@
   <nav aria-label="主要导航">
     <button class="tab-btn active" data-tab="chat" aria-current="page">智能问答</button>
     <button class="tab-btn" data-tab="docs" id="docs-tab-btn">文档管理</button>
+    <button class="tab-btn" data-tab="tools">工具库</button>
     <button class="tab-btn" data-tab="timeline">时间线</button>
     <button class="tab-btn session-only" data-tab="weekly">工作周报</button>
     <button class="tab-btn admin-tab" data-tab="editor">新增工作记录</button>
@@ -29,6 +30,7 @@
     <button class="tab-btn admin-tab super-admin-only" data-tab="edits">修改记录</button>
     <button class="tab-btn admin-tab account-admin-only" data-tab="accounts">用户管理</button>
     <button class="tab-btn admin-tab super-admin-only" data-tab="logs">操作日志</button>
+    <button class="tab-btn admin-tab super-admin-only" data-tab="production-sql">生产 SQL 路由</button>
   </nav>
   <div class="sidebar-note"><span class="sidebar-note-icon" aria-hidden="true">↗</span><strong>让经验持续积累</strong><p>汇集公共知识，连接各部门的经验与资料。</p></div>
   <div class="sidebar-footer">
@@ -109,11 +111,10 @@
       <h2>上传文档</h2>
       <div id="doc-scope-host"></div>
       <div id="drop">点击选择文件，或把文件拖到这里<br />
-        <span class="muted">支持企业制度、部门流程、业务资料、操作手册与知识文档；支持 PDF、DOCX、XLSX、XLSM、CSV、TXT、MD（旧版 .doc / .xls 请先另存为新格式）</span><br />
-        <span class="muted">入库后自动分析：剔除目录、封面、版权页等非主要内容，为每个主要章节生成摘要；检索按摘要匹配，原文随结果返回</span>
+        <span class="muted">单个上限 100 MB。支持 PDF、DOCX、XLSX、XLSM、CSV、TXT、MD（旧版 .doc / .xls 请先另存为新格式）。文档自动生成摘要和检索索引。</span>
       </div>
-      <input type="file" id="file" multiple hidden />
-      <input type="file" id="replace-file" hidden />
+      <input type="file" id="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md" multiple hidden />
+      <input type="file" id="replace-file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md" hidden />
       <div class="row" style="margin-top:12px">
         <button class="ghost super-admin-only" id="rebuild">重建文档库</button>
         <span class="muted" id="upload-status"></span>
@@ -122,9 +123,12 @@
 
     <div class="panel-card">
       <div class="docs-head">
-        <h2>已入库文档</h2>
+        <h2>文档列表</h2>
       </div>
-      <div class="department-filter-row"><label for="doc-department-filter">所属部门</label><select id="doc-department-filter" aria-label="按所属部门筛选文档"><option value="">全部部门</option></select><label for="doc-sort">排序</label><select id="doc-sort" aria-label="文档列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></div>
+      <div class="filter-row">
+        <label>所属部门<select id="doc-department-filter" aria-label="按所属部门筛选文档"><option value="">全部部门</option></select></label>
+        <label>排序<select id="doc-sort" aria-label="文档列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></label>
+      </div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="文档列表，可横向滚动"><table class="docs">
         <thead>
           <tr><th>名称 / 摘要</th><th>格式</th><th>检索单元</th><th>状态</th><th>上传时间</th><th></th></tr>
@@ -168,6 +172,32 @@
     </div>
   </section>
 
+  <section class="tab" id="tab-tools">
+    <div class="page-heading"><h1>工具库</h1><p>下载有权访问的软件安装包、可执行文件和压缩包。</p></div>
+    <div class="panel-card admin-only">
+      <h2>上传工具</h2>
+      <div id="tool-scope-host"></div>
+      <div id="tool-drop">点击选择文件，或把文件拖到这里<br />
+        <span class="muted">单个上限 2 GB。支持 EXE、MSI、MSP、MSIX、MSIXBUNDLE、APPX、APPXBUNDLE、ZIP、7Z、RAR、ISO。原件供下载，内容不参与检索。</span>
+      </div>
+      <input type="file" id="tool-file" accept=".exe,.msi,.msp,.msix,.msixbundle,.appx,.appxbundle,.zip,.7z,.rar,.iso" multiple hidden />
+      <input type="file" id="tool-replace-file" accept=".exe,.msi,.msp,.msix,.msixbundle,.appx,.appxbundle,.zip,.7z,.rar,.iso" hidden />
+      <p class="muted" id="tool-upload-status" role="status"></p>
+    </div>
+    <div class="panel-card">
+      <h2>工具列表</h2>
+      <div class="filter-row">
+        <label>所属部门<select id="tool-department-filter" aria-label="按所属部门筛选工具"><option value="">全部部门</option></select></label>
+      </div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="工具列表，可横向滚动"><table class="docs">
+        <thead>
+          <tr><th>名称</th><th>格式</th><th>大小</th><th>上传时间</th><th>操作</th></tr>
+        </thead>
+        <tbody id="tool-rows"><tr><td colspan="5" class="muted">暂无工具</td></tr></tbody>
+      </table></div>
+    </div>
+  </section>
+
   <!-- 上传工作记录 -->
   <section class="tab" id="tab-editor">
     <div class="page-heading"><h1>新增工作记录</h1><p>上传相关材料，或直接记录工作事项、处理步骤与结果。</p></div>
@@ -183,23 +213,23 @@
       <div id="rec-drop">点击选择文件，或把文件拖到这里<br />
         <span class="muted">支持 PDF、DOCX、XLSX、MD 等；工作事项、处理记录、截图说明等业务材料，与基础文档分开管理</span>
       </div>
-      <p class="record-attachments-hint">需要附加照片或文件？<a href="#record-attachments">先添加附件</a>，再选择记录文件。多份记录的附件仅随第一条成功入库的记录保存。</p>
-      <input type="file" id="rec-file" multiple hidden />
-      <div class="row" style="margin-top:12px">
-        <label class="muted" style="font-size:13px">记录分类：
+      <p class="record-attachments-hint">需要附加照片或文件？<a id="record-attachments-link" href="#record-attachments">先添加附件</a>，再选择记录文件。多份记录的附件仅随第一条成功入库的记录保存。</p>
+      <input type="file" id="rec-file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md" multiple hidden />
+      <div class="row record-upload-fields">
+        <label>记录分类：
           <span class="multicat" id="rec-cat-multi">
             <button type="button" class="cat-select multicat-btn" id="rec-cat-btn" title="点击打开选择窗体，可勾选多个记录分类；带二级选项的类型在窗体中进一步选择">自动判定</button>
           </span>
         </label>
         <span id="rec-subcats" class="rec-subcats"></span>
-        <label class="muted" style="font-size:13px">记录人：
-          <input type="text" id="rec-operator" placeholder="记录人" title="记录人用户名；默认当前登录用户名，可改为其他成员" style="width:110px;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;font-size:13px" />
+        <label>记录人：
+          <input type="text" id="rec-operator" placeholder="记录人" title="记录人用户名；默认当前登录用户名，可改为其他成员" />
         </label>
-        <label class="muted" style="font-size:13px">记录日期：
-          <input type="date" id="rec-date" title="事项发生日期；默认为今天" />
+        <label>记录日期：
+          <input type="date" id="rec-date" class="record-date" title="事项发生日期；默认为今天" />
         </label>
-        <label class="muted" style="font-size:13px">完成情况：
-          <select id="rec-resolved" class="cat-select" style="width:auto" title="记录当前的处理状态，时间线徽标按此显示">
+        <label>完成情况：
+          <select id="rec-resolved" class="record-status" title="记录当前的处理状态，时间线徽标按此显示">
             <option value="unresolved">未完成</option>
             <option value="improving">处理中</option>
             <option value="temporary">阶段完成</option>
@@ -217,8 +247,8 @@
           <button type="button" class="cat-select multicat-btn" id="md-cat-btn" title="选择分类；未选择时按内容自动判断">选择分类</button>
           <span id="md-subcats" class="category-tag-list"></span>
         </span>
-        <input type="date" id="md-time" title="记录时间：默认当前日期，只需选择年月日" />
-        <select id="md-resolved" title="完成情况：时间线徽标按此显示；时间线上的人工标记优先于这里的选择">
+        <input type="date" id="md-time" class="record-date" aria-label="记录日期" title="记录时间：默认当前日期，只需选择年月日" />
+        <select id="md-resolved" class="record-status" aria-label="完成情况" title="完成情况：时间线徽标按此显示；时间线上的人工标记优先于这里的选择">
           <option value="unresolved">未完成</option>
           <option value="improving">处理中</option>
           <option value="temporary">阶段完成</option>
@@ -231,7 +261,11 @@
         <button class="ghost" id="md-save">保存并入知识库</button>
         <span class="muted" id="md-status"></span>
       </div>
-      <div class="record-attachments" id="record-attachments" aria-label="记录附件">
+      <div class="editor-panel-actions">
+        <button type="button" class="ghost editor-panel-toggle" id="record-attachments-toggle" aria-controls="record-attachments" aria-expanded="false">附件</button>
+        <button type="button" class="ghost editor-panel-toggle" id="find-toggle" aria-controls="editor-find" aria-expanded="false">查找与替换</button>
+      </div>
+      <div class="record-attachments" id="record-attachments" role="region" aria-label="记录附件" hidden>
         <div class="record-attachments-heading"><h3>记录附件<span>可选</span></h3><span class="record-attachments-count" data-attachment-count>0 个待上传</span></div>
         <div class="record-attachment-drop" data-attachment-drop tabindex="0" role="region" aria-label="附件粘贴与拖放区域" aria-describedby="record-attachment-help">
           <span class="record-attachment-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m9 12 6-6a3 3 0 0 1 4 4L10 19a5 5 0 0 1-7-7l10-10M7 14l8-8"/></svg></span>
@@ -242,14 +276,14 @@
         <ul class="record-attachment-list" data-attachment-list hidden></ul>
         <div class="record-attachments-footer"><p data-attachment-target></p><span class="record-attachment-status" data-attachment-status role="status" aria-live="polite"></span><button type="button" class="ghost" data-attachment-retry hidden>重试附件上传</button><button type="button" class="ghost" data-attachment-clear disabled>清空</button></div>
       </div>
-      <div class="find-bar">
-        <input type="text" id="find-text" placeholder="查找内容" />
-        <input type="text" id="replace-text" placeholder="替换为" />
-        <button class="ghost" id="find-next">查找下一个</button>
-        <button class="ghost" id="replace-one">替换</button>
-        <button class="ghost" id="replace-all">全部替换</button>
+      <div class="find-bar" id="editor-find" role="group" aria-label="查找与替换" hidden>
+        <input type="text" id="find-text" placeholder="查找内容" aria-label="查找内容" />
+        <input type="text" id="replace-text" placeholder="替换为" aria-label="替换为" />
+        <button type="button" class="ghost" id="find-next">查找下一个</button>
+        <button type="button" class="ghost" id="replace-one">替换</button>
+        <button type="button" class="ghost" id="replace-all">全部替换</button>
         <label class="muted" style="font-size:13px"><input type="checkbox" id="find-case" /> 区分大小写</label>
-        <span class="muted" id="find-status" style="font-size:13px"></span>
+        <span class="muted" id="find-status" role="status" style="font-size:13px"></span>
       </div>
       <div class="notice" id="md-restored" style="display:none">
         原始文件未保存在知识库中（早期命令行导入），以下内容由已入库的章节原文还原，排版可能与原件略有差异；保存后将以此内容作为新的原件。
@@ -288,7 +322,7 @@
         <button type="button" class="md-tool" data-md="image" title="插入图片" aria-label="插入图片">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><circle cx="7" cy="8" r="1.3"/><path d="M3 14l4.2-4.2 2.8 2.8 2-2 5 5"/></svg>
         </button>
-        <button type="button" class="md-tool" data-md="doc-ref" title="引用文档库文档（插入参考引用，点击可预览）" aria-label="引用文档">
+        <button type="button" class="md-tool" data-md="doc-ref" title="插入文档引用或工具下载链接" aria-label="插入文档引用或工具下载链接">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3.5h8.5L16 7v9.5H4z"/><path d="M12 3.5V7h4M7 10.5h6M7 13.5h6"/></svg>
         </button>
         <span class="md-sep" aria-hidden="true"></span>
@@ -314,13 +348,13 @@
       <div class="editor-tip">
         默认在预览模式直接书写，排版所见即所得；切到「源码」可编辑 Markdown 原文。图片支持 Ctrl+V 粘贴或通过工具栏选择本地文件上传，表格通过工具栏选择行列插入。保存后自动重新切块并重建检索索引，文件名未写扩展名时默认保存为 <code>.md</code>。
       </div>
-      <!-- 引用文档库文档：选择浮层 -->
+      <!-- 文档引用与工具链接选择浮层 -->
       <div class="doc-pop" id="doc-ref-pop" hidden>
         <div class="doc-pop-card">
-          <div class="doc-pop-head">引用文档库文档<button type="button" class="doc-pop-close" id="doc-ref-close" aria-label="关闭">✕</button></div>
-          <input id="doc-ref-search" class="doc-pop-search" placeholder="搜索文档名…" />
+          <div class="doc-pop-head">插入文档引用或工具下载链接<button type="button" class="doc-pop-close" id="doc-ref-close" aria-label="关闭">✕</button></div>
+          <input id="doc-ref-search" class="doc-pop-search" placeholder="搜索文件名…" />
           <div class="doc-pop-list" id="doc-ref-list"></div>
-          <p class="doc-ref-tip">在正文光标处插入行内引用。引用内容不参与本记录检索；检索命中后，开启「大模型整理」可一起分析。</p>
+          <p class="doc-ref-tip">文档引用可打开预览，工具链接可直接下载。文档引用可在「大模型整理」中用于分析。</p>
         </div>
       </div>
     </div>
@@ -334,7 +368,10 @@
         <h2>工作记录</h2>
         <span class="muted" style="font-size:13px">所有工作记录文档：上传的记录文件与在线写的处理记录；可预览、下载、编辑、替换、改分类、改记录时间</span>
       </div>
-      <div class="department-filter-row"><label for="rec-department-filter">所属部门</label><select id="rec-department-filter" aria-label="按所属部门筛选记录"><option value="">全部部门</option></select><label for="rec-sort">排序</label><select id="rec-sort" aria-label="记录列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></div>
+      <div class="filter-row">
+        <label>所属部门<select id="rec-department-filter" aria-label="按所属部门筛选记录"><option value="">全部部门</option></select></label>
+        <label>排序<select id="rec-sort" aria-label="记录列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></label>
+      </div>
       <div class="cat-filter" id="rec-cat-filter"></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="文档列表，可横向滚动"><table class="docs">
         <thead>
@@ -350,22 +387,20 @@
     <div class="page-heading"><h1>知识分类与模板</h1><p>维护企业知识分类与记录模板，业务资料可继续关联厂商。</p></div>
     <div class="panel-card admin-only">
       <h2>知识分类与模板</h2>
-      <div class="row" style="align-items:center;margin-bottom:8px">
-        <span class="muted" style="font-size:13px">记录分类</span>
-        <select id="tpl-cat" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px"></select>
+      <div class="filter-row">
+        <label>记录分类<select id="tpl-cat"></select></label>
         <button class="ghost" type="button" id="tpl-save" title="把当前内容保存为该记录分类的默认模板，录入时按此预填">设为默认模板</button>
         <button class="ghost" type="button" id="tpl-reset" title="清空自定义，恢复内置模板">恢复内置</button>
         <span class="muted" id="tpl-status" style="font-size:13px"></span>
       </div>
-      <textarea id="tpl-content" rows="9" spellcheck="false"
-        style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:12.5px/1.6 ui-monospace,Consolas,monospace;background:#fff"></textarea>
+      <textarea id="tpl-content" class="form-textarea" rows="9" spellcheck="false" aria-label="记录模板"></textarea>
       <div class="muted" style="font-size:12px;margin-top:6px">
         修改后点「设为默认模板」，录入该类型时即按此模板预填；「恢复内置」还原系统内置模板。
         时间与记录人不写在模板里：时间由「记录日期」控件记录，记录人默认当前登录用户名，均随记录存入数据库。
       </div>
       <div class="row" style="align-items:center;margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
         <span class="muted" style="font-size:13px">厂商清单</span>
-        <input type="text" id="vendor-new" placeholder="新厂商名称" style="width:180px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
+        <input type="text" id="vendor-new" placeholder="新厂商名称" />
         <button class="ghost" type="button" id="vendor-add">添加厂商</button>
         <span id="vendor-list" style="display:flex;flex-wrap:wrap;gap:6px"></span>
       </div>
@@ -401,12 +436,12 @@
       <p class="muted wr-settings-note">到点自动汇总本人本周（周一起 7 天）的工作记录，无需管理员授权。个人设置仅影响自己的周报。</p>
     </div>
     <div class="panel-card">
-      <div class="row wr-reports-heading">
+      <div class="filter-row wr-reports-heading">
         <h2>周报列表</h2>
         <button class="ghost" type="button" id="wr-generate" title="仅生成自己的本周周报；重复生成会覆盖本人本周结果">生成我的本周周报</button>
         <button class="ghost account-admin-only" type="button" id="wr-generate-managed" hidden>生成本部门周报</button>
         <button class="ghost" type="button" id="wr-refresh">刷新</button>
-        <label style="font-size:12px">排序<select id="wr-sort" aria-label="周报列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></label>
+        <label>排序<select id="wr-sort" aria-label="周报列表排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option><option value="name-asc">名称 A-Z</option></select></label>
         <span class="muted" id="wr-generate-status" role="status"></span>
       </div>
       <p class="muted wr-settings-note">点「查看」阅读周报正文，正文由 AI 阅读本周记录后总结。</p>
@@ -436,11 +471,13 @@
     </div>
     <div class="panel-card admin-only">
       <h2>成员与部门角色</h2>
-      <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px"><label for="users-sort" style="font-size:12px">排序</label><select id="users-sort" aria-label="成员列表排序"><option value="time-desc" selected>时间倒序（最新创建在前）</option><option value="time-asc">时间正序（最早创建在前）</option><option value="name-asc">名称 A-Z</option></select></div>
+      <div class="filter-row">
+        <label>排序<select id="users-sort" aria-label="成员列表排序"><option value="time-desc" selected>时间倒序（最新创建在前）</option><option value="time-asc">时间正序（最早创建在前）</option><option value="name-asc">名称 A-Z</option></select></label>
+      </div>
       <div class="row account-admin-only" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <span class="muted" style="font-size:13px">创建普通账号</span>
-        <input type="text" id="reg-account" placeholder="账号（如 zs）" autocapitalize="none" spellcheck="false" style="width:170px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
-        <input type="text" id="reg-username" placeholder="用户名（如 张三）" autocapitalize="none" spellcheck="false" style="width:150px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px" />
+        <input type="text" id="reg-account" placeholder="账号（如 zs）" autocapitalize="none" spellcheck="false" />
+        <input type="text" id="reg-username" placeholder="用户名（如 张三）" autocapitalize="none" spellcheck="false" />
         <div id="reg-departments" class="department-roles"></div>
         <button class="ghost" type="button" id="reg-create">创建账号</button>
         <span class="muted" id="reg-status" style="font-size:13px"></span>
@@ -481,22 +518,55 @@
     <div class="page-heading"><h1>修改记录</h1><p>知识文档与业务记录的编辑溯源，做到每一条都可追溯。</p></div>
     <div class="panel-card admin-only">
       <h2>修改记录</h2>
-      <div class="row" style="align-items:center;margin-bottom:8px">
+      <div class="filter-row">
         <button class="ghost" type="button" id="edits-refresh">刷新</button>
-        <label for="edits-sort" style="font-size:12px">排序</label><select id="edits-sort" aria-label="修改记录排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select>
+        <label>排序<select id="edits-sort" aria-label="修改记录排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select></label>
         <span class="muted" style="font-size:12px">在线新建 / 修改记录都会记录动作、操作人与时间（存 MongoDB edit_logs 集合）</span>
       </div>
       <div id="edits-log" style="font-size:13px"></div>
     </div>
   </section>
 
+  <section class="tab super-admin-only" id="tab-production-sql">
+    <div class="page-heading"><h1>生产 SQL 路由</h1><button class="ghost" type="button" id="production-sql-refresh">刷新</button></div>
+    <div class="panel-card">
+      <h2>查询路由</h2>
+      <div class="production-table-scroll">
+        <table aria-label="生产 SQL 查询路由">
+          <thead><tr><th>问题与 SQL 模板</th><th>状态</th><th>使用次数</th><th>最近使用</th><th>操作</th></tr></thead>
+          <tbody id="production-routes-body"></tbody>
+        </table>
+      </div>
+      <div class="row production-pager" role="group" aria-label="查询路由翻页">
+        <button type="button" class="ghost" id="production-routes-prev" disabled>上一页</button>
+        <span id="production-routes-page" aria-live="polite"></span>
+        <button type="button" class="ghost" id="production-routes-next" disabled>下一页</button>
+      </div>
+    </div>
+    <div class="panel-card">
+      <h2>最近查询记录</h2>
+      <div class="production-table-scroll">
+        <table aria-label="最近生产查询记录">
+          <thead><tr><th>执行时间</th><th>账号</th><th>问题与查询参数</th><th>路由</th><th>结果</th></tr></thead>
+          <tbody id="production-history-body"></tbody>
+        </table>
+      </div>
+      <div class="row production-pager" role="group" aria-label="查询记录翻页">
+        <button type="button" class="ghost" id="production-history-prev" disabled>上一页</button>
+        <span id="production-history-page" aria-live="polite"></span>
+        <button type="button" class="ghost" id="production-history-next" disabled>下一页</button>
+      </div>
+    </div>
+    <p id="production-sql-status" class="muted" role="status"></p>
+  </section>
+
   <section class="tab super-admin-only" id="tab-logs">
     <div class="page-heading"><h1>操作日志</h1><p>查看知识库的管理操作与处理结果。</p></div>
     <div class="panel-card admin-only">
       <h2>操作日志</h2>
-      <div class="row" style="align-items:center;margin-bottom:8px">
+      <div class="filter-row">
         <button class="ghost" type="button" id="audit-refresh">刷新</button>
-        <label for="audit-sort" style="font-size:12px">排序</label><select id="audit-sort" aria-label="操作日志排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select>
+        <label>排序<select id="audit-sort" aria-label="操作日志排序"><option value="time-desc" selected>时间倒序（最新在前）</option><option value="time-asc">时间正序（最早在前）</option></select></label>
         <span class="muted" style="font-size:12px">管理端每次写操作都会记录操作 IP、时间与账号（存 MongoDB audit_logs 集合）</span>
       </div>
       <div style="overflow-x:auto">
@@ -574,7 +644,7 @@
       <button class="close" id="time-close" type="button" title="关闭">×</button>
     </header>
     <div class="body">
-      <input type="date" id="time-input" style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;font-size:13.5px" />
+      <input type="date" id="time-input" />
       <div class="muted" style="font-size:12px;margin-top:8px">时间用于列表显示与时间线排序，只保留年月日。</div>
       <div class="row" style="justify-content:flex-end;margin-top:10px">
         <button class="primary" type="button" id="time-save">保存</button>
@@ -624,10 +694,8 @@
       </div>
     </header>
     <div style="padding:16px 18px">
-      <input type="text" id="login-username" placeholder="账号" autocomplete="username"
-             style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit;margin-bottom:10px" />
-      <input type="password" id="login-password" placeholder="密码" autocomplete="current-password"
-             style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit" />
+      <input type="text" id="login-username" placeholder="账号" autocomplete="username" />
+      <input type="password" id="login-password" placeholder="密码" autocomplete="current-password" />
       <div id="login-error" style="display:none;color:#c0392b;font-size:13px;margin-top:8px"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
         <button class="ghost" type="button" id="login-cancel">取消</button>
@@ -640,6 +708,7 @@
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="/static/enterprise.js"></script>
+<script src="/static/production-admin.js"></script>
 <script src="/static/record-attachments.js"></script>
 <script>
 const $ = (sel) => document.querySelector(sel);
@@ -690,6 +759,10 @@ function inline(s) {
   });
   text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, url) => {
     const href = safeUrl(url);
+    const download = href.match(/^\/api\/(?:tools|documents)\/([A-Za-z0-9_-]+)\/download$/);
+    if (download) {
+      return keep(`<a href="${href}" download data-tool-download="${download[1]}" contenteditable="false">${label}</a>`);
+    }
     return href ? keep(`<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`) : match;
   });
   text = text
@@ -809,6 +882,7 @@ function safeHttpUrl(value) {
 }
 
 function renderAnswerOrigin(data) {
+  if (data.answer_origin === "production_sql") return '<div class="answer-origin knowledge-base"><span aria-hidden="true"></span>生产报表查询</div>';
   if (data.status === "guide") return "";
   const legacySolution = data.solution_found === undefined && data.status === "ok" && (data.sources || []).length > 0;
   const web = data.answer_origin === "web";
@@ -995,7 +1069,10 @@ function renderChatAnswer(bubble, data, question, started, rejected = []) {
     bubble.dataset.kbdocs = JSON.stringify(kbDocs);
     reAsk = `<div class="re-ask"><button class="ghost" type="button" data-reask title="把命中来源计入惩罚参数并重新检索：本次排除直接命中的文档，后续提问也会降低它们的权重">答案不对？排除命中来源重新回答</button></div>`;
   }
-  bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + renderAnswerContent(data.answer, data.sources) + elapsed + reAsk;
+  const content = data.answer_origin === "production_sql"
+    ? escapeHtml(data.answer).replace(/\n/g, "<br>")
+    : renderAnswerContent(data.answer, data.sources);
+  bubble.innerHTML = renderAnswerOrigin(data) + cat + notice + content + elapsed + reAsk;
 }
 
 // 「答案不对」：把当前回答的知识库来源计入惩罚参数，重新请求并原位替换回答
@@ -1139,6 +1216,11 @@ async function ask(question, userLabel) {
     if (version !== chatSessionVersion || controller.signal.aborted) return;
     historyConversationId = String(data.conversation_id || "");
     renderChatAnswer(pending, data, q, started);
+    if (data.answer_origin === "production_sql") {
+      history.length = 0;
+      lastAnswered = data.status === "ok";
+      return;
+    }
     if (data.status !== "guide") {
       lastAnswered = true;
       saveHistoryItem({
@@ -1370,6 +1452,7 @@ function catBadges(d) { return docCats(d).map((name) => catBadge(name)).join("")
 function fmtSize(bytes) {
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1) + " GB";
   return (bytes / 1024 / 1024).toFixed(1) + " MB";
 }
 
@@ -1432,7 +1515,7 @@ async function loadDocuments() {
     const data = await resp.json();
     if (requestId !== docRequestId) return;
     if (!resp.ok) throw new Error("文档加载失败");
-    docDocs = data.documents || [];
+    docDocs = (data.documents || []).filter((doc) => doc.indexed !== false);
     renderDepartmentFilter(docDepartmentSelect, data.departments, docDepartmentFilter);
     renderDocs();
   } catch {
@@ -1477,6 +1560,7 @@ function recordRelationsHtml(record, previewAttribute, childrenPanelId = "") {
 function docRowHtml(d) {
   const isRecord = d.doc_type === "record";
   const id = escapeHtml(d.id);
+  const name = escapeHtml(d.name);
   const skipped = d.skipped ? `<div class="muted" style="font-size:12px">已忽略 ${d.skipped} 个非主要部分（目录 / 封面 / 版权等）</div>` : "";
   const btns = [
     `<button class="ghost" data-pv="${id}">预览</button>`,
@@ -1503,7 +1587,7 @@ function docRowHtml(d) {
         : "")
     : catBadges(d);
   return `<tr>
-        <td><span class="doc-link" data-pv="${id}" title="点击预览">${escapeHtml(d.name)}</span>${enterpriseDocumentLabel(d)}
+        <td><span class="doc-link" data-pv="${id}" title="点击预览">${name}</span>${enterpriseDocumentLabel(d)}
           ${d.summary ? `<div class="doc-summary" title="${escapeHtml(d.summary)}">${escapeHtml(d.summary)}</div>` : ""}
           ${isRecord && d.vendor ? `<div class="net-tags"><span class="net-tag" title="厂商">厂商：${escapeHtml(d.vendor)}</span></div>` : ""}
           <div class="record-provenance"><span>${isRecord ? "记录人" : "上传人"}：${escapeHtml(String(d.uploaded_by_name || d.uploaded_by || "历史记录"))}</span>` +
@@ -1563,7 +1647,7 @@ function renderByDepartment(docs) {
 
 function renderDocs() {
   docRows.innerHTML = docDocs.length ? renderByDepartment(docDocs)
-    : '<tr><td colspan="6" class="muted">当前部门暂无文档，可上传企业制度、业务流程或部门资料；工作记录见「记录管理」页</td></tr>';
+    : '<tr><td colspan="6" class="muted">当前部门暂无文档</td></tr>';
 }
 
 // 工作记录表已从页面移除；bindDocTable 对不存在的表格直接跳过
@@ -1650,6 +1734,87 @@ function bindDocTable(rowsEl, reload) {
 }
 
 bindDocTable(docRows, loadDocuments);
+
+/* ---------- 工具库 ---------- */
+const toolRows = $("#tool-rows");
+const toolDepartmentSelect = $("#tool-department-filter");
+let toolDocs = [];
+let toolRequestId = 0;
+let replaceToolTargetId = "";
+
+function toolRowHtml(tool) {
+  const id = escapeAttr(escapeHtml(tool.id));
+  const fileAvailable = tool.status === "ready" && tool.has_source;
+  const buttons = [
+    fileAvailable ? `<a class="ghost tool-download" href="${toolDownloadPath(tool.id)}" download>下载</a>` : "",
+    fileAvailable ? `<button type="button" class="ghost" data-tool-copy="${id}">复制下载链接</button>` : "",
+    enterpriseCanManageAccess(tool) ? `<button type="button" class="ghost" data-tool-access="${id}">管理权限</button>` : "",
+    enterpriseCanWrite(tool) ? `<button type="button" class="ghost" data-tool-rep="${id}">替换</button><button type="button" class="ghost danger" data-tool-del="${id}">删除</button>` : "",
+  ].join("");
+  const availability = fileAvailable ? "" : `<div class="muted">${escapeHtml(tool.error || "原件暂不可用")}</div>`;
+  return `<tr>
+      <td><strong>${escapeHtml(tool.name)}</strong>${enterpriseDocumentLabel(tool, true)}${availability}</td>
+      <td>${escapeHtml(tool.ext.slice(1).toUpperCase())}</td>
+      <td>${fmtSize(tool.size)}</td>
+      <td class="muted">${escapeHtml(String(tool.uploaded_at || "").slice(0, 10))}</td>
+      <td><div class="op-btns">${buttons}</div></td></tr>`;
+}
+
+function renderTools() {
+  toolRows.innerHTML = toolDocs.length ? toolDocs.map(toolRowHtml).join("")
+    : '<tr><td colspan="5" class="muted">当前部门暂无工具</td></tr>';
+}
+
+async function loadTools() {
+  const requestId = ++toolRequestId;
+  const department = toolDepartmentSelect.value;
+  const query = department ? `?${new URLSearchParams({ department_id: department })}` : "";
+  try {
+    const data = await enterpriseJson(`/api/tools${query}`);
+    if (requestId !== toolRequestId) return;
+    toolDocs = data.tools || [];
+    renderDepartmentFilter(toolDepartmentSelect, data.departments, department);
+    renderTools();
+  } catch {
+    if (requestId !== toolRequestId) return;
+    toolDocs = [];
+    toolRows.innerHTML = '<tr><td colspan="5" class="muted">工具加载失败，请稍后重试</td></tr>';
+  }
+}
+
+toolDepartmentSelect.addEventListener("change", loadTools);
+toolRows.addEventListener("click", async (event) => {
+  const copy = event.target.closest("[data-tool-copy]");
+  if (copy) {
+    const url = new URL(toolDownloadPath(copy.dataset.toolCopy), window.location.origin).href;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("已复制下载链接");
+    } catch {
+      window.prompt("请复制下载链接", url);
+    }
+    return;
+  }
+  const access = event.target.closest("[data-tool-access]");
+  if (access) {
+    const tool = toolDocs.find((item) => item.id === access.dataset.toolAccess);
+    if (tool) enterpriseEditAccess(tool, "tools");
+    return;
+  }
+  const replace = event.target.closest("[data-tool-rep]");
+  if (replace) { startReplace(replace.dataset.toolRep, true); return; }
+  const remove = event.target.closest("[data-tool-del]");
+  if (!remove || !confirm("确认删除该工具？删除后其下载链接将失效。")) return;
+  remove.disabled = true;
+  try {
+    await enterpriseJson(toolApiPath(remove.dataset.toolDel), { method: "DELETE" });
+    toast("工具已删除");
+    await loadTools();
+  } catch (error) {
+    toast(error.message || "删除失败");
+    remove.disabled = false;
+  }
+});
 
 /* ---------- 修改记录时间弹窗 ---------- */
 const timeMask = $("#time-mask");
@@ -3157,9 +3322,9 @@ function updateNavigation(tab) {
 }
 
 const LAST_TAB_KEY = "kb_last_tab";   // 记住最后停留的页签，刷新后原地恢复
-const PUBLIC_TABS = ["chat", "docs", "timeline"];
+const PUBLIC_TABS = ["chat", "docs", "tools", "timeline"];
 const SESSION_TABS = ["weekly"];
-const SUPER_ADMIN_TABS = ["edits", "logs", "settings"];
+const SUPER_ADMIN_TABS = ["edits", "logs", "settings", "production-sql"];
 const ADMIN_TABS = ["editor", "records", "accounts", ...SUPER_ADMIN_TABS];
 
 function canAccessTab(tab) {
@@ -3180,12 +3345,14 @@ function switchTo(tab, { preserveEditor = false } = {}) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + tab));
   updateNavigation(tab);
   if (tab === "docs") loadDocuments();
+  if (tab === "tools") loadTools();
   if (tab === "timeline") loadTimeline();
   if (tab === "editor") { loadRecordList(); loadVendors(); }
   if (tab === "records") loadRecordList();
   if (tab === "settings") refreshSettings();
   if (tab === "weekly") refreshWeeklyReport();
   if (tab === "edits") loadEditsLog();
+  if (tab === "production-sql") loadProductionAdmin();
   if (tab === "accounts") { loadUsers(); refreshWeeklyReport(); }   // 统一周报设置已在用户管理页
   if (tab === "logs") { auditPage = 1; loadAuditLogs(); }
   try { localStorage.setItem(LAST_TAB_KEY, tab); } catch { /* 隐私模式忽略 */ }
@@ -3198,6 +3365,7 @@ const pvDownload = $("#pv-download");
 let previewId = "";
 let previewRequest = 0;
 let previewPdf = null;
+let previewFileOnly = false;
 
 function closePreview() {
   previewRequest += 1;
@@ -3231,8 +3399,34 @@ function tableHtml(rows) {
     "</tbody></table>";
 }
 
-async function downloadDoc(id) {
-  const url = "/api/documents/" + encodeURIComponent(id) + "/download";
+function documentDownloadPath(id) {
+  return "/api/documents/" + encodeURIComponent(id) + "/download";
+}
+
+function toolApiPath(id) {
+  return "/api/tools/" + encodeURIComponent(id);
+}
+
+function toolDownloadPath(id) {
+  return toolApiPath(id) + "/download";
+}
+
+function triggerDownload(url, filename = "") {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function downloadDoc(id, fileOnly = false) {
+  const url = documentDownloadPath(id);
+  const doc = docDocs.find((d) => d.id === id) || recDocs.find((d) => d.id === id);
+  if (fileOnly || doc?.indexed === false) {
+    triggerDownload(url);
+    return;
+  }
   try {
     const resp = await fetch(url);
     if (!resp.ok) {
@@ -3240,20 +3434,14 @@ async function downloadDoc(id) {
       throw new Error(data.detail || "HTTP " + resp.status);
     }
     const objectUrl = URL.createObjectURL(await resp.blob());
-    const doc = docDocs.find((d) => d.id === id) || recDocs.find((d) => d.id === id);
-    const a = document.createElement("a");
-    a.href = objectUrl;
-    a.download = doc ? doc.name : "document";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    triggerDownload(objectUrl, doc ? doc.name : "document");
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   } catch (err) {
     toast("无法下载：" + String(err.message || err));
   }
 }
 
-pvDownload.addEventListener("click", () => { if (previewId) downloadDoc(previewId); });
+pvDownload.addEventListener("click", () => { if (previewId) downloadDoc(previewId, previewFileOnly); });
 
 function renderPdfPreviewPage(state) {
   const { id, page, pageCount } = state;
@@ -3323,6 +3511,7 @@ async function openPreview(id, page) {
   const request = ++previewRequest;
   previewId = id;
   previewPdf = null;
+  previewFileOnly = false;
   $("#pv-title").textContent = "文档预览";
   $("#pv-sub").textContent = "";
   pvDownload.hidden = true;
@@ -3339,8 +3528,14 @@ async function openPreview(id, page) {
     const skipped = doc.skipped ? ` · 已忽略 ${doc.skipped} 个非主要部分` : "";
     const owner = doc.department_name || enterpriseDepartmentName(doc.department_id || "operations");
     const kind = doc.doc_type === "record" ? catName(doc.category) : owner;
-    $("#pv-sub").textContent = `${kind} · ${doc.ext} · ${doc.chunks} 个检索单元${skipped} · ${String(doc.uploaded_at || "").slice(0, 10)} · ${doc.doc_type === "record" ? "记录人" : "上传人"}：${doc.uploaded_by_name || doc.uploaded_by || "历史记录"}`;
+    previewFileOnly = doc.indexed === false;
+    const detail = previewFileOnly ? fmtSize(doc.size) : `${doc.chunks} 个检索单元${skipped}`;
+    $("#pv-sub").textContent = `${kind} · ${doc.ext} · ${detail} · ${String(doc.uploaded_at || "").slice(0, 10)} · ${doc.doc_type === "record" ? "记录人" : "上传人"}：${doc.uploaded_by_name || doc.uploaded_by || "历史记录"}`;
     pvDownload.hidden = !doc.has_source;
+    if (previewFileOnly) {
+      pvBody.innerHTML = '<p class="muted">工具文件保存原件供下载，内容不参与检索。</p>';
+      return;
+    }
     const pageCount = isPdfPage(data.pdf_page_count) ? data.pdf_page_count : 0;
     if (doc.has_source && String(doc.ext).toLowerCase() === ".pdf") {
       previewPdf = { id, name: doc.name, pageCount, request,
@@ -3703,6 +3898,7 @@ function docRefPool() {
   const seen = new Set();
   return docRefDocuments.filter((d) => {
     if (!d || !d.id || d.id === editingId || d.status !== "ready" || seen.has(d.id)) return false;
+    if (d.indexed === false && !d.has_source) return false;
     seen.add(d.id);
     return true;
   });
@@ -3717,16 +3913,21 @@ async function openDocRef() {
   renderDocRefList("");
   pop.hidden = false;
   search.focus();
-  $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">正在读取文档…</div>';
-  try {
-    const resp = await fetch("/api/documents");
+  $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">正在读取文件…</div>';
+  const [documents, tools] = await Promise.allSettled(["/api/documents", "/api/tools"].map(async (url) => {
+    const resp = await fetch(url);
     if (!resp.ok) throw new Error("读取失败");
-    const data = await resp.json();
-    docRefDocuments = data.documents || [];
-    renderDocRefList(search.value);
-  } catch {
-    $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">文档读取失败，请关闭后重试</div>';
+    return resp.json();
+  }));
+  if (documents.status === "rejected" && tools.status === "rejected") {
+    $("#doc-ref-list").innerHTML = '<div class="doc-pop-empty">读取失败，请关闭后重试</div>';
+    return;
   }
+  docRefDocuments = [
+    ...(documents.value?.documents || []).filter((doc) => doc.indexed !== false),
+    ...(tools.value?.tools || []).map((tool) => ({ ...tool, indexed: false })),
+  ];
+  renderDocRefList(search.value);
 }
 
 function renderDocRefList(kw) {
@@ -3735,11 +3936,15 @@ function renderDocRefList(kw) {
     .filter((d) => !key || String(d.name || "").toLowerCase().includes(key))
     .slice(0, 60);
   $("#doc-ref-list").innerHTML = items.length
-    ? items.map((d) =>
-        `<button type="button" class="doc-pop-item" data-ref-id="${escapeAttr(d.id)}" data-ref-name="${escapeAttr(String(d.name || ""))}">` +
-        `<span>${escapeHtml(String(d.name || "未命名"))}</span>` +
-        `<span class="doc-pop-kind">${d.doc_type === "record" ? "工作记录" : escapeHtml(d.department_name || enterpriseDepartmentName(d.department_id || "operations"))}</span></button>`).join("")
-    : '<div class="doc-pop-empty">没有匹配的文档</div>';
+    ? items.map((d) => {
+        const name = escapeHtml(String(d.name || "未命名"));
+        const tool = d.indexed === false;
+        const kind = tool ? "工具下载"
+          : d.doc_type === "record" ? "工作记录" : escapeHtml(d.department_name || enterpriseDepartmentName(d.department_id || "operations"));
+        return `<button type="button" class="doc-pop-item" data-ref-id="${escapeAttr(d.id)}" data-ref-name="${escapeAttr(name)}"${tool ? " data-ref-tool" : ""}">` +
+          `<span>${name}</span><span class="doc-pop-kind">${kind}</span></button>`;
+      }).join("")
+    : '<div class="doc-pop-empty">没有匹配的文件</div>';
 }
 
 $("#doc-ref-search").addEventListener("input", (e) => renderDocRefList(e.target.value));
@@ -3757,12 +3962,14 @@ $("#doc-ref-pop").addEventListener("click", (e) => {
   const refName = item.dataset.refName || "文档";
   $("#doc-ref-pop").hidden = true;
   const name = refName.replace(/[\[\]\r\n]/g, " ");
-  const label = name.includes("《") ? name : `《${name}》`;
-  setEditorSpan(docRefRange.start, docRefRange.end, `[${label}](doc-ref://${refId})`);
+  const tool = item.hasAttribute("data-ref-tool");
+  const label = tool ? `下载 ${name}` : (name.includes("《") ? name : `《${name}》`);
+  const href = tool ? toolDownloadPath(refId) : `doc-ref://${refId}`;
+  setEditorSpan(docRefRange.start, docRefRange.end, `[${label}](${href})`);
   if (editorMode === "preview") {
     // 重渲染后恢复到新引用后方，继续输入仍在原段落中。
     const target = mdSrc.selectionEnd;
-    const chip = Array.from(mdPreview.querySelectorAll(".doc-ref")).find((node) => {
+    const chip = Array.from(mdPreview.querySelectorAll(".doc-ref, a[data-tool-download]")).find((node) => {
       const offset = Array.from(node.parentNode.childNodes).indexOf(node) + 1;
       return serializePreview({ node: node.parentNode, offset }).caret === target;
     });
@@ -4024,6 +4231,94 @@ function applyEditorMode() {
   renderEditorPreview();
 }
 
+function scrollEditorFindRangeIntoView(start) {
+  if (mdSrc.scrollHeight <= mdSrc.clientHeight) return;
+
+  // 用相同宽度和排版测量源码位置，包含自动换行的行高。
+  const style = getComputedStyle(mdSrc);
+  const measure = document.createElement("div");
+  Object.assign(measure.style, {
+    position: "fixed", top: "0", left: "0", visibility: "hidden",
+    boxSizing: "border-box", width: mdSrc.clientWidth + "px", padding: style.padding,
+    font: style.font, letterSpacing: style.letterSpacing, tabSize: style.tabSize,
+    whiteSpace: style.whiteSpace, overflowWrap: style.overflowWrap,
+  });
+  measure.textContent = mdSrc.value + "\u200b";
+  document.body.appendChild(measure);
+  const range = document.createRange();
+  range.setStart(measure.firstChild, start);
+  range.setEnd(measure.firstChild, start + 1);
+  const { top, bottom } = range.getBoundingClientRect();
+  const origin = measure.getBoundingClientRect().top;
+  measure.remove();
+
+  if (top - origin < mdSrc.scrollTop || bottom - origin > mdSrc.scrollTop + mdSrc.clientHeight) {
+    mdSrc.scrollTop = top - origin - mdSrc.clientHeight / 2;
+  }
+}
+
+function selectEditorFindRange(start, end) {
+  if (editorMode === "preview") {
+    editorMode = "source";
+    applyEditorMode();
+  }
+  mdSrc.focus();
+  mdSrc.setSelectionRange(start, end);
+  syncEditorRange();
+  scrollEditorFindRangeIntoView(start);
+}
+
+function runEditorFind(action) {
+  const input = $("#find-text");
+  const status = $("#find-status");
+  const query = input.value;
+  if (!query) {
+    status.textContent = "请输入查找内容";
+    input.focus();
+    return;
+  }
+
+  const literal = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(literal, $("#find-case").checked ? "gu" : "giu");
+  const source = mdSrc.value;
+  const matches = Array.from(source.matchAll(pattern));
+  if (!matches.length) {
+    status.textContent = "未找到匹配内容";
+    return;
+  }
+
+  const replacement = $("#replace-text").value;
+  if (action === "replace-all") {
+    const next = source.replace(pattern, () => replacement);
+    if (next !== source) {
+      replaceEditorText(next);
+      renderEditorPreview();
+    }
+    status.textContent = `已替换 ${matches.length} 处`;
+    return;
+  }
+
+  const { selectionStart, selectionEnd } = mdSrc;
+  const selected = action === "replace-one" && matches.find((match) =>
+    match.index === selectionStart && match.index + match[0].length === selectionEnd);
+  const match = selected || matches.find((item) => item.index >= selectionEnd) || matches[0];
+  const start = match.index;
+  const end = start + match[0].length;
+  if (action === "replace-one") {
+    if (replacement !== match[0]) {
+      replaceEditorText(source.slice(0, start) + replacement + source.slice(end));
+      if (editorMode === "source") renderEditorPreview();
+    }
+    const caret = start + replacement.length;
+    selectEditorFindRange(caret, caret);
+    status.textContent = "已替换 1 处";
+    return;
+  }
+
+  selectEditorFindRange(start, end);
+  status.textContent = `第 ${matches.indexOf(match) + 1} / ${matches.length} 处`;
+}
+
 async function uploadImageFile(file) {
   if (file.size > 10 * 1024 * 1024) throw new Error("图片不能超过 10MB");
   const form = new FormData();
@@ -4170,8 +4465,36 @@ function setEditorTitle() {
   $("#md-save").textContent = editingId ? "保存修改" : "保存并入知识库";
 }
 
+const recordAttachmentsToggle = $("#record-attachments-toggle");
+const findToggle = $("#find-toggle");
+
+function setEditorPanel(button, open) {
+  const panel = document.getElementById(button.getAttribute("aria-controls"));
+  panel.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+}
+
+recordAttachmentsToggle.addEventListener("click", () => {
+  setEditorPanel(recordAttachmentsToggle, recordAttachmentsToggle.getAttribute("aria-expanded") === "false");
+});
+
+findToggle.addEventListener("click", () => {
+  const open = findToggle.getAttribute("aria-expanded") === "false";
+  setEditorPanel(findToggle, open);
+  if (open) $("#find-text").focus();
+});
+
+$("#record-attachments-link").addEventListener("click", (event) => {
+  event.preventDefault();
+  setEditorPanel(recordAttachmentsToggle, true);
+  $("#record-attachments [data-attachment-drop]").focus();
+});
+
 function resetEditor({ force = false } = {}) {
   if (!recordAttachmentQueue.prepareContextChange({ force })) return false;
+  setEditorPanel(recordAttachmentsToggle, false);
+  setEditorPanel(findToggle, false);
+  $("#find-status").textContent = "";
   recordAttachmentsReady = true;
   trackingParent = null;
   renderTrackingParent();
@@ -4332,6 +4655,9 @@ const recordAttachmentQueue = RecordAttachments.mount({
   root: $("#record-attachments"),
   canAdd: () => isAdmin && recordAttachmentsReady,
   notify: toast,
+  onChange: (queue) => {
+    recordAttachmentsToggle.textContent = queue.entries.length ? `附件（${queue.entries.length}）` : "附件";
+  },
   onUploaded: (result, target) => {
     if (result.count) toast(`已向《${target.name}》添加 ${result.count} 个附件`);
     loadRecordList();
@@ -4493,6 +4819,14 @@ $("#md-insert-mask").addEventListener("click", (event) => {
 // 预览模式下直接书写：每次输入把渲染结果序列化回 Markdown（不重绘，避免光标跳动）
 mdPreview.addEventListener("input", syncFromPreview);
 mdPreview.addEventListener("blur", syncFromPreview);
+mdPreview.addEventListener("click", (event) => {
+  const link = event.target.closest("a[data-tool-download]");
+  if (!link) return;
+  const href = link.getAttribute("href");
+  if (!/^\/api\/(?:tools|documents)\/[A-Za-z0-9_-]+\/download$/.test(href || "")) return;
+  event.preventDefault();
+  triggerDownload(href);
+});
 mdSrc.addEventListener("paste", handleImagePaste);
 mdPreview.addEventListener("paste", handleImagePaste);
 
@@ -4505,6 +4839,13 @@ document.querySelectorAll(".md-mode-btn").forEach((btn) => {
     if (editorMode === "source") mdSrc.focus();
   });
 });
+
+for (const action of ["find-next", "replace-one", "replace-all"]) {
+  $("#" + action).addEventListener("click", () => runEditorFind(action));
+}
+for (const id of ["find-text", "replace-text", "find-case"]) {
+  $("#" + id).addEventListener("input", () => { $("#find-status").textContent = ""; });
+}
 
 $("#md-insert-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
@@ -4611,71 +4952,124 @@ $("#md-save").addEventListener("click", async () => {
 });
 
 async function uploadFiles(files) {
+  return uploadLibraryFiles(files, false);
+}
+
+async function uploadToolFiles(files) {
+  return uploadLibraryFiles(files, true);
+}
+
+async function uploadLibraryFiles(files, tool) {
   if (!isAdmin || !files.length) return;
-  const status = $("#upload-status");
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    status.textContent = `分析并上传 ${i + 1}/${files.length}：${f.name}`;
+  const selectedFiles = Array.from(files);
+  const status = $(tool ? "#tool-upload-status" : "#upload-status");
+  for (let i = 0; i < selectedFiles.length; i++) {
+    const file = selectedFiles[i];
+    const error = libraryUploadError(file, tool);
+    if (error) {
+      toast(`${file.name}：${error}`);
+      continue;
+    }
+    status.textContent = `正在上传 ${i + 1}/${selectedFiles.length} · ${file.name}`;
     const form = new FormData();
-    form.append("file", f);
-    form.append("file_time", fileTimeValue(f));
+    form.append("file", file);
+    form.append("file_time", fileTimeValue(file));
     try {
-      enterpriseAppendScope(form, "doc");
-      form.append("doc_type", "doc");
-      const resp = await fetch("/api/documents", { method: "POST", body: form });
+      enterpriseAppendScope(form, tool ? "tool" : "doc");
+      if (!tool) form.append("doc_type", "doc");
+      const resp = await fetch(tool ? "/api/tools" : "/api/documents", { method: "POST", body: form });
       const data = await resp.json();
-      if (!resp.ok) toast(`${f.name}：${data.detail || "上传失败"}`);
-      else if (data.duplicated) toast(`${f.name}：内容重复，已跳过`);
-      else toast(`已入库：${f.name}，${data.doc.chunks} 个检索单元`);
+      if (!resp.ok) toast(`${file.name}：${data.detail || "上传失败"}`);
+      else if (data.duplicated) toast(`${file.name}：内容重复，已跳过`);
+      else if (tool) toast(`已保存《${file.name}》，可下载`);
+      else toast(`已入库：${file.name}，${data.doc.chunks} 个检索单元`);
     } catch {
-      toast(`${f.name}：网络异常`);
+      toast(`${file.name}：网络异常`);
     }
   }
   status.textContent = "上传完成";
-  loadDocuments();
-  refreshTimelineIfVisible();
+  if (tool) loadTools();
+  else {
+    loadDocuments();
+    refreshTimelineIfVisible();
+  }
 }
 
-function startReplace(id) {
+function isToolFile(file) {
+  return /\.(exe|msi|msp|msix|msixbundle|appx|appxbundle|zip|7z|rar|iso)$/i.test(file.name);
+}
+
+function libraryUploadError(file, tool) {
+  const isTool = isToolFile(file);
+  if (!tool) return isTool ? "请在工具库上传工具文件" : "";
+  if (!isTool) return "请选择受支持的工具文件";
+  return file.size > 2 * 1024 ** 3 ? "工具文件超过 2 GB 上限" : "";
+}
+
+function startReplace(id, tool = false) {
   if (!isAdmin) return;
-  replaceTargetId = id;
-  const input = $("#replace-file");
+  if (tool) replaceToolTargetId = id;
+  else replaceTargetId = id;
+  const input = $(tool ? "#tool-replace-file" : "#replace-file");
   input.value = "";
   input.click();
 }
 
-$("#replace-file").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  const doc = docDocs.find((d) => d.id === replaceTargetId) || recDocs.find((d) => d.id === replaceTargetId);
-  if (!isAdmin || !file || !doc) return;
-  const form = new FormData();
-  form.append("file", file);
-  $("#upload-status").textContent = `正在分析并替换《${doc.name}》…`;
-  try {
-    const resp = await fetch("/api/documents/" + encodeURIComponent(doc.id) + "/replace", {
-      method: "PUT", body: form,
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "替换失败");
-    toast(`已替换《${data.doc.name}》，重新生成 ${data.doc.chunks} 个检索单元${data.doc.doc_type === "record" ? " · " + catName(data.doc.category) : ""}`);
-    await loadDocuments();
-    refreshTimelineIfVisible();
-  } catch (err) {
-    toast("替换失败：" + String(err.message || err));
-  } finally {
-    $("#upload-status").textContent = "";
-    replaceTargetId = "";
-    e.target.value = "";
-  }
-});
+function bindFileReplacement(input, tool) {
+  input.addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    const doc = tool ? toolDocs.find((item) => item.id === replaceToolTargetId)
+      : [...docDocs, ...recDocs].find((item) => item.id === replaceTargetId);
+    if (tool) replaceToolTargetId = "";
+    else replaceTargetId = "";
+    event.target.value = "";
+    if (!isAdmin || !file || !doc) return;
+    const error = libraryUploadError(file, tool);
+    if (error) { toast(error); return; }
+    const form = new FormData();
+    form.append("file", file);
+    const resource = tool ? toolApiPath(doc.id) : `/api/documents/${encodeURIComponent(doc.id)}`;
+    const status = $(tool ? "#tool-upload-status" : "#upload-status");
+    status.textContent = `正在替换《${doc.name}》…`;
+    try {
+      const resp = await fetch(`${resource}/replace`, { method: "PUT", body: form });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "替换失败");
+      if (tool) {
+        toast(`已替换《${data.doc.name}》，可下载`);
+        await loadTools();
+      } else {
+        toast(`已替换《${data.doc.name}》，重新生成 ${data.doc.chunks} 个检索单元${data.doc.doc_type === "record" ? " · " + catName(data.doc.category) : ""}`);
+        await loadDocuments();
+        refreshTimelineIfVisible();
+      }
+    } catch (err) {
+      toast("替换失败：" + String(err.message || err));
+    } finally {
+      status.textContent = "";
+    }
+  });
+}
 
-const drop = $("#drop");
-const fileInput = $("#file");
-drop.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => { uploadFiles(fileInput.files); fileInput.value = ""; });
-["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
-["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files));
+function bindLibraryUpload(drop, input, upload) {
+  drop.addEventListener("click", () => input.click());
+  input.addEventListener("change", () => { upload(input.files); input.value = ""; });
+  ["dragenter", "dragover"].forEach((type) => drop.addEventListener(type, (event) => {
+    event.preventDefault();
+    drop.classList.add("over");
+  }));
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (event) => {
+    event.preventDefault();
+    drop.classList.remove("over");
+    return upload(event.dataTransfer.files);
+  });
+}
+
+bindLibraryUpload($("#drop"), $("#file"), uploadFiles);
+bindLibraryUpload($("#tool-drop"), $("#tool-file"), uploadToolFiles);
+bindFileReplacement($("#replace-file"), false);
+bindFileReplacement($("#tool-replace-file"), true);
 
 $("#rebuild").addEventListener("click", async () => {
   if (!isSuperAdmin) return;
@@ -4757,10 +5151,10 @@ async function initPage() {
   switchTo(canAccessTab(restored) ? restored : "chat");
 }
 
-document.querySelectorAll("#drop, #rec-drop").forEach((area) => {
+document.querySelectorAll("#drop, #rec-drop, #tool-drop").forEach((area) => {
   area.tabIndex = 0;
   area.setAttribute("role", "button");
-  area.setAttribute("aria-label", "选择要上传的文档，也可拖入文件");
+  area.setAttribute("aria-label", area.id === "tool-drop" ? "选择要上传的工具，也可拖入文件" : "选择要上传的文档，也可拖入文件");
   area.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); area.click(); }
   });

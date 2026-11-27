@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 import re
+from typing import Literal, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from langsmith import tracing_context
 
 from app.config import settings
 from app.core import network_policy
-from app.core.answer.context import is_stats_question, render_excerpts, render_hits, source_snippet, table_to_markdown
+from app.core.production.answers import production_response, render_report
+from app.core.production.intent import ProductionQuery, parse_production_question
+from app.core.production.store import ProductionStoreError, query_production
+from app.core.answer.context import build_hit_context, is_stats_question, render_excerpts, source_snippet, table_to_markdown
 from app.core.answer.solutions import extract_solutions, render_solutions
 from app.core.answer.references import append_references, attach_reference_sources
 from app.core.ingest.chunker import is_title_row
@@ -32,7 +39,7 @@ from app.domain.taxonomy import (
     vendor_hint,
 )
 from app.services.database import answer_penalty_counts, fast_mode_enabled, uploaded_dates, web_search_runtime_enabled
-from app.services import access
+from app.services import access, production_routes
 from app.services.retrieval_service import authorized_hits, allowed_document_ids, operations_mode, retrieval
 
 
@@ -511,27 +518,73 @@ def _expand_table_hits(hits: list[ScoredChunk]) -> list[ScoredChunk]:
     return list(unique.values())
 
 
-def _answer(question: str, history: list[dict] | None = None,
-           *, fast_mode: bool | None = None, llm_polish: bool = False,
-           web_search: bool | None = None,
-           rejected_doc_ids: list[str] | None = None) -> AnswerResponse:
+class AnswerState(TypedDict, total=False):
+    question: str
+    production_request: ProductionQuery | str
+    history: list[dict] | None
+    fast_mode: bool | None
+    llm_polish: bool
+    web_search: bool | None
+    rejected_doc_ids: list[str]
+    initial_allowed: set[str] | None
+    text: str
+    ops: bool
+    category: str
+    fast: bool
+    offline: bool
+    use_llm: bool
+    search_query: str
+    retrieval_query: str
+    vendor: str
+    scoped_docs: dict[str, str]
+    document_terms: str
+    mode_term: str
+    context_hint: str
+    hits: list[ScoredChunk]
+    related_hits: list[ScoredChunk]
+    related_notice: str
+    evidence_response: AnswerResponse
+    model_hits: list[ScoredChunk]
+    model_context: str
+    model_failed: bool
+    response: AnswerResponse
+
+
+class AnswerOutput(TypedDict):
+    response: AnswerResponse
+
+
+def _notice(*parts: str) -> str:
+    return "；".join(part for part in parts if part)
+
+
+def _prepare(state: AnswerState) -> AnswerState:
+    production = parse_production_question(state["question"] or "")
+    if production is not None:
+        return {"production_request": production}
+    initial_allowed = allowed_document_ids()
+    question = state["question"]
+    history = state["history"]
+    rejected_doc_ids = state["rejected_doc_ids"]
     # 浏览器回传的旧对话不能作为已获授权的证据；只有服务端验证的上下文可复用。
     if not access.is_internal() and not access.history_is_trusted():
         history = []
-    rejected_docs = set(rejected_doc_ids or [])
+    rejected_docs = set(rejected_doc_ids)
     if rejected_docs and any(source.get("doc_id") in rejected_docs for turn in history or []
                              for source in turn.get("source_docs", [])):
         history = []
     ops = operations_mode(question or "")
     text = (question or "").strip()
     if not text:
-        return AnswerResponse(status="guide", answer="请输入要查询的企业制度、业务流程、文档内容或工作问题。", answer_origin="none")
+        return {"initial_allowed": initial_allowed, "response": AnswerResponse(
+            status="guide", answer="请输入要查询的企业制度、业务流程、文档内容或工作问题。", answer_origin="none")}
 
     management = is_management_request(text) if ops else text in {
         "上传文件", "上传文档", "删除文件", "删除文档", "查看上传列表", "重建索引", "重建文档库",
     }
     if management:
-        return AnswerResponse(status="guide", answer=MANAGEMENT_GUIDE, category="管理指令", answer_origin="none")
+        return {"initial_allowed": initial_allowed, "response": AnswerResponse(
+            status="guide", answer=MANAGEMENT_GUIDE, category="管理指令", answer_origin="none")}
 
     category, _matched = classify(text) if ops else ("", [])
 
@@ -541,16 +594,17 @@ def _answer(question: str, history: list[dict] | None = None,
         category = "厂商系统"
 
     # 开关优先级：本次提问的选择 > 服务端全局设置
+    fast_mode = state["fast_mode"]
     fast = fast_mode_enabled() if fast_mode is None else fast_mode
     # 大模型整理：开启后才调用 LLM（方案整理 / 问答 / 结合上文改写 / 联网整理）；
     # 默认关闭——精排 + 规则提取直接出结果，快且稳定。
     offline = not network_policy.external_apis_enabled()
-    use_llm = bool(llm_polish) and not fast and not offline
+    use_llm = state["llm_polish"] and not fast and not offline
 
     # 大模型整理开启时结合对话历史改写检索查询：上一轮聊过的设备/字段，追问里
     # 只有"那几台""它"这类指代，单看问题检不到目标记录。改写失败回退原问题，
     # 不影响回答流程（回答阶段的上下文仍由 history 提供给模型）。
-    scoped_docs, document_terms, mode_term = _followup_documents(text, history, rejected_doc_ids or [])
+    scoped_docs, document_terms, mode_term = _followup_documents(text, history, rejected_doc_ids)
     scoped_ids = set(scoped_docs)
     previous = next((turn for turn in reversed(history or []) if turn.get("role") == "assistant"), {})
     previous_docs = previous.get("source_docs") or []
@@ -576,14 +630,28 @@ def _answer(question: str, history: list[dict] | None = None,
     vendor = (vendor_hint(text) or vendor_hint(search_query)) if ops else ""
     context_hint = "已结合上一轮对话补全检索关键词" if search_query != text or scoped_ids else ""
 
-    def _notice(*parts: str) -> str:
-        return "；".join(part for part in parts if part)
+    return {
+        "initial_allowed": initial_allowed, "text": text, "history": history, "ops": ops, "category": category,
+        "fast": fast, "offline": offline, "use_llm": use_llm, "scoped_docs": scoped_docs,
+        "document_terms": document_terms, "mode_term": mode_term, "search_query": search_query,
+        "retrieval_query": retrieval_query, "vendor": vendor, "context_hint": context_hint,
+    }
 
+
+def _retrieve(state: AnswerState) -> AnswerState:
+    scoped_ids = set(state["scoped_docs"])
     scope = {"allowed_doc_ids": scoped_ids} if scoped_ids else {}
-    hits = authorized_hits(_top_hits(retrieval_query, vendor, fast=fast,
-                                    reject_docs=rejected_doc_ids or [], **scope))
-    if scoped_ids:
-        hits = [hit for hit in hits if hit.chunk.doc_id in scoped_ids]
+    hits = authorized_hits(_top_hits(
+        state["retrieval_query"], state["vendor"], fast=state["fast"],
+        reject_docs=state["rejected_doc_ids"], **scope,
+    ))
+    return {"hits": [hit for hit in hits if hit.chunk.doc_id in scoped_ids] if scoped_ids else hits}
+
+
+def _assess_evidence(state: AnswerState) -> AnswerState:
+    text, search_query = state["text"], state["search_query"]
+    ops, mode_term = state["ops"], state["mode_term"]
+    hits = state["hits"]
     # 排名高不代表同一种故障。所有作答、模型与摘录路径共用此门禁，
     # 也核对原始问题，避免历史改写把“电脑打不开”带回上一轮的音响故障。
     if ops:
@@ -596,7 +664,8 @@ def _answer(question: str, history: list[dict] | None = None,
         passages = [(hit, f"{hit.chunk.heading}\n{hit.chunk.text}\n{table_to_markdown(hit.chunk.table or [])}")
                     for hit in hits]
         hits = [hit for hit, passage in passages if mode_term in passage]
-        if not hits and scoped_ids:
+        if not hits and state["scoped_docs"]:
+            qualifier = mode_term.removesuffix("模式")
             related_feature = re.compile(rf"{re.escape(qualifier)}(?:{_FEATURE_WORDS})")
             matched = [(hit, match.group()) for hit, passage in passages
                        if (match := related_feature.search(passage))]
@@ -605,120 +674,248 @@ def _answer(question: str, history: list[dict] | None = None,
                 names = "、".join(f"「{name}」" for name in list(dict.fromkeys(name for _, name in matched))[:3])
                 related_notice = f"原文提到{names}，暂未确认是否与「{mode_term}」为同一功能。"
     evidence = extract_solutions(hits, text) if ops and not mode_term else []
-    evidence_response = None
+    updates: AnswerState = {"hits": hits, "related_hits": related_hits, "related_notice": related_notice}
     if evidence:
         selected = list({item.hit.chunk.id: item.hit for item in evidence}.values())
         evidence_response = AnswerResponse(
-            status="ok", answer=render_solutions(evidence), category=category,
+            status="ok", answer=render_solutions(evidence), category=state["category"],
             sources=_sources(selected, text), solution_found=True,
-            notice=_notice(CONFLICT_NOTICE if conflict_risk(selected) else "", context_hint))
-        if not (use_llm and settings.llm_available and any(h.chunk.references for h in hits)):
-            return evidence_response
-    if not fast and use_llm and hits and (is_stats_question(text) or is_stats_question(search_query)):
-        # 统计类问题：无论走完整台账统计还是问答/摘录回退，上下文都需要完整工作表
-        hits = _expand_table_hits(hits)
-        stats = _ledger_stats(text, hits, category, history, search_query=search_query)
-        if stats is not None:
-            return stats
-    model_failed = False
-    if hits and settings.llm_available and use_llm:
-        hits = authorized_hits(hits)  # 调用模型前重新校验，权限变更不依赖索引重建。
-        if not hits:
-            return AnswerResponse(status="not_found", answer="可访问的知识库记录已变更，请重新提问。",
-                                  answer_origin="none")
-        model_context = append_references(render_hits(hits, question=text), hits)
+            notice=_notice(CONFLICT_NOTICE if conflict_risk(selected) else "", state["context_hint"]))
+        updates["evidence_response"] = evidence_response
+        if not (state["use_llm"] and settings.llm_available and any(h.chunk.references for h in hits)):
+            updates["response"] = evidence_response
+    return updates
+
+
+def _statistics(state: AnswerState) -> AnswerState:
+    # 通用问答及摘录回退也使用扩展后的工作表。
+    hits = _expand_table_hits(state["hits"])
+    stats = _ledger_stats(state["text"], hits, state["category"], state["history"],
+                          search_query=state["search_query"])
+    return {"hits": hits, "response": stats} if stats is not None else {"hits": hits}
+
+
+def _build_context(state: AnswerState) -> AnswerState:
+    hits = authorized_hits(state["hits"])
+    if not hits:
+        return {"response": AnswerResponse(
+            status="not_found", answer="可访问的知识库记录已变更，请重新提问。", answer_origin="none")}
+    context, model_hits = build_hit_context(hits, question=state["text"])
+    return {"hits": hits, "model_hits": model_hits, "model_context": append_references(context, model_hits)}
+
+
+def _generate(state: AnswerState) -> AnswerState:
+    text, category, history = state["text"], state["category"], state["history"]
+    hits, model_context = state["model_hits"], state["model_context"]
+    if state["ops"] and not state["mode_term"]:
         try:
-            plan = _draft(text, model_context, len(hits), history) if ops and not mode_term else None
+            plan = _draft(text, model_context, len(hits), history)
         except LLMError:
-            plan = None
-            model_failed = True
+            return {"model_failed": True}
         if plan:
             selected = [hits[ref - 1] for ref in plan.source_records]
-            sources = _sources(selected, text)
-            return AnswerResponse(
+            return {"response": AnswerResponse(
                 status="ok", answer=_link_kb_records(_render_plan(plan), hits), category=category,
-                sources=sources, llm_used=True, solution_found=True,
-                notice=CONFLICT_NOTICE if conflict_risk(selected) else "")
-        if not model_failed and network_policy.external_apis_enabled():
-            # 提取不到"处理方案"不等于无答案：台账统计（如"几台设备没有IP"）、
-            # 参数查询这类问题没有操作步骤，但记录原文往往能直接回答。再让模型以
-            # 问答模式基于同一批记录作答；记录不足时模型按协议输出 NO_ANSWER，
-            # 此时维持原文摘录回退，不把"无答案"伪装成回答。
-            try:
-                reply = llm_complete(text, model_context, history).strip()
-            except LLMError:
-                reply = ""
-            if reply and "NO_ANSWER" not in reply.upper()[:200]:
-                return AnswerResponse(
-                    status="ok", answer=_link_kb_records(reply, hits), category=category,
-                    sources=_sources(hits, text), llm_used=True,
-                    answer_origin="knowledge_base", solution_found=False,
-                    notice=_notice("以下回答由模型基于知识库相关记录整理；"
-                                   "模型无法确认的部分请以下方原文来源为准。", context_hint))
-    if evidence_response is not None:
-        return evidence_response
-    if use_llm and web_search is True and not scoped_docs:
+                sources=_sources(selected, text), llm_used=True, solution_found=True,
+                notice=CONFLICT_NOTICE if conflict_risk(selected) else "")}
+    if not network_policy.external_apis_enabled():
+        return {}
+    # 没有处理步骤的参数查询也可基于同一批资料作答。
+    try:
+        reply = llm_complete(text, model_context, history).strip()
+    except LLMError:
+        return {}
+    if not reply or "NO_ANSWER" in reply.upper()[:200]:
+        return {}
+    return {"response": AnswerResponse(
+        status="ok", answer=_link_kb_records(reply, hits), category=category,
+        sources=_sources(hits, text), llm_used=True,
+        answer_origin="knowledge_base", solution_found=False,
+        notice=_notice("以下回答由模型基于知识库相关记录整理；"
+                       "模型无法确认的部分请以下方原文来源为准。", state["context_hint"]))}
+
+
+def _web_reference(state: AnswerState) -> AnswerState:
+    text, hits, mode_term = state["text"], state["hits"], state["mode_term"]
+    scoped_docs, document_terms = state["scoped_docs"], state["document_terms"]
+    if not scoped_docs:
         scoped_docs, document_terms = _current_manual_document(text, authorized_hits(hits))
-    if (use_llm and web_search is True and (hits or document_terms)
-            and (document_terms or not (scoped_docs or mode_term))):
+    if (hits or document_terms) and (document_terms or not (scoped_docs or mode_term)):
         # 用户本次明确开启联网，且知识库有相关记录但未能给出可执行方案：
         # 先走联网参考，联网拿不到结果时回退展示知识库相关记录原文。
-        response = _web_fallback(text, category, hits or related_hits, model_failed=model_failed,
+        response = _web_fallback(text, state["category"], hits or state["related_hits"],
+                                 model_failed=state.get("model_failed", False),
                                  web_enabled=True, document_terms=document_terms, definition=bool(mode_term),
-                                 related_notice=related_notice)
+                                 related_notice=state["related_notice"])
         if scoped_docs and not any(source.doc_id for source in response.sources):
             doc_id, name = next((doc_id, name) for doc_id, name in scoped_docs.items()
                                 if public_document_terms(name) == document_terms)
             response.sources.append(SourceRef(doc_id=doc_id, doc_name=name, location="用于确定联网搜索主题",
                                               score=0.0, snippet="", scoring_method="search_context"))
-        return response
+        return {"response": response}
+    return {}
+
+
+def _fallback(state: AnswerState) -> AnswerState:
+    if "evidence_response" in state:
+        return {"response": state["evidence_response"]}
+    text, category = state["text"], state["category"]
+    hits, related_hits = state["hits"], state["related_hits"]
     if related_hits:
-        return _kb_excerpts(text, category, related_hits, related_notice)
+        return {"response": _kb_excerpts(text, category, related_hits, state["related_notice"])}
     if hits:
         # 知识库命中但没有可执行方案（如「某某的 IP 是多少」这类台账查询）：
         # 直接回相关记录原文，不转联网，避免把知识库里已有的信息盖掉。
         notice = "未找到与问题直接对应的处理方案，以下为知识库相关记录原文，请按需取用。"
-        if offline:
+        if state["offline"]:
             notice = "离线查询：以下为本地知识库记录原文，未调用外部接口。"
-        elif not ops:
+        elif not state["ops"]:
             notice = "以下为当前账号可访问的知识库原文；可打开「大模型整理」获取基于文档的回答。"
-        elif fast:
+        elif state["fast"]:
             notice = "快速模式：未整理处理步骤，以下为知识库原文，请按需取用。"
-        elif not use_llm:
+        elif not state["use_llm"]:
             notice = "以下为精排后的知识库记录原文；需要模型整理成方案时，可打开「大模型整理」。"
-        notice = _notice(notice, context_hint)
-        return _kb_excerpts(text, category, hits, notice, focus_question=search_query)
-    if not ops:
-        return AnswerResponse(status="not_found", answer="当前可访问的企业知识库中未找到相关内容，请补充关键词或联系文档所属部门。",
-                              answer_origin="none")
+        notice = _notice(notice, state["context_hint"])
+        return {"response": _kb_excerpts(text, category, hits, notice, focus_question=state["search_query"])}
+    if not state["ops"]:
+        return {"response": AnswerResponse(
+            status="not_found", answer="当前可访问的企业知识库中未找到相关内容，请补充关键词或联系文档所属部门。",
+            answer_origin="none")}
     if not category:
         # 问题不属于任何知识库领域（无设备/系统/故障关键词）：
         # 回答"不在知识库覆盖范围"，不联网，避免用外部网页回答无关问题。
-        return AnswerResponse(
+        return {"response": AnswerResponse(
             status="not_found", answer=FALLBACK_TEXT, answer_origin="none",
-            notice="该问题不在知识库覆盖的设备与系统范围内，未做联网搜索。")
+            notice="该问题不在知识库覆盖的设备与系统范围内，未做联网搜索。")}
     # 知识库没有任何相关内容：不再做联网搜索——外部网页无法对应本厂设备与环境，
     # 搜回来的资料只会把「没找到」拖成几十秒的等待，最后仍是"暂未找到可靠方案"。
-    return AnswerResponse(
+    return {"response": AnswerResponse(
         status="not_found",
         answer="知识库中没有与当前问题相关的记录。请补充设备型号、错误码或处理记录，以便进一步定位。",
         category=category, sources=[], answer_origin="none",
-        notice="知识库无相关内容，未做联网搜索。")
+        notice="知识库无相关内容，未做联网搜索。")}
+
+
+def _production_query(state: AnswerState) -> AnswerState:
+    actor = access.current_identity() or {}
+    if not actor.get("username") or actor.get("public_only") or actor.get("must_change_password") or actor.get("role") == "guest":
+        return {"response": production_response("guide", "请使用已获生产报表权限的账号登录后查询。")}
+    if not settings.production_sql_enabled or not settings.production_sql_url or not settings.production_sql_departments:
+        return {"response": production_response("guide", "生产报表尚未启用，请联系管理员配置数据源和可查询部门。")}
+    departments = set(settings.production_sql_departments)
+    if actor.get("role") != "admin":
+        departments.intersection_update(actor.get("department_ids", []))
+    if not departments:
+        return {"response": production_response("guide", "当前账号没有生产报表的部门查询权限。")}
+    plan = state["production_request"]
+    if isinstance(plan, str):
+        return {"response": production_response("guide", plan)}
+
+    question = state["question"]
+    try:
+        route = production_routes.prepare_route(plan, question, settings)
+        try:
+            result = query_production(route.plan, department_ids=departments, url=settings.production_sql_url,
+                                      view=settings.production_sql_view)
+        except ProductionStoreError:
+            production_routes.record_execution(route.id, question, route.plan, actor["username"], "error")
+            raise
+        production_routes.record_execution(route.id, question, route.plan, actor["username"],
+                                           "ok" if result.rows else "empty")
+        return {"response": render_report(route.plan, result)}
+    except production_routes.RouteDisabled:
+        return {"response": production_response("guide", "管理员已停用此类生产查询。")}
+    except production_routes.RouteUnavailable:
+        return {"response": production_response("error", "生产查询路由或历史记录暂时不可用，请稍后重试。")}
+    except ProductionStoreError as exc:
+        return {"response": production_response("error", str(exc))}
+
+
+def _finalize(state: AnswerState) -> AnswerState:
+    if "production_request" in state or access.is_internal():
+        return {}
+    # 模型调用期间也可能发生撤权；任何用到的主资料或补充引用被撤权，就不返回旧答案。
+    response = state["response"]
+    allowed = allowed_document_ids() or set()
+    used = {source.doc_id for source in response.sources if source.doc_id}
+    used.update(reference.doc_id for source in response.sources for reference in source.references)
+    if not (state["initial_allowed"] or set()).issubset(allowed) or not used.issubset(allowed):
+        return {"response": AnswerResponse(
+            status="not_found", answer="文档访问权限已变更，请重新提问。", answer_origin="none")}
+    return {}
+
+
+def _after_prepare(state: AnswerState) -> Literal["production_query", "finalize", "retrieve"]:
+    if "production_request" in state:
+        return "production_query"
+    return "finalize" if "response" in state else "retrieve"
+
+
+def _after_generate(state: AnswerState) -> Literal["finalize", "web_reference", "fallback"]:
+    if "response" in state:
+        return "finalize"
+    if "evidence_response" not in state and state["use_llm"] and state["web_search"] is True:
+        return "web_reference"
+    return "fallback"
+
+
+def _after_statistics(state: AnswerState) -> Literal["finalize", "build_context", "web_reference", "fallback"]:
+    if "response" not in state and state["hits"] and state["use_llm"] and settings.llm_available:
+        return "build_context"
+    return _after_generate(state)
+
+
+def _after_evidence(state: AnswerState) -> Literal["finalize", "statistics", "build_context", "web_reference", "fallback"]:
+    if ("response" not in state and state["use_llm"] and state["hits"]
+            and (is_stats_question(state["text"]) or is_stats_question(state["search_query"]))):
+        return "statistics"
+    return _after_statistics(state)
+
+
+def _after_context(state: AnswerState) -> Literal["finalize", "generate", "fallback"]:
+    if "response" in state:
+        return "finalize"
+    return "generate" if state["model_hits"] else "fallback"
+
+
+def _after_web_reference(state: AnswerState) -> Literal["finalize", "fallback"]:
+    return "finalize" if "response" in state else "fallback"
+
+
+_ANSWER_GRAPH = (
+    StateGraph(AnswerState, output_schema=AnswerOutput)
+    .add_node("prepare", _prepare)
+    .add_node("production_query", _production_query)
+    .add_node("retrieve", _retrieve)
+    .add_node("assess_evidence", _assess_evidence)
+    .add_node("statistics", _statistics)
+    .add_node("build_context", _build_context)
+    .add_node("generate", _generate)
+    .add_node("web_reference", _web_reference)
+    .add_node("fallback", _fallback)
+    .add_node("finalize", _finalize)
+    .add_edge(START, "prepare")
+    .add_conditional_edges("prepare", _after_prepare)
+    .add_edge("production_query", "finalize")
+    .add_edge("retrieve", "assess_evidence")
+    .add_conditional_edges("assess_evidence", _after_evidence)
+    .add_conditional_edges("statistics", _after_statistics)
+    .add_conditional_edges("build_context", _after_context)
+    .add_conditional_edges("generate", _after_generate)
+    .add_conditional_edges("web_reference", _after_web_reference)
+    .add_edge("fallback", "finalize")
+    .add_edge("finalize", END)
+    .compile()
+)
 
 
 def answer(question: str, history: list[dict] | None = None,
            *, fast_mode: bool | None = None, llm_polish: bool = False,
            web_search: bool | None = None,
            rejected_doc_ids: list[str] | None = None) -> AnswerResponse:
-    initial_allowed = allowed_document_ids()
-    response = _answer(question, history, fast_mode=fast_mode, llm_polish=llm_polish,
-                       web_search=web_search, rejected_doc_ids=rejected_doc_ids)
-    if access.is_internal():
-        return response
-    # 模型调用期间也可能发生撤权；任何用到的主资料或补充引用被撤权，就不返回旧答案。
-    allowed = allowed_document_ids() or set()
-    used = {source.doc_id for source in response.sources if source.doc_id}
-    used.update(reference.doc_id for source in response.sources for reference in source.references)
-    if not (initial_allowed or set()).issubset(allowed) or not used.issubset(allowed):
-        return AnswerResponse(status="not_found", answer="文档访问权限已变更，请重新提问。", answer_origin="none")
-    return response
+    # 问题、对话历史与检索原文只按应用自身的外部接口开关处理，不上传到 LangSmith。
+    with tracing_context(enabled=False):
+        return _ANSWER_GRAPH.invoke({
+            "question": question, "history": history, "fast_mode": fast_mode,
+            "llm_polish": llm_polish, "web_search": web_search, "rejected_doc_ids": rejected_doc_ids or [],
+        })["response"]

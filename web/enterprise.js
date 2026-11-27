@@ -39,10 +39,11 @@ function enterpriseClearSession() {
 function enterpriseOptions(departments, selected = []) {
   return departments.map((d) => `<option value="${enterpriseEscape(d.id)}"${selected.includes(d.id) ? " selected" : ""}>${enterpriseEscape(d.name)}</option>`).join("");
 }
-function enterpriseScopeMarkup(prefix) {
+function enterpriseScopeMarkup(prefix, tool = prefix === "tool") {
+  const label = tool ? "工具" : "文档";
   return `<div class="document-scope" data-scope="${prefix}">
     <label>所属部门<select id="${prefix}-department" required></select></label>
-    <label>可见范围<select id="${prefix}-visibility"><option value="department">部门文档</option><option value="all">所有人共享（登录成员可见）</option><option value="public">企业公共文档（无需登录可访问）</option></select></label>
+    <label>可见范围<select id="${prefix}-visibility"><option value="department">部门${label}</option><option value="all">所有人共享（登录成员可见）</option><option value="public">企业公共${label}（无需登录可访问）</option></select></label>
     <label class="scope-shared">共享给其他部门<select id="${prefix}-shared" multiple aria-label="共享部门，可多选"></select><small>不选则仅本部门可见；共享仅授予阅读权限。</small></label>
   </div>`;
 }
@@ -94,9 +95,10 @@ function enterpriseAppendScope(form, prefix) {
   form.append("visibility", scope.visibility);
   form.append("shared_department_ids", JSON.stringify(scope.shared_department_ids));
 }
-function enterpriseDocumentLabel(doc) {
+function enterpriseDocumentLabel(doc, tool = false) {
   const shared = doc.shared_department_ids || [];
-  return `<div class="document-access"><span>${enterpriseEscape(doc.department_name || enterpriseDepartmentName(doc.department_id || "operations"))}</span><span>${doc.visibility === "public" ? "企业公共" : doc.visibility === "all" ? "所有人共享" : "部门文档"}</span>${shared.length ? `<span>共享：${shared.map(enterpriseDepartmentName).map(enterpriseEscape).join("、")}</span>` : ""}</div>`;
+  const department = tool ? "部门工具" : "部门文档";
+  return `<div class="document-access"><span>${enterpriseEscape(doc.department_name || enterpriseDepartmentName(doc.department_id || "operations"))}</span><span>${doc.visibility === "public" ? "企业公共" : doc.visibility === "all" ? "所有人共享" : department}</span>${shared.length ? `<span>共享：${shared.map(enterpriseDepartmentName).map(enterpriseEscape).join("、")}</span>` : ""}</div>`;
 }
 async function enterpriseJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -143,10 +145,10 @@ function enterpriseOpenDialog(title, body, onSave, { saveLabel = "保存", destr
   dialog.showModal();
   return dialog;
 }
-async function enterpriseEditAccess(doc) {
+async function enterpriseEditAccess(doc, resource = "documents") {
   if (!enterpriseCanManageAccess(doc)) return;
-  const dialog = enterpriseOpenDialog(`管理权限：${doc.name}`, enterpriseScopeMarkup("access"), async () => {
-    await enterpriseJson(`/api/documents/${encodeURIComponent(doc.id)}/access`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(enterpriseScope("access")) });
+  const dialog = enterpriseOpenDialog(`管理权限：${doc.name}`, enterpriseScopeMarkup("access", resource === "tools"), async () => {
+    await enterpriseJson(`/api/${resource}/${encodeURIComponent(doc.id)}/access`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(enterpriseScope("access")) });
     enterpriseClearSession();
     window.location.reload();
   });
@@ -187,7 +189,7 @@ async function enterpriseDeleteDepartment(department) {
 async function enterpriseLoadDepartments() {
   const data = await enterpriseJson("/api/departments");
   enterpriseDepartments = data.departments || [];
-  for (const [host, prefix] of [["doc-scope-host", "doc"], ["record-scope-host", "record"]]) {
+  for (const [host, prefix] of [["doc-scope-host", "doc"], ["record-scope-host", "record"], ["tool-scope-host", "tool"]]) {
     const container = document.getElementById(host);
     if (container && !container.children.length) container.innerHTML = enterpriseScopeMarkup(prefix);
   }

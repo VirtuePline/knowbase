@@ -107,7 +107,7 @@ def rebuild_index() -> BM25Index:
     known = set()
     for record in database.list_all():
         known.add(record.id)
-        if record.status == "ready":
+        if record.status == "ready" and record.indexable:
             for chunk in ingester.read_chunks(record.id):
                 # 业务类型以登记表为准；旧文档重建后仍可按原文中的字段值检索。
                 chunk.content_type = record.doc_type

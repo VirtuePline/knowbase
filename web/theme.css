@@ -19,6 +19,11 @@
   --canvas: #f3f6f6;
   --line: #dce5e4;
   --theme-body: #263e3c;
+  --control-height: 38px;
+  --control-radius: 8px;
+  --control-border: var(--theme-border);
+  --control-background: #fff;
+  --control-text: var(--theme-body);
 }
 html[data-theme="blue"] {
   --accent: #3267ae;
@@ -145,14 +150,13 @@ header.app-sidebar { background: var(--theme-sidebar); border-right-color: var(-
 .hero-eyebrow span { background: var(--accent); }
 .source-references { border-left-color: var(--theme-border); }
 .ghost:hover:not(:disabled), .hints button:hover, .tl-head:hover, #users-body tr:hover,
-#drop, #rec-drop, .attach-box, .record-attachments { background: var(--theme-tint); }
-.ghost:hover:not(:disabled), .hints button:hover, #drop, #rec-drop, .attach-item,
-.document-scope select, .department-create-row input, .department-role select,
+#drop, #rec-drop, #tool-drop, .attach-box, .record-attachments { background: var(--theme-tint); }
+.ghost:hover:not(:disabled), .hints button:hover, #drop, #rec-drop, #tool-drop, .attach-item,
 .tl-card:hover, .editor-split, .md-toolbar, .account-department:has(input:checked) { border-color: var(--theme-border); }
 .ghost:hover:not(:disabled):not(.danger), .docs-view .ghost.active,
 .attach-item, .tl-doc, button.tl-doc, .tl-source .track-button,
 .edits-link, .record-attachments-count, .record-attachments-hint a { color: var(--accent); }
-#drop:hover, #rec-drop:hover, #drop.over, #rec-drop.over,
+#drop:hover, #rec-drop:hover, #tool-drop:hover, #drop.over, #rec-drop.over, #tool-drop.over,
 .record-attachment-drop.over, .attach-item:hover { background: var(--accent-soft); border-color: var(--theme-focus); }
 .record-attachment-drop:focus-visible { border-color: var(--theme-focus); outline-color: var(--theme-focus-soft); }
 .record-attachment-symbol { color: var(--accent); border-color: var(--theme-border); }
@@ -167,11 +171,67 @@ table th, #tab-accounts thead th, #tab-logs #audit-table th, .editor-preview th 
 .table-scroll, .composer-main, .panel-card, .tl-card, .account-form-wrap { border-color: var(--line); }
 .relation-link, .edits-action, .editor-preview blockquote { color: var(--theme-strong); background: var(--accent-soft); }
 .editor-preview blockquote { border-left-color: var(--theme-border); }
-.account-field input:focus { border-color: var(--theme-focus); box-shadow: 0 0 0 3px var(--theme-focus-soft); }
-.account-field input:hover:not(:disabled), .account-department select { border-color: var(--theme-border); }
 .password-shell button:hover:not(:disabled) { background: var(--accent-soft); }
 .access-dot, .account-status::before { background: var(--theme-focus); }
 .public-access .account-summary strong { color: var(--theme-sidebar-highlight); }
+
+:root :is(select, .tl-date-wrap, .form-textarea, input:where(:not([type]), [type="text"], [type="search"], [type="password"], [type="date"], [type="time"], [type="number"]):not(:where(.account-field input, .tl-date-wrap input))) {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: var(--field-height, var(--control-height));
+  padding: 7px 10px;
+  padding-inline-end: var(--field-padding-end, 10px);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background-color: var(--control-background);
+  color: var(--control-text);
+  font: inherit;
+  font-size: var(--field-font-size, 13px);
+  line-height: 1.5;
+  transition: border-color .15s, box-shadow .15s;
+}
+:root select:not(:where([multiple], [size]:not([size="1"]))) {
+  --field-padding-end: 30px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%2358676a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+:root select:where([multiple], [size]:not([size="1"])) { --field-height: 74px; }
+:root :is(select, .tl-date-wrap, .form-textarea, input:where(:not([type]), [type="text"], [type="search"], [type="password"], [type="date"], [type="time"], [type="number"]):not(:where(.account-field input, .tl-date-wrap input))):hover:not(:disabled) {
+  border-color: var(--theme-focus);
+}
+:root :is(select, .tl-date-wrap, .form-textarea, input:where(:not([type]), [type="text"], [type="search"], [type="password"], [type="date"], [type="time"], [type="number"]):not(:where(.account-field input, .tl-date-wrap input))):focus-within {
+  border-color: var(--theme-focus);
+  box-shadow: 0 0 0 3px var(--theme-focus-soft);
+  outline: 0;
+}
+:root :is(select, input:where(:not([type]), [type="text"], [type="search"], [type="password"], [type="date"], [type="time"], [type="number"]):not(:where(.account-field input, .tl-date-wrap input))):disabled {
+  background-color: var(--theme-tint);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.ghost, button.primary, #md-save {
+  min-height: var(--control-height);
+  padding-block: 7px;
+  border-radius: var(--control-radius);
+  line-height: 1.5;
+}
+.ghost { border-color: var(--control-border); color: var(--control-text); }
+.md-mode { background: var(--theme-tint); border-color: var(--control-border); border-radius: var(--control-radius); }
+.md-mode-btn { min-height: calc(var(--control-height) - 2px); }
+.md-mode-btn + .md-mode-btn { border-left-color: var(--control-border); }
+
+@media (forced-colors: active) {
+  :root select:not(:where([multiple], [size]:not([size="1"]))) {
+    --field-padding-end: 10px;
+    appearance: auto;
+    background-image: none;
+  }
+  :root :is(select, .tl-date-wrap, .form-textarea, input):focus-visible,
+  :root .tl-date-wrap:focus-within { outline: 2px solid Highlight; }
+}
 @media (max-width: 1000px) { .workspace-tools { gap: 12px; } .workspace-tools .workspace-context { display: none; } }
 @media (max-width: 760px) {
   .workspace-bar { gap: 8px; }

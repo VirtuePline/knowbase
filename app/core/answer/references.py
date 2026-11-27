@@ -34,7 +34,7 @@ def attach_reference_sources(hits: list[ScoredChunk], sources: list[SourceRef]) 
                         doc = database.get(ref_id)
                     except PyMongoError:
                         continue  # 补充来源不可用时仍可返回主记录
-                    if doc is None or doc.status != "ready" or not access.can_read(doc):
+                    if doc is None or doc.status != "ready" or not doc.indexable or not access.can_read(doc):
                         continue
                     name = doc.name
                 cache[ref_id] = SourceRef(
@@ -64,7 +64,7 @@ def append_references(context: str, hits: list[ScoredChunk]) -> str:
             seen.add(ref_id)
             try:
                 doc = database.get(ref_id)
-                if doc is None or doc.status != "ready" or not access.can_read(doc):
+                if doc is None or doc.status != "ready" or not doc.indexable or not access.can_read(doc):
                     continue
                 path = (settings.raw_dir / doc.stored_name).resolve()
                 if not path.is_relative_to(settings.raw_dir.resolve()):

@@ -16,7 +16,7 @@ from uuid import uuid4
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 
-from app.domain.schemas import DocRecord
+from app.domain.schemas import DocRecord, TOOL_FILE_EXTS
 from app.services import mongo
 
 # 管理端多线程写入与部门删除共用，避免验证部门后又写回已删除的归属。
@@ -57,6 +57,7 @@ def init_db() -> None:
     _docs().create_index([("department_id", ASCENDING), ("visibility", ASCENDING)])
     _docs().create_index("shared_department_ids")
     mongo.db().question_stats.create_index([("scope", ASCENDING), ("last_at", DESCENDING), ("count", DESCENDING)])
+    mongo.db().production_sql_history.create_index("route_id")
     initialize_enterprise()
 
 
@@ -372,7 +373,8 @@ def get(doc_id: str) -> DocRecord | None:
 
 
 def find_by_hash(sha256: str, *, uploaded_by: str | None = None,
-                 parent_id: str | None = None, doc_type: str = "") -> DocRecord | None:
+                 parent_id: str | None = None, doc_type: str = "",
+                 indexable: bool | None = None) -> DocRecord | None:
     """按创建账号、父记录和业务类型限定去重，兼容未保存类型的旧数据。"""
     query: dict = {"sha256": sha256}
     for field, value in (("uploaded_by", uploaded_by), ("parent_id", parent_id)):
@@ -388,6 +390,8 @@ def find_by_hash(sha256: str, *, uploaded_by: str | None = None,
             "doc_type": {"$nin": ["doc", "record"]},
             "category": {"$ne": "常识库"}, "categories": {"$ne": "常识库"},
         }]
+    if indexable is not None:
+        query["ext"] = {"$nin" if indexable else "$in": sorted(TOOL_FILE_EXTS)}
     row = _docs().find_one(query)
     return _row_to_doc(row) if row else None
 

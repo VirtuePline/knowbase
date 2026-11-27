@@ -18,3 +18,5 @@ knowledge_base/
 .tmp_bak_*
 .DS_Store
 *.tar
+
+.deploy-cache/

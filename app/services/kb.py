@@ -11,12 +11,14 @@ import uuid
 from collections import Counter
 from dataclasses import replace as replace_record
 from pathlib import Path
+from threading import Lock
+from typing import BinaryIO
 from fastapi import HTTPException
 from pymongo import DESCENDING
 
 from app.config import settings
-from app.core.ingest.pipeline import Ingester, sha256_of
-from app.domain.schemas import Chunk, DocRecord
+from app.core.ingest.pipeline import Ingester
+from app.domain.schemas import Chunk, DocRecord, TOOL_FILE_EXTS
 from app.domain.taxonomy import (
     DOC_CATEGORY_ORDER,
     DOC_OTHER,
@@ -32,6 +34,10 @@ from app.services.retrieval_service import retrieval
 _SAFE_NAME = re.compile(r"[^\w一-鿿.\-]+")
 _ENCODINGS = ("utf-8-sig", "gb18030", "utf-8")
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_TOOL_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+TOOL_UPLOAD_LIMIT_MESSAGE = "工具文件超过 2 GB 上限"
+TOOL_UPLOAD_ONLY_MESSAGE = "请在工具库上传或替换工具文件"
+_DOCUMENT_FILE_LOCKS = tuple(Lock() for _ in range(64))
 
 # 录入时可选的解决状态（时间线徽标按此显示；时间线上的人工标记优先级更高）
 RESOLVED_VALUES = ("resolved", "improving", "temporary", "unresolved")
@@ -64,17 +70,18 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _require(doc_id: str) -> DocRecord:
+def _require(doc_id: str, *, tool: bool | None = None) -> DocRecord:
     record = database.get(doc_id)
-    if not record or not access.can_read(record):
+    if not record or (tool is not None and record.is_tool != tool) or not access.can_read(record):
         raise DocumentNotFound(doc_id)
     return record
 
 
-def _require_write(doc_id: str) -> DocRecord:
-    record = _require(doc_id)
+def _require_write(doc_id: str, *, tool: bool | None = False) -> DocRecord:
+    record = _require(doc_id, tool=tool)
     if not access.can_write(record):
-        raise HTTPException(status_code=403, detail="没有此文档的修改权限")
+        label = "工具" if record.is_tool else "文档"
+        raise HTTPException(status_code=403, detail=f"没有此{label}的修改权限")
     return record
 
 
@@ -142,6 +149,11 @@ def _raw_path(record: DocRecord) -> Path:
     return settings.raw_dir / record.stored_name
 
 
+def document_file_lock(doc_id: str):
+    """同一文档的原件和索引写入按顺序完成。"""
+    return _DOCUMENT_FILE_LOCKS[hash(doc_id) % len(_DOCUMENT_FILE_LOCKS)]
+
+
 def _doc_dict(record: DocRecord, department_names: dict | None = None) -> dict:
     data = record.to_dict()
     if record.doc_type == "doc":
@@ -151,6 +163,7 @@ def _doc_dict(record: DocRecord, department_names: dict | None = None) -> dict:
     data["department_name"] = department_names.get(record.department_id, "未命名部门")
     data["uploaded_by_name"] = database.recorder_label(record.uploaded_by, record.uploaded_by_name)
     data["editable"] = is_editable(record.ext)
+    data["indexed"] = record.indexable
     data["has_source"] = _raw_path(record).is_file()
     data["can_write"] = access.can_write(record)
     data["can_manage_access"] = (access.is_platform_admin() or
@@ -167,19 +180,50 @@ def _doc_dict(record: DocRecord, department_names: dict | None = None) -> dict:
     return data
 
 
-def _check_upload(filename: str, content: bytes) -> tuple[str, str]:
+def is_tool_file(filename: str) -> bool:
+    return Path(filename).suffix.lower() in TOOL_FILE_EXTS
+
+
+def _check_upload(filename: str, *, tool: bool = False) -> tuple[str, str]:
     if not filename:
         raise ValueError("文件名为空")
     original = Path(filename).name
     ext = Path(original).suffix.lower()
-    if ext not in settings.supported_exts:
+    if tool:
+        if ext not in TOOL_FILE_EXTS:
+            raise ValueError("工具库支持 EXE、MSI、MSP、MSIX、MSIXBundle、APPX、APPXBundle、ZIP、7Z、RAR 和 ISO")
+    elif ext in TOOL_FILE_EXTS:
+        raise ValueError(TOOL_UPLOAD_ONLY_MESSAGE)
+    elif ext not in settings.supported_exts:
         hint = {".doc": "请另存为 .docx", ".xls": "请另存为 .xlsx"}.get(ext, "")
         raise ValueError(f"暂不支持 {ext or '无扩展名'} 格式" + (f"，{hint}" if hint else ""))
-    if not content:
-        raise ValueError("文件内容为空")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise ValueError("文件超过 100MB，请拆分后再上传")
     return original, ext
+
+
+def _write_upload(path: Path, content: bytes | BinaryIO, *, tool: bool) -> tuple[str, int]:
+    """分块保存工具原件，同时校验大小和计算去重哈希。"""
+    blocks = (content,) if isinstance(content, bytes) else iter(lambda: content.read(1 << 20), b"")
+    limit = MAX_TOOL_UPLOAD_BYTES if tool else MAX_UPLOAD_BYTES
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("xb") as target:
+            for block in blocks:
+                size += len(block)
+                if size > limit:
+                    if tool:
+                        raise HTTPException(status_code=413, detail=TOOL_UPLOAD_LIMIT_MESSAGE)
+                    raise ValueError("文件超过 100MB，请拆分后再上传")
+                target.write(block)
+                digest.update(block)
+        if not size:
+            raise ValueError("文件内容为空")
+    except FileExistsError:
+        raise
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return digest.hexdigest(), size
 
 
 def _ingest(record: DocRecord, path: Path, category: str = "") -> DocRecord:
@@ -242,7 +286,7 @@ def category_counts(doc_type: str = "", department_id: str = "") -> list[dict]:
 
 
 def _records_of_type(records: list[DocRecord], doc_type: str) -> list[DocRecord]:
-    return [doc for doc in records if not doc_type or doc.doc_type == doc_type]
+    return [doc for doc in records if doc.indexable and (not doc_type or doc.doc_type == doc_type)]
 
 
 def _category_counts(docs: list[DocRecord]) -> list[dict]:
@@ -275,6 +319,15 @@ def document_listing(category: str = "", doc_type: str = "", department_id: str 
         selected = [doc for doc in scoped if name in record_categories(doc)]
     return {"documents": [_doc_dict(doc, names) for doc in selected],
             "categories": [] if doc_type == "doc" else _category_counts(scoped), "stats": _record_stats(scoped),
+            "departments": _department_options(department_counts, names)}
+
+
+def tool_listing(department_id: str = "") -> dict:
+    tools = [record for record in _visible_records() if record.is_tool]
+    department_counts = Counter(record.department_id for record in tools)
+    names = database.department_names(department_counts)
+    scoped = [record for record in tools if not department_id or record.department_id == department_id]
+    return {"tools": [_doc_dict(record, names) for record in scoped],
             "departments": _department_options(department_counts, names)}
 
 
@@ -358,9 +411,10 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     """
     scope = access.creation_scope(department_id, visibility, shared_department_ids)
     doc_type = "record" if (parent_id or "").strip() else (doc_type if doc_type in {"doc", "record"} else "doc")
-    original, ext = _check_upload(filename, content)
-    if ext in {".md", ".txt"}:
-        _validate_images(_decode(content))
+    original, ext = _check_upload(filename)
+    document_text = _decode(content) if is_editable(ext) else None
+    if document_text is not None:
+        _validate_images(document_text)
     file_time = _norm_file_time(file_time)   # 文件修改时间：作为上传时间与记录时间默认值
     norm_resolved = _norm_resolved(resolved)
     cats = normalize_doc_categories(part for part in _CAT_SPLIT.split(categories or "") if part.strip())
@@ -377,11 +431,13 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
     root_id = _tracking_root(parent_id, doc_id)
     stored = _safe_stored_name(original, doc_id)
     target = settings.raw_dir / stored
-    target.write_bytes(content)
-
-    digest = sha256_of(target)
-    existing = None if parent_id else database.find_by_hash(
-        digest, uploaded_by=uploaded_by, parent_id="", doc_type=doc_type)
+    digest, size = _write_upload(target, content, tool=False)
+    try:
+        existing = None if parent_id else database.find_by_hash(
+            digest, uploaded_by=uploaded_by, parent_id="", doc_type=doc_type, indexable=True)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
     if existing and existing.status == "ready" and _same_scope(existing, scope):
         target.unlink(missing_ok=True)
         if cats:
@@ -399,7 +455,7 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         return {"duplicated": True, "doc": _doc_dict(existing)}
 
     record = DocRecord(
-        id=doc_id, name=original, stored_name=stored, ext=ext, size=len(content),
+        id=doc_id, name=original, stored_name=stored, ext=ext, size=size,
         sha256=digest, chunks=0,
         uploaded_at=file_time or database.now_iso(),   # 默认取文件修改时间，其次当前时间
         status="processing",
@@ -409,88 +465,139 @@ def upload(filename: str, content: bytes, category: str = "", doc_type: str = "d
         parent_id=parent_id, root_id=root_id,
         **scope,
     )
-    database.add(record)
-    if ext in {".md", ".txt"}:
-        _bind_images(record.id, _decode(content))
-    result = _ingest(record, target, category=primary)
-    if cats:
-        database.set_categories(result.id, cats)
-        result = _require(doc_id)
-    if vendor:
-        database.set_vendor(doc_id, vendor)
-        result = _require(doc_id)
-    if not date and record.doc_type == "record":
-        # 工作记录未指定日期时默认取文件修改日期，其次当前日期
-        date = file_time[:10] if file_time else datetime.date.today().isoformat()
-    if date:
-        set_document_time(doc_id, date)
-        result = _require(doc_id)
-    return {"duplicated": False, "doc": _doc_dict(result)}
+    with document_file_lock(doc_id):
+        try:
+            database.add(record)
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        if document_text is not None:
+            _bind_images(record.id, document_text)
+        result = _ingest(record, target, category=primary)
+        if cats:
+            database.set_categories(result.id, cats)
+            result = _require(doc_id)
+        if vendor:
+            database.set_vendor(doc_id, vendor)
+            result = _require(doc_id)
+        if not date and record.doc_type == "record":
+            # 工作记录未指定日期时默认取文件修改日期，其次当前日期
+            date = file_time[:10] if file_time else datetime.date.today().isoformat()
+        if date:
+            set_document_time(doc_id, date)
+            result = _require(doc_id)
+        return {"duplicated": False, "doc": _doc_dict(result)}
+
+
+def upload_tool(filename: str, content: bytes | BinaryIO, *, uploaded_by: str = "", uploaded_by_name: str = "",
+                file_time: str = "", department_id: str = "", visibility: str = "department",
+                shared_department_ids: list[str] | None = None) -> dict:
+    """保留工具原件和下载所需的权限信息。"""
+    original, ext = _check_upload(filename, tool=True)
+    scope = access.creation_scope(department_id, visibility, shared_department_ids)
+    uploaded_by = (uploaded_by or "").strip()
+    doc_id = uuid.uuid4().hex[:12]
+    stored = _safe_stored_name(original, doc_id)
+    target = settings.raw_dir / stored
+    digest, size = _write_upload(target, content, tool=True)
+    try:
+        existing = database.find_by_hash(digest, uploaded_by=uploaded_by, parent_id="", doc_type="doc", indexable=False)
+        if existing and existing.status == "ready" and _same_scope(existing, scope) and _raw_path(existing).is_file():
+            target.unlink(missing_ok=True)
+            return {"duplicated": True, "doc": _doc_dict(existing)}
+        record = DocRecord(id=doc_id, name=original, stored_name=stored, ext=ext, size=size, sha256=digest,
+                           chunks=0, uploaded_at=_norm_file_time(file_time) or database.now_iso(), status="ready",
+                           doc_type="doc", uploaded_by=uploaded_by, uploaded_by_name=(uploaded_by_name or "").strip(),
+                           root_id=doc_id, **scope)
+        database.add(record)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return {"duplicated": False, "doc": _doc_dict(record)}
 
 
 def replace_file(doc_id: str, filename: str, content: bytes) -> dict:
-    """用新文件替换已有文档：保留文档 ID 与首次上传时间，重新解析、分析并重建索引。
+    """用新文件替换已有文档，保留文档 ID 与首次上传时间。
 
     新文件解析失败时不动原文档，原文件、分块与检索结果保持不变。
     """
-    record = _require_write(doc_id)
-    original, ext = _check_upload(filename, content)
-    if ext in {".md", ".txt"}:
-        _validate_images(_decode(content))
+    with document_file_lock(doc_id):
+        return _replace_file(doc_id, filename, content, tool=False)
 
-    stored = _safe_stored_name(original, doc_id)
-    staging = settings.raw_dir / f".replace_{uuid.uuid4().hex[:8]}{ext}"
-    staging.write_bytes(content)
+
+def replace_tool(doc_id: str, filename: str, content: bytes | BinaryIO) -> dict:
+    with document_file_lock(doc_id):
+        return _replace_file(doc_id, filename, content, tool=True)
+
+
+def _replace_file(doc_id: str, filename: str, content: bytes | BinaryIO, *, tool: bool) -> dict:
+    record = _require_write(doc_id, tool=tool)
+    original, ext = _check_upload(filename, tool=tool)
+    document_text = _decode(content) if isinstance(content, bytes) and is_editable(ext) else ""
+    if document_text:
+        _validate_images(document_text)
+
+    version = uuid.uuid4().hex[:12]
+    stored = _safe_stored_name(original, f"{doc_id}_{version}")
+    staging = settings.raw_dir / f".replace_{version}{ext}"
+    digest, size = _write_upload(staging, content, tool=tool)
     try:
-        digest = sha256_of(staging)
         if digest == record.sha256:
             raise ValueError("新文件与当前文档内容完全相同，无需替换")
         duplicate = None if record.parent_id else database.find_by_hash(
-            digest, uploaded_by=record.uploaded_by, parent_id="")
+            digest, uploaded_by=record.uploaded_by, parent_id="", indexable=not tool)
         if duplicate and duplicate.status == "ready" and access.can_read(duplicate):
             if duplicate.id == doc_id:
                 raise ValueError("新文件与当前文档内容完全相同，无需替换")
             raise ValueError(f"新文件与已有文档《{duplicate.name}》内容完全相同，未替换")
 
         # 先在临时 ID 下试解析，确认新文件可用再替换，避免把可用文档换成坏文件
-        probe_id = f"probe{uuid.uuid4().hex[:8]}"
-        ingester = Ingester()
-        probe = ingester.ingest(staging, probe_id, original, ext.lstrip("."), content_type=record.doc_type)
-        ingester.remove(probe_id)
-        if not probe.ok:
-            raise ValueError(f"新文件无法入库，原文档未改动：{probe.error}")
+        if not tool:
+            ingester = Ingester()
+            probe_id = f"probe{version}"
+            probe = ingester.ingest(staging, probe_id, original, ext.lstrip("."), content_type=record.doc_type)
+            ingester.remove(probe_id)
+            if not probe.ok:
+                raise ValueError(f"新文件无法入库，原文档未改动：{probe.error}")
 
         target = settings.raw_dir / stored
-        old_path = _raw_path(record)
-        staging.replace(target)
-        if old_path != target:
-            old_path.unlink(missing_ok=True)
+        with database.department_mutation_lock:
+            record = _require_write(doc_id, tool=tool)
+            updated = replace_record(record, name=original, stored_name=stored, ext=ext, size=size,
+                                     sha256=digest, status="ready" if tool else "processing",
+                                     chunks=0, summary="", skipped=0, error="")
+            staging.replace(target)
+            try:
+                database.add(updated)
+            except Exception:
+                target.unlink(missing_ok=True)
+                raise
+        _raw_path(record).unlink(missing_ok=True)
     finally:
         staging.unlink(missing_ok=True)
 
-    updated = replace_record(
-        record, name=original, stored_name=stored, ext=ext, size=len(content),
-        sha256=digest, status="processing",
-    )
-    database.add(updated)
-    _bind_images(updated.id, _decode(content) if ext in {".md", ".txt"} else "")
+    if tool:
+        return {"replaced": True, "doc": _doc_dict(updated)}
+    _bind_images(updated.id, document_text)
     return {"replaced": True, "doc": _doc_dict(_ingest(updated, target, category=record.category))}
 
 
-def delete(doc_id: str) -> bool:
-    record = database.get(doc_id)
-    if not record:
-        return False
-    _require_write(doc_id)
-    if database.count_children(doc_id):
-        raise ValueError("该记录存在后续追踪，请先删除子追踪记录")
-    _raw_path(record).unlink(missing_ok=True)
-    _remove_attachment_dir(doc_id)
-    Ingester().remove(doc_id)
-    database.delete(doc_id)
-    mongo.db().image_assets.update_many({"doc_ids": doc_id}, {"$pull": {"doc_ids": doc_id}})
-    retrieval.rebuild()
-    return True
+def delete(doc_id: str, *, tool: bool | None = False) -> bool:
+    with document_file_lock(doc_id):
+        record = database.get(doc_id)
+        if not record:
+            return False
+        _require_write(doc_id, tool=tool)
+        if database.count_children(doc_id):
+            raise ValueError("该记录存在后续追踪，请先删除子追踪记录")
+        _raw_path(record).unlink(missing_ok=True)
+        _remove_attachment_dir(doc_id)
+        Ingester().remove(doc_id)
+        database.delete(doc_id)
+        mongo.db().image_assets.update_many({"doc_ids": doc_id}, {"$pull": {"doc_ids": doc_id}})
+        if record.indexable:
+            retrieval.rebuild()
+        return True
 
 
 def get_document(doc_id: str) -> dict:
@@ -501,7 +608,7 @@ def get_document(doc_id: str) -> dict:
 
 def preview(doc_id: str) -> dict:
     record = _require(doc_id)
-    chunks = Ingester().read_chunks(doc_id)
+    chunks = Ingester().read_chunks(doc_id) if record.indexable else []
     doc = _doc_dict(record)
     doc["attachments"] = database.get_attachments(doc_id)
     result = {"doc": doc, "sections": merge_preview(chunks)}
@@ -651,13 +758,14 @@ def remove_attachment(doc_id: str, stored: str) -> list[dict]:
     return database.get_attachments(doc_id)
 
 
-def source_file(doc_id: str) -> tuple[Path, str]:
+def source_file(doc_id: str, *, tool: bool | None = None) -> tuple[Path, str]:
     """原始文件路径与下载文件名。"""
-    record = _require(doc_id)
+    record = _require(doc_id, tool=tool)
     path = _raw_path(record)
     if not path.is_file():
         raise ValueError("原始文件未保存在知识库中（早期命令行导入的文档），请用「替换」重新上传原件")
-    return path, f"{record.name}{record.ext}"   # 下载用原名带扩展名
+    name = record.name if record.name.lower().endswith(record.ext.lower()) else f"{record.name}{record.ext}"
+    return path, name
 
 
 def _restore_from_chunks(chunks: list[Chunk]) -> str:
@@ -752,7 +860,8 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
     payload = content.encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
     duplicate = None if parent_id else database.find_by_hash(
-        digest, uploaded_by=uploaded_by, parent_id="", doc_type=record.doc_type if record else "record")
+        digest, uploaded_by=uploaded_by, parent_id="", doc_type=record.doc_type if record else "record",
+        indexable=True)
     target_scope = ({"department_id": record.department_id, "visibility": record.visibility,
                      "shared_department_ids": record.shared_department_ids} if record else scope)
     if duplicate and duplicate.id != doc_id and duplicate.status == "ready" and _same_scope(duplicate, target_scope):
@@ -811,11 +920,14 @@ def save_markdown(content: str, doc_id: str = "", filename: str = "",
 
 def reingest(doc_id: str) -> DocRecord:
     """按当前分析规则重新解析一份文档（原始文件需仍在）。"""
-    record = _require_write(doc_id)
-    path = _raw_path(record)
-    if not path.is_file():
-        raise ValueError("原始文件缺失，无法重新分析")
-    return _ingest(record, path)
+    with document_file_lock(doc_id):
+        record = _require_write(doc_id, tool=None)
+        if not record.indexable:
+            raise ValueError("工具文件仅供下载，无需重新分析")
+        path = _raw_path(record)
+        if not path.is_file():
+            raise ValueError("原始文件缺失，无法重新分析")
+        return _ingest(record, path)
 
 
 def rebuild() -> dict:

@@ -10,7 +10,7 @@ import json
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
-from typing import Annotated, Literal
+from typing import Annotated, BinaryIO, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -22,7 +22,7 @@ from app.core.answer import service as answer_service
 from app.core.llm import client as llm
 from app.config import settings
 from app.domain import taxonomy
-from app.services import access, audit, conversations, database, kb, mongo, pdf_preview, recordmeta
+from app.services import access, audit, conversations, database, kb, mongo, pdf_preview, production_routes, recordmeta
 from app.services import timeline as timeline_service
 from app.services import weekly as weekly_service
 
@@ -55,6 +55,9 @@ def chat(req: ChatRequest) -> dict:
                 fast_mode=req.fast_mode, llm_polish=req.llm_polish, web_search=req.web_search,
                 rejected_doc_ids=rejected,
             ).to_dict()
+        if result["answer_origin"] == "production_sql":
+            result["conversation_id"] = ""
+            return result
         kb.add_pdf_source_previews(result["sources"], req.question)
         result["conversation_id"] = conversations.save(req.conversation_id, req.question, result)
         # 提问频率统计（用于首页「从一个问题开始」展示最近 7 天热门问题）
@@ -87,6 +90,19 @@ async def _read_upload(file: UploadFile, limit: int, message: str) -> bytes:
     if len(content) > limit:
         raise HTTPException(status_code=413, detail=message)
     return content
+
+
+async def _document_upload_content(file: UploadFile) -> bytes:
+    if kb.is_tool_file(file.filename or ""):
+        raise HTTPException(status_code=400, detail=kb.TOOL_UPLOAD_ONLY_MESSAGE)
+    return await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
+
+
+def _tool_upload_content(file: UploadFile) -> BinaryIO:
+    if file.size is not None and file.size > kb.MAX_TOOL_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=kb.TOOL_UPLOAD_LIMIT_MESSAGE)
+    # Multipart 使用可落盘的临时文件，由后台线程分块保存原件。
+    return file.file
 
 
 @search_router.post("/chat/image")
@@ -129,11 +145,16 @@ def list_documents(category: str = "", doc_type: Literal["", "doc", "record"] = 
     return kb.document_listing(category, doc_type, department_id)
 
 
+@search_router.get("/tools")
+def list_tools(department_id: str = "") -> dict:
+    return kb.tool_listing(department_id)
+
+
 @search_router.get("/vendors")
 def list_vendors() -> dict:
     """厂商清单：厂商系统类记录按厂商归类，清单在网页端维护。"""
     if (access.current_identity() or {}).get("public_only"):
-        return {"vendors": sorted({doc.vendor for doc in kb._visible_records() if doc.vendor})}
+        return {"vendors": sorted({doc.vendor for doc in kb._visible_records() if doc.indexable and doc.vendor})}
     return {"vendors": recordmeta.list_vendors()}
 
 
@@ -141,7 +162,8 @@ def list_vendors() -> dict:
 def list_categories() -> dict:
     """全部可选记录分类：内置固定分类 + 后台新增的自定义类型。"""
     if (access.current_identity() or {}).get("public_only"):
-        return {"categories": sorted({tag for doc in kb._visible_records() for tag in taxonomy.record_categories(doc)})}
+        return {"categories": sorted({tag for doc in kb._visible_records() if doc.indexable
+                                      for tag in taxonomy.record_categories(doc)})}
     return {"categories": recordmeta.list_categories()}
 
 
@@ -241,17 +263,30 @@ def preview_pdf_page(doc_id: str, page: int) -> Response:
 
 @search_router.get("/documents/{doc_id}/download")
 def download_document(doc_id: str) -> FileResponse:
-    """下载原始文件。查询端和管理端均提供下载；写操作仅管理端提供。"""
+    """下载文档原件，兼容已有的工具下载链接。"""
     try:
         path, name = kb.source_file(doc_id)
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="文档不存在") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _download_file(path, name)
+
+
+@search_router.get("/tools/{doc_id}/download")
+def download_tool(doc_id: str) -> FileResponse:
+    try:
+        path, name = kb.source_file(doc_id, tool=True)
+    except (kb.DocumentNotFound, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="工具文件不存在或无权访问") from exc
+    return _download_file(path, name)
+
+
+def _download_file(path: Path, name: str) -> FileResponse:
     # HTTP 头必须可按 latin-1 编码；中文原名通过 RFC 5987 的 filename* 传递。
     fallback = f"document{Path(name).suffix.lower()}"
     disposition = f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
-    return FileResponse(str(path), headers={"Content-Disposition": disposition},
+    return FileResponse(str(path), headers={"Content-Disposition": disposition, "X-Content-Type-Options": "nosniff"},
                         media_type="application/octet-stream")
 
 
@@ -268,6 +303,36 @@ def require_super_admin(identity: dict = Depends(require_login)) -> dict:
 
 # ---------- Admin（读写，需先登录）----------
 admin_router = APIRouter(prefix="/api", tags=["admin"], dependencies=[Depends(require_admin)])
+
+
+class ProductionRouteUpdate(BaseModel):
+    enabled: bool = Field(strict=True)
+
+
+@admin_router.get("/admin/production-sql/routes", dependencies=[Depends(require_super_admin)])
+def production_sql_routes(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict:
+    try:
+        return {"routes": production_routes.list_routes(limit=limit, offset=offset)}
+    except production_routes.RouteUnavailable as exc:
+        raise HTTPException(503, "生产查询路由暂时不可用") from exc
+
+
+@admin_router.get("/admin/production-sql/history", dependencies=[Depends(require_super_admin)])
+def production_sql_history(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict:
+    try:
+        return {"history": production_routes.list_history(limit=limit, offset=offset)}
+    except production_routes.RouteUnavailable as exc:
+        raise HTTPException(503, "生产查询历史暂时不可用") from exc
+
+
+@admin_router.patch("/admin/production-sql/routes/{route_id}", dependencies=[Depends(require_super_admin)])
+def update_production_sql_route(route_id: str, req: ProductionRouteUpdate) -> dict:
+    try:
+        if not production_routes.set_enabled(route_id, req.enabled):
+            raise HTTPException(404, "未找到生产查询路由")
+    except production_routes.RouteUnavailable as exc:
+        raise HTTPException(503, "生产查询路由暂时不可用") from exc
+    return {"id": route_id, "enabled": req.enabled}
 
 
 @admin_router.get("/audit-logs")
@@ -332,7 +397,7 @@ async def upload_document(
     if doc_type not in {"doc", "record"}:
         raise HTTPException(status_code=400, detail="doc_type 只能是 doc / record")
     try:
-        content = await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
+        content = await _document_upload_content(file)
         return await run_in_threadpool(kb.upload, file.filename or "", content, doc_type=doc_type,
                                        category=category, categories=categories, date=date,
                                        vendor=vendor, resolved=resolved,
@@ -358,11 +423,32 @@ async def upload_knowledge(
 ) -> dict:
     """旧上传入口的兼容别名：按部门保存普通文档。"""
     try:
-        content = await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
+        content = await _document_upload_content(file)
         return await run_in_threadpool(kb.upload, file.filename or "", content,
                                        doc_type="doc", uploaded_by=identity["username"],
                                        file_time=file_time, department_id=department_id,
                                        visibility=visibility, shared_department_ids=_shared_departments(shared_department_ids))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.post("/tools")
+async def upload_tool(
+    file: UploadFile = File(...),
+    file_time: str = Form(""),
+    department_id: str = Form(""),
+    visibility: str = Form("department"),
+    shared_department_ids: str = Form("[]"),
+    identity: dict = Depends(require_login),
+) -> dict:
+    """保存工具原件供下载，单个文件上限 2 GB。"""
+    try:
+        return await run_in_threadpool(
+            kb.upload_tool, file.filename or "", _tool_upload_content(file),
+            uploaded_by=identity["username"], uploaded_by_name=identity.get("display_name", ""),
+            file_time=file_time, department_id=department_id, visibility=visibility,
+            shared_department_ids=_shared_departments(shared_department_ids),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -392,10 +478,21 @@ async def upload_image(file: UploadFile = File(...), identity: dict = Depends(re
 async def replace_document(doc_id: str, file: UploadFile = File(...)) -> dict:
     """用新文件替换已有文档，保留文档 ID 与首次上传时间。"""
     try:
-        content = await _read_upload(file, kb.MAX_UPLOAD_BYTES, "文件超过 100MB，请拆分后再上传")
+        content = await _document_upload_content(file)
         return await run_in_threadpool(kb.replace_file, doc_id, file.filename or "", content)
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="文档不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.put("/tools/{doc_id}/replace")
+async def replace_tool(doc_id: str, file: UploadFile = File(...)) -> dict:
+    """替换工具原件，保留下载地址。"""
+    try:
+        return await run_in_threadpool(kb.replace_tool, doc_id, file.filename or "", _tool_upload_content(file))
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail="工具文件不存在或无权访问") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -471,11 +568,12 @@ def create_markdown(req: MarkdownRequest, identity: dict = Depends(require_login
 @admin_router.put("/documents/{doc_id}")
 def update_markdown(doc_id: str, req: MarkdownRequest, identity: dict = Depends(require_login)) -> dict:
     try:
-        return kb.save_markdown(req.content, doc_id, req.filename, req.category, req.vendor, req.resolved,
-                                categories=req.categories if "categories" in req.model_fields_set else None,
-                                uploaded_by=identity["username"], parent_id=req.parent_id,
-                                edited_by=identity["username"],
-                                edited_by_name=identity.get("display_name", ""))
+        with kb.document_file_lock(doc_id):
+            return kb.save_markdown(req.content, doc_id, req.filename, req.category, req.vendor, req.resolved,
+                                    categories=req.categories if "categories" in req.model_fields_set else None,
+                                    uploaded_by=identity["username"], parent_id=req.parent_id,
+                                    edited_by=identity["username"],
+                                    edited_by_name=identity.get("display_name", ""))
     except kb.DocumentNotFound as exc:
         raise HTTPException(status_code=404, detail="文档不存在") from exc
     except ValueError as exc:
@@ -508,12 +606,24 @@ class DocumentAccessRequest(BaseModel):
 
 @admin_router.patch("/documents/{doc_id}/access")
 def update_document_access(doc_id: str, req: DocumentAccessRequest) -> dict:
+    return _update_file_access(doc_id, req, tool=False)
+
+
+@admin_router.patch("/tools/{doc_id}/access")
+def update_tool_access(doc_id: str, req: DocumentAccessRequest) -> dict:
+    return _update_file_access(doc_id, req, tool=True)
+
+
+def _update_file_access(doc_id: str, req: DocumentAccessRequest, *, tool: bool) -> dict:
     record = access.require_read(doc_id)
+    label = "工具" if tool else "文档"
+    if record.is_tool != tool:
+        raise HTTPException(status_code=404, detail=f"{label}不存在")
     if not access.is_platform_admin() and record.department_id not in access.managed_departments():
-        raise HTTPException(status_code=403, detail="只有所属部门管理员可以调整文档权限")
+        raise HTTPException(status_code=403, detail=f"只有所属部门管理员可以调整{label}权限")
     department_id = req.department_id if req.department_id is not None else record.department_id
     if not access.is_platform_admin() and department_id != record.department_id:
-        raise HTTPException(status_code=403, detail="只有平台管理员可以转移文档归属部门")
+        raise HTTPException(status_code=403, detail=f"只有平台管理员可以转移{label}归属部门")
     scope = access.creation_scope(
         department_id, req.visibility if req.visibility is not None else record.visibility,
         req.shared_department_ids if req.shared_department_ids is not None else record.shared_department_ids,
@@ -763,6 +873,18 @@ def delete_document(doc_id: str) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"deleted": doc_id, "stats": kb.stats()}
+
+
+@admin_router.delete("/tools/{doc_id}")
+def delete_tool(doc_id: str) -> dict:
+    try:
+        if not kb.delete(doc_id, tool=True):
+            raise HTTPException(status_code=404, detail="工具文件不存在")
+    except kb.DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail="工具文件不存在或无权访问") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"deleted": doc_id}
 
 
 @admin_router.post("/documents/rebuild")

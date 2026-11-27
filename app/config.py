@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -148,6 +148,10 @@ class Settings:
     web_search_base_url: str = "https://api.deepseek.com"
     web_search_timeout: int = 15
     web_search_max_results: int = 5
+    production_sql_enabled: bool = False
+    production_sql_url: str = field(default="", repr=False)
+    production_sql_view: str = "production_daily"
+    production_sql_departments: tuple[str, ...] = ()
 
     @property
     def llm_available(self) -> bool:
@@ -192,6 +196,10 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
     embedding = _section(data, "embedding", {"enabled", "provider", "model", "base_url", "api_key", "timeout"})
     rerank = _section(data, "rerank", {"enabled", "threshold", "candidates"})
     dbcfg = _section(data, "database", {"uri", "name"})
+    production = _section(data, "production_sql", {"enabled", "url", "view", "departments"})
+    departments = production.get("departments", [])
+    if not isinstance(departments, list) or not all(isinstance(item, str) and item.strip() for item in departments):
+        raise ConfigError("production_sql.departments 必须是部门 ID 字符串列表")
     auth = _section(data, "auth", {"enabled", "admin_user", "admin_password"})
     vision = _section(data, "vision", {"model", "base_url", "api_key"})
     web_search = _section(data, "web_search", {"enabled", "provider", "api_key", "base_url", "timeout", "max_results"})
@@ -290,6 +298,10 @@ def load_settings(config_file: Path = CONFIG_FILE, local_file: Path = LOCAL_CONF
         # 环境变量优先：容器内通过 KB_MONGO_URI 指向宿主机 MongoDB
         mongo_uri=os.environ.get("KB_MONGO_URI", "").strip() or _str(dbcfg, "uri", "mongodb://127.0.0.1:27017"),
         mongo_db=_str(dbcfg, "name", "knowbase"),
+        production_sql_enabled=_bool(production, "enabled", False),
+        production_sql_url=os.environ.get("KB_PRODUCTION_SQL_URL", "").strip() or _str(production, "url", ""),
+        production_sql_view=_str(production, "view", "production_daily"),
+        production_sql_departments=tuple(dict.fromkeys(item.strip() for item in departments)),
         # enabled 保留旧配置兼容；管理端始终要求登录，不再由此字段绕过认证。
         auth_enabled=_bool(auth, "enabled", True),
         auth_admin_user=_str(auth, "admin_user", "admin"),

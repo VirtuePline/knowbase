@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.core.ingest.pipeline import Ingester, sha256_of
-from app.domain.schemas import DocRecord
+from app.domain.schemas import DocRecord, TOOL_FILE_EXTS
 from app.services import database
 from app.services import kb
 from app.services.retrieval_service import retrieval
@@ -33,7 +33,8 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     target = Path(args.path)
     files: list[Path] = []
     if target.is_dir():
-        files = [p for p in sorted(target.rglob("*")) if p.suffix.lower() in settings.supported_exts]
+        supported = settings.supported_exts | TOOL_FILE_EXTS
+        files = [p for p in sorted(target.rglob("*")) if p.is_file() and p.suffix.lower() in supported]
     elif target.is_file():
         files = [target]
     if not files:
@@ -42,9 +43,30 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
     ingester = Ingester()
     ok = fail = 0
+    has_indexable_files = False
     for path in files:
+        if kb.is_tool_file(path.name):
+            if path.stat().st_size > kb.MAX_TOOL_UPLOAD_BYTES:
+                print(f"[失败] {path.name} -> {kb.TOOL_UPLOAD_LIMIT_MESSAGE}")
+                fail += 1
+                continue
+            try:
+                with path.open("rb") as content:
+                    result = kb.upload_tool(path.name, content)
+            except (OSError, ValueError) as exc:
+                print(f"[失败] {path.name} -> {exc}")
+                fail += 1
+                continue
+            if result["duplicated"]:
+                print(f"[跳过] 已存在：{path.name}")
+            else:
+                print(f"[成功] {path.name} -> 工具文件，仅供下载")
+                ok += 1
+            continue
+
+        has_indexable_files = True
         digest = sha256_of(path)
-        existing = database.find_by_hash(digest)
+        existing = database.find_by_hash(digest, indexable=True)
         if existing and existing.status == "ready":
             stored = settings.raw_dir / existing.stored_name
             if not stored.is_file():
@@ -81,8 +103,11 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             print(f"[失败] {name} -> {result.error}")
             fail += 1
 
-    index = retrieval.rebuild()
-    print(f"入库完成：成功 {ok}，失败 {fail}；索引共 {len(index.chunks)} 个分块 / {index.doc_count()} 份文档")
+    if has_indexable_files:
+        index = retrieval.rebuild()
+        print(f"入库完成：成功 {ok}，失败 {fail}；索引共 {len(index.chunks)} 个分块 / {index.doc_count()} 份文档")
+    else:
+        print(f"导入完成：成功 {ok}，失败 {fail}")
 
 
 def cmd_reanalyze(args: argparse.Namespace) -> None:
@@ -121,7 +146,7 @@ def cmd_list(_: argparse.Namespace) -> None:
 
 def cmd_delete(args: argparse.Namespace) -> None:
     database.init_db()
-    if kb.delete(args.doc_id):
+    if kb.delete(args.doc_id, tool=None):
         print(f"已删除：{args.doc_id}")
     else:
         print(f"未找到：{args.doc_id}")

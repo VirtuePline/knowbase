@@ -115,6 +115,13 @@ database:
   uri: mongodb://127.0.0.1:27017
   name: knowbase
 
+# 生产问答只查询指定报表。私有连接串放在 config.local.yaml 或 KB_PRODUCTION_SQL_URL。
+production_sql:
+  enabled: false
+  url: ""
+  view: production_daily
+  departments: []    # 填写允许查询报表的系统部门 ID，与报表的 department_id 对应
+
 # ---- 服务 ----
 # 所有功能共用一个端口：免登录只访问公共资料，登录后按账号权限使用完整功能。
 # Docker 通过启动参数监听容器 80 端口，并默认映射到宿主机 8000。

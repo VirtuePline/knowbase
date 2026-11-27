@@ -76,22 +76,36 @@ def _body(chunk, question: str = "") -> str:
     return text
 
 
-def render_hits(hits: list[ScoredChunk], max_chars: int | None = None,
-                question: str = "") -> str:
-    """模型上下文：每条命中带来源标注，表格转 Markdown 便于逐行取字段。"""
+def build_hit_context(hits: list[ScoredChunk], max_chars: int | None = None,
+                      question: str = "") -> tuple[str, list[ScoredChunk]]:
+    """同时返回模型能看到的原文和对应来源，按实际装入上下文的顺序编号。"""
     limit = settings.max_context_chars if max_chars is None else max_chars
     parts: list[str] = []
-    used = 0
-    for number, hit in enumerate(hits, start=1):
-        block = f"【记录 {number}】来源：{_source_label(hit)}\n{_body(hit.chunk, question)}"
-        if used + len(block) > limit:
-            remaining = limit - used
-            if remaining > 200:
-                parts.append(block[:remaining] + "\n……（后略）")
+    included: list[ScoredChunk] = []
+    remaining = limit
+    for hit in hits:
+        body = _body(hit.chunk, question).strip()
+        if not body:
+            continue
+        header = f"【记录 {len(parts) + 1}】来源：{_source_label(hit)}\n"
+        block = header + body
+        if parts:
+            remaining -= 2  # 段落间的两个换行
+        if len(block) > remaining:
+            suffix = "\n……（后略）"
+            if remaining > max(200, len(header) + len(suffix)):
+                parts.append(block[:remaining - len(suffix)] + suffix)
+                included.append(hit)
             break
         parts.append(block)
-        used += len(block)
-    return "\n\n".join(parts)
+        included.append(hit)
+        remaining -= len(block)
+    return "\n\n".join(parts), included
+
+
+def render_hits(hits: list[ScoredChunk], max_chars: int | None = None,
+                question: str = "") -> str:
+    return build_hit_context(hits, max_chars, question)[0]
 
 
 def source_snippet(hit: ScoredChunk, max_chars: int | None = None,

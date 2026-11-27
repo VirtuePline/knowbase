@@ -200,6 +200,22 @@ test("new conversation is an independent action and stays available in every ans
   }
 });
 
+test("production results are displayed as text without entering subsequent chat context or saved answers", async () => {
+  const ui = page();
+  ui.run('llmState.enabled=true; history.push({role:"user",content:"旧问题"}); historyConversationId="old"');
+  const pending = ui.run('ask("昨天的产量")');
+  ui.answerRequests()[0].resolve(reply({
+    status: "ok", answer: "<img src=x> 70 件", answer_origin: "production_sql", sources: [], conversation_id: "",
+  }));
+  await pending;
+  const displayed = ui.find("#chat-log").children.at(-1).children[0].innerHTML;
+  assert.match(displayed, /生产报表查询/);
+  assert.match(displayed, /&lt;img src=x&gt; 70 件/);
+  assert.deepEqual(ui.state().history, []);
+  assert.equal(ui.state().historyConversationId, "");
+  assert.equal(ui.saved.length, 0);
+});
+
 test("starting a conversation restores welcome content, preserves saved history, and clears only the current draft", async () => {
   const ui = page();
   const welcome = ui.hero.innerHTML;
